@@ -56,6 +56,11 @@ android {
     compose = true
     buildConfig = true
   }
+  packaging {
+    resources {
+      pickFirsts.add("assets/mlkit-google-ocr-models/**")
+    }
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
