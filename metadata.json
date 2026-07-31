@@ -1,0 +1,6 @@
+{
+  "name": "BeaconVault",
+  "description": "An application to save, organize, and navigate back to any important location.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

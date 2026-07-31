@@ -1,0 +1,70 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="250dp"
+    android:height="130dp"
+    android:viewportWidth="250"
+    android:viewportHeight="130">
+
+    <!-- Background -->
+    <path
+        android:pathData="M 20,0 L 230,0 A 20,20 0 0 1 250,20 L 250,110 A 20,20 0 0 1 230,130 L 20,130 A 20,20 0 0 1 0,110 L 0,20 A 20,20 0 0 1 20,0 Z"
+        android:fillColor="#0A0612"
+        android:strokeColor="#558B5CF6"
+        android:strokeWidth="1" />
+
+    <!-- Image tile -->
+    <path
+        android:pathData="M 16,16 L 86,16 A 10,10 0 0 1 96,26 L 96,70 A 10,10 0 0 1 86,80 L 16,80 A 10,10 0 0 1 6,70 L 6,26 A 10,10 0 0 1 16,16 Z"
+        android:fillColor="#120A22" />
+
+    <!-- Mini BeaconVault mark -->
+    <path
+        android:fillColor="#45000000"
+        android:pathData="M51,29 C43,29 38,34 38,40 C38,50 51,62 51,62 C51,62 64,50 64,40 C64,34 59,29 51,29 Z" />
+    <path android:pathData="M51,27 C44,27 40,31 40,39 C40,48 51,60 51,60 C51,60 62,48 62,39 C62,31 58,27 51,27 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="40" android:startY="27" android:endX="62" android:endY="60">
+                <item android:offset="0" android:color="#C4B5FD" />
+                <item android:offset="0.5" android:color="#8B5CF6" />
+                <item android:offset="1" android:color="#4C1D95" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#00F0FF" android:pathData="M51,29.5 L53,35 L49,35 Z" />
+    <path android:pathData="M51,35 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="45.5" android:startY="35" android:endX="56.5" android:endY="40.5">
+                <item android:offset="0" android:color="#00F0FF" />
+                <item android:offset="1" android:color="#006B7A" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#110A1C" android:pathData="M51,36.5 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path android:fillColor="#00DFF0" android:pathData="M50.3,37.8 h1.4 v3.2 h-1.4 z M50.3,41.2 h1.4 v3.2 h-1.4 z M47.2,39.5 h3.2 v1.4 h-3.2 z M52.6,39.5 h3.2 v1.4 h-3.2 z" />
+    <path android:pathData="M51,39 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="50.5" android:centerY="38.5" android:gradientRadius="2">
+                <item android:offset="0" android:color="#FFFFFF" />
+                <item android:offset="1" android:color="#7C3AED" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Title blocks -->
+    <path android:pathData="M110,22 h60 v4 h-60 z" android:fillColor="#00F0FF" />
+    <path android:pathData="M110,38 h70 v6 h-70 z" android:fillColor="#ECE6F5" />
+    <path android:pathData="M110,48 h45 v4 h-45 z" android:fillColor="#A89BB8" />
+
+    <!-- Found Button -->
+    <path
+        android:pathData="M 110,85 L 170,85 A 15,15 0 0 1 185,100 L 185,100 A 15,15 0 0 1 170,115 L 110,115 A 15,15 0 0 1 95,100 L 95,100 A 15,15 0 0 1 110,85 Z"
+        android:fillColor="#8B5CF6" />
+    <path android:pathData="M130,98 h20 v4 h-20 z" android:fillColor="#FFFFFF" />
+
+    <!-- Nav Button -->
+    <path
+        android:pathData="M 205,85 L 225,85 A 15,15 0 0 1 240,100 L 240,100 A 15,15 0 0 1 225,115 L 205,115 A 15,15 0 0 1 190,100 L 190,100 A 15,15 0 0 1 205,85 Z"
+        android:fillColor="#00F0FF" />
+    <path android:pathData="M205,98 h20 v4 h-20 z" android:fillColor="#150030" />
+
+</vector>

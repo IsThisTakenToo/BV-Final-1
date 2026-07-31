@@ -1,0 +1,259 @@
+fun TimerSelectionDialog(isCamera: Boolean, ocrText: String, onDismiss: () -> Unit, onRetake: () -> Unit, onPin: (Int, String, String, String, Boolean) -> Unit) {
+    var timerMins by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf(TextFieldValue("")) }
+    var editedOcrText by remember { mutableStateOf(TextFieldValue(text = ocrText, selection = TextRange(ocrText.length))) }
+    var category by remember { mutableStateOf("Uncategorized") }
+    var useNumericKeyboard by remember { mutableStateOf(false) }
+    var isActiveTracking by remember { mutableStateOf(true) }
+    
+    
+    val suggestedMins = if (ocrText.contains("1 hour", ignoreCase=true) || ocrText.contains("60 min", ignoreCase=true)) 60 
+                        else if (ocrText.contains("30 min", ignoreCase=true)) 30 
+                        else if (ocrText.contains("2 hour", ignoreCase=true)) 120 
+                        else null
+
+    val allCategories = listOf("Uncategorized", "Parking Garage", "Street Parking", "Amusement Park", "Hotel", "Add Custom Folder...")
+    var showCustomCategoryDialog by remember { mutableStateOf(false) }
+    var newCategoryName by remember { mutableStateOf("") }
+    
+    if (showCustomCategoryDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showCustomCategoryDialog = false },
+            title = { Text("New Folder") },
+            text = {
+                OutlinedTextField(
+                    value = newCategoryName,
+                    onValueChange = { newCategoryName = it },
+                    label = { Text("Folder Name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (newCategoryName.isNotBlank()) {
+                        category = newCategoryName
+                    }
+                    showCustomCategoryDialog = false
+                    newCategoryName = ""
+                }) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomCategoryDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    PremiumDialog(
+        onDismissRequest = onDismiss,
+        title = { 
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (isCamera) Icons.Default.CameraAlt else Icons.Default.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp).padding(end = 8.dp))
+                Text(if (isCamera) "Save Photo & Pin" else "Save Location", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        content = {
+            Column {
+                if (isCamera) {
+                    OutlinedTextField(
+                        value = editedOcrText,
+                        onValueChange = { editedOcrText = it },
+                        label = { Text("Scanned Text (Edit if needed)") },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                    )
+                }
+                
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text(if (isCamera) "Additional Notes (e.g., Level 4, Blue)" else "Location Notes") },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    keyboardOptions = if (useNumericKeyboard) KeyboardOptions(keyboardType = KeyboardType.Number) else KeyboardOptions.Default,
+                    shape = RoundedCornerShape(16.dp),
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                )
+                
+                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                androidx.compose.foundation.layout.FlowRow(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf("Level 1", "Level 2", "Blue Lot", "Red Lot", "Keypad Code").forEach { chipText ->
+                        androidx.compose.material3.ElevatedSuggestionChip(
+                            onClick = { 
+                                if (isCamera) {
+                                    val newText = if (editedOcrText.text.isEmpty()) chipText else "${editedOcrText.text}, $chipText"
+                                    editedOcrText = TextFieldValue(text = newText, selection = TextRange(newText.length))
+                                } else {
+                                    val newText = if (note.text.isEmpty()) chipText else "${note.text}, $chipText"
+                                    note = TextFieldValue(text = newText, selection = TextRange(newText.length))
+                                }
+                                if (chipText == "Keypad Code") {
+                                    useNumericKeyboard = true
+                                    
+                                }
+                            },
+                            label = { Text(chipText, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
+                }
+                
+                // ExposedDropdownMenuBox for Categories
+                var categoryExpanded by remember { mutableStateOf(false) }
+                
+                @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+                androidx.compose.material3.ExposedDropdownMenuBox(
+                    expanded = categoryExpanded,
+                    onExpandedChange = { categoryExpanded = !categoryExpanded },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = category,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Folder / Category", fontWeight = FontWeight.Bold) },
+                        trailingIcon = {
+                            androidx.compose.material3.ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded)
+                        },
+                        colors = androidx.compose.material3.ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = categoryExpanded,
+                        onDismissRequest = { categoryExpanded = false }
+                    ) {
+                        allCategories.forEach { cat ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(cat) },
+                                onClick = {
+                                    if (cat == "Add Custom Folder...") {
+                                        showCustomCategoryDialog = true
+                                    } else {
+                                        category = cat
+                                    }
+                                    categoryExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                
+                // Smart Chips for Amusement Park
+                if (category == "Amusement Park") {
+                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                    androidx.compose.foundation.layout.FlowRow(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        listOf("Near Entrance", "Blue Lot", "Row 5").forEach { chipText ->
+                            androidx.compose.material3.ElevatedSuggestionChip(
+                                onClick = { 
+                                     if (isCamera) {
+                                        val newText = if (editedOcrText.text.isEmpty()) chipText else "${editedOcrText.text}, $chipText"
+                                        editedOcrText = TextFieldValue(text = newText, selection = TextRange(newText.length))
+                                    } else {
+                                        val newText = if (note.text.isEmpty()) chipText else "${note.text}, $chipText"
+                                        note = TextFieldValue(text = newText, selection = TextRange(newText.length))
+                                    }
+                                },
+                                label = { Text(chipText, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                        }
+                    }
+                }
+                
+                var showTimerInput by remember { mutableStateOf(false) }
+                if (isCamera && suggestedMins != null && !showTimerInput) {
+                    Button(
+                        onClick = { timerMins = suggestedMins.toString(); showTimerInput = true },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.padding(end=8.dp))
+                        Text("Suggested Timer: $suggestedMins mins", fontWeight = FontWeight.Bold)
+                    }
+                }
+                if (showTimerInput || timerMins.isNotEmpty()) {
+                    OutlinedTextField(
+                        value = timerMins,
+                        onValueChange = { timerMins = it },
+                        label = { Text("Timer (minutes, optional)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    )
+                } else {
+                    OutlinedButton(
+                        onClick = { showTimerInput = true }, 
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.padding(end=8.dp))
+                        Text("Add Timer (Optional)", fontWeight = FontWeight.Bold)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isActiveTracking) {
+                        Button(onClick = { isActiveTracking = true }, modifier = Modifier.weight(1f)) {
+                            Text("Active Tracking")
+                        }
+                    } else {
+                        OutlinedButton(onClick = { isActiveTracking = true }, modifier = Modifier.weight(1f)) {
+                            Text("Active Tracking")
+                        }
+                    }
+                    if (!isActiveTracking) {
+                        Button(onClick = { isActiveTracking = false }, modifier = Modifier.weight(1f)) {
+                            Text("Quiet Save")
+                        }
+                    } else {
+                        OutlinedButton(onClick = { isActiveTracking = false }, modifier = Modifier.weight(1f)) {
+                            Text("Quiet Save")
+                        }
+                    }
+                }
+                Text(
+                    text = if (isActiveTracking) "Tracks location and alerts you in background." else "Saves silently to Vault without alerts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val mins = timerMins.toIntOrNull() ?: 0
+                onPin(mins, note.text, editedOcrText.text, category, isActiveTracking)
+            }) { 
+                Text("Pin Spot") 
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isCamera) {
+                    TextButton(onClick = onRetake) {
+                        Text("Retake", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                TextButton(onClick = onDismiss) { 
+                    Text("Cancel") 
+                }
+            }
+        }
+    )
+}
+

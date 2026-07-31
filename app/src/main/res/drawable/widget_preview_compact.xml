@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="250dp"
+    android:height="55dp"
+    android:viewportWidth="250"
+    android:viewportHeight="55">
+
+    <!-- Background -->
+    <path
+        android:pathData="M 20,0 L 230,0 A 20,20 0 0 1 250,20 L 250,35 A 20,20 0 0 1 230,55 L 20,55 A 20,20 0 0 1 0,35 L 0,20 A 20,20 0 0 1 20,0 Z"
+        android:fillColor="#120B22"
+        android:strokeColor="#668C52FF"
+        android:strokeWidth="1" />
+
+    <!-- Found Button (Left) -->
+    <path
+        android:pathData="M 16,10 L 46,10 A 10,10 0 0 1 56,20 L 56,35 A 10,10 0 0 1 46,45 L 16,45 A 10,10 0 0 1 6,35 L 6,20 A 10,10 0 0 1 16,10 Z"
+        android:fillColor="#8C52FF" />
+    <path android:pathData="M20,25 h22 v4 h-22 z" android:fillColor="#FFFFFF" />
+
+    <!-- Chronometer/Status -->
+    <path android:pathData="M 90,18 h70 v6 h-70 z" android:fillColor="#ECE6F5" />
+    <path android:pathData="M 105,32 h40 v4 h-40 z" android:fillColor="#A89BB8" />
+
+    <!-- Nav Button (Right) -->
+    <path
+        android:pathData="M 204,10 L 234,10 A 10,10 0 0 1 244,20 L 244,35 A 10,10 0 0 1 234,45 L 204,45 A 10,10 0 0 1 194,35 L 194,20 A 10,10 0 0 1 204,10 Z"
+        android:fillColor="#00E5FF" />
+    <path android:pathData="M208,25 h22 v4 h-22 z" android:fillColor="#150030" />
+
+</vector>

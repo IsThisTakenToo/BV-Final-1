@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="sv_void">#FF07050F</color>
+    <color name="sv_deep">#FF0C0818</color>
+    <color name="sv_surface">#FF151022</color>
+    <color name="sv_elevated">#FF1E1730</color>
+    <color name="sv_primary">#FF8C52FF</color>
+    <color name="sv_primary_bright">#FFB388FF</color>
+    <color name="sv_teal">#FF00E5FF</color>
+    <color name="sv_teal_deep">#FF00363D</color>
+    <color name="sv_on_surface">#FFECE6F5</color>
+    <color name="sv_muted">#FFA89BB8</color>
+</resources>
