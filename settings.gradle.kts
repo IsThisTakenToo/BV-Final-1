@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "SpotVault"
+rootProject.name = "BeaconVault"
 
 include(":app")

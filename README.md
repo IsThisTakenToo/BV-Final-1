@@ -1,22 +1,55 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# BeaconVault
 
-# Run and deploy your AI Studio app
+Native **Android** app (Kotlin + Jetpack Compose) for saving, organizing, and navigating back to important locations.
 
-This contains everything you need to run your app locally.
+> **Note:** This is **not** a web or React app. Open and run it with **Android Studio** only.
 
-View your app in AI Studio: https://ai.studio/apps/3129e37b-d543-4d4a-b6fa-3a3de1b535fc
+## Requirements
 
-## Run Locally
+- [Android Studio](https://developer.android.com/studio) (latest stable)
+- Android SDK 36
+- JDK 11+
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+## Run locally
 
+1. Open Android Studio → **File → Open** → select this folder (`BeaconVault`).
+2. Wait for Gradle sync to finish (Android Studio will create the Gradle wrapper if needed).
+3. Connect a device or start an emulator (API 24+).
+4. Click **Run** (green play button) or use **Run → Run 'app'**.
 
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
-7. If you have already published your app in AI Studio, please [request upload key reset](https://support.google.com/googleplay/android-developer/answer/9842756#zippy=%2Crequest-an-upload-key-reset) in Google Play Console.
+Debug builds use the standard Android debug keystore automatically — no extra setup required.
+
+## Build from the command line
+
+After Android Studio has synced once (generates `gradlew`):
+
+```bash
+./gradlew :app:assembleDebug
+```
+
+On Windows:
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+## Project structure
+
+| Path | Purpose |
+|------|---------|
+| `app/src/main/java/com/spotvault/app/` | App source (Compose UI, services, widgets) |
+| `app/src/main/res/` | Icons, layouts, widgets, themes |
+| `app/build.gradle.kts` | App module build config |
+| `gradle/libs.versions.toml` | Dependency versions |
+
+## Release builds
+
+Release signing expects these environment variables (or a local keystore at the project root):
+
+- `KEYSTORE_PATH`
+- `STORE_PASSWORD`
+- `KEY_PASSWORD`
+
+## AI Studio
+
+If you imported this from Google AI Studio, use **Android Studio** to preview and run the app on a device or emulator. Do not run `npm install` or `npm start` — this project has no Node/React toolchain.
