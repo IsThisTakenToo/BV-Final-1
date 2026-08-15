@@ -1,5 +1,0 @@
-content = open('app/src/main/java/com/spotvault/app/SpotVaultDesign.kt').read()
-start = content.find("fun PremiumBadge")
-print("Start:", start)
-end = content.find("\nfun ", start + 20)
-print("End:", end)
