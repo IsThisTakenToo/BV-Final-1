@@ -4779,6 +4779,61 @@ fun SpotVaultScreen(
         }
     }
 
+    // Automatic Parking's actual background pipeline (CarBluetoothReceiver) hard-requires
+    // ACCESS_BACKGROUND_LOCATION to do anything — without it every save silently fails, forever,
+    // with no error the user would ever see. Unlike Motion's single ACTIVITY_RECOGNITION prompt,
+    // this is a multi-step chain (fine location, then a background-location primer, then Bluetooth
+    // connect, then a battery-optimization exemption ask) that already exists in full on the
+    // Automatic Parking settings screen — stacking that whole sequence as system dialogs over a
+    // small home-screen sheet would be a worse experience than just sending the user there. So
+    // this sheet only ever flips the switch on when every prerequisite is already satisfied;
+    // otherwise it routes to Settings to complete the chain, the same way Motion's toggle used to
+    // for its one permission. Mirrors AutoParkingSettings.kt's own `armed` computation exactly.
+    var homeFineLocationGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var homeBackgroundLocationGranted by remember { mutableStateOf(hasBackgroundLocationPermission(context)) }
+    var homeBluetoothConnectGranted by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
+                    PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+    val homeHasLinkedVehicle = homeVehiclesWithBluetooth.isNotEmpty() || !homeLegacyMac.isNullOrBlank()
+    val homeAutoParkArmable = homeHasLinkedVehicle &&
+        homeFineLocationGranted &&
+        homeBackgroundLocationGranted &&
+        homeBluetoothConnectGranted
+
+    // Permissions granted from the system Settings screen this sheet redirects to have no launcher
+    // callback here — re-reading on resume is what makes "grant it, come back" actually update
+    // homeAutoParkArmable without needing to leave and reopen the app.
+    val homeLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(homeLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                homeFineLocationGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                    PackageManager.PERMISSION_GRANTED
+                homeBackgroundLocationGranted = hasBackgroundLocationPermission(context)
+                homeBluetoothConnectGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
+                        PackageManager.PERMISSION_GRANTED
+                } else {
+                    true
+                }
+            }
+        }
+        homeLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { homeLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     androidx.compose.runtime.LaunchedEffect(isPinned) {
         if (isPinned) {
             photoPath = prefs.getString("photo_path", "") ?: ""
@@ -4847,6 +4902,11 @@ fun SpotVaultScreen(
                     Switch(
                         checked = autoParkEnabled,
                         onCheckedChange = { enabled ->
+                            if (enabled && !homeAutoParkArmable) {
+                                showAutoParkToggleSheet = false
+                                onOpenAutoParkSettings()
+                                return@Switch
+                            }
                             prefs.edit().putBoolean(AUTO_PARK_ENABLED_PREF, enabled).commit()
                             WidgetThemeHelper.bumpWidgetRevision(prefs)
                             WidgetThemeHelper.refreshAllWidgets(context.applicationContext)
