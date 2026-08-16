@@ -52,6 +52,8 @@ val WelcomeSlides = listOf(
     )
 )
 
+private enum class OnboardingStep { WELCOME, PERMISSIONS, DRIVE }
+
 @Composable
 fun WelcomeOnboardingScreen(
     driveState: DriveOnboardingState,
@@ -61,7 +63,7 @@ fun WelcomeOnboardingScreen(
 ) {
     val pagerState = rememberPagerState(pageCount = { WelcomeSlides.size })
     val scope = rememberCoroutineScope()
-    var showDriveStep by remember { mutableStateOf(false) }
+    var step by remember { mutableStateOf(OnboardingStep.WELCOME) }
 
     val density = LocalDensity.current
     val statusPad = with(density) { SystemBarInsets.statusBarPx.toDp() }
@@ -71,85 +73,151 @@ fun WelcomeOnboardingScreen(
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(SpotVaultColors.Void, SpotVaultColors.Deep, SpotVaultColors.Surface)))
     ) {
-        if (showDriveStep) {
-            DriveConnectStep(
-                statusPad = statusPad,
-                navPad = navPad,
-                driveState = driveState,
-                onConnectDrive = onConnectDrive,
-                onResolveConflict = onResolveConflict,
-                onFinish = onFinish
-            )
-            return@Box
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp)
-                .padding(top = statusPad + 16.dp, bottom = navPad)
-        ) {
-            TextButton(onClick = { showDriveStep = true }, modifier = Modifier.align(Alignment.End)) {
-                Text("Skip", color = SpotVaultColors.Muted)
-            }
-            HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
-                val slide = WelcomeSlides[page]
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(96.dp)
-                            .background(SpotVaultColors.Teal.copy(alpha = 0.15f), androidx.compose.foundation.shape.CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(slide.icon, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(48.dp))
-                    }
-                    Spacer(modifier = Modifier.height(32.dp))
-                    Text(slide.title, color = SpotVaultColors.OnSurface, fontWeight = FontWeight.Black, fontSize = 26.sp)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        slide.body,
-                        color = SpotVaultColors.Muted,
-                        fontSize = 15.sp,
-                        lineHeight = 22.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                repeat(WelcomeSlides.size) { index ->
-                    Box(
-                        modifier = Modifier
-                            .padding(4.dp)
-                            .size(if (pagerState.currentPage == index) 10.dp else 8.dp)
-                            .background(
-                                if (pagerState.currentPage == index) SpotVaultColors.Teal else SpotVaultColors.Muted.copy(alpha = 0.4f),
-                                androidx.compose.foundation.shape.CircleShape
-                            )
-                    )
-                }
-            }
-            SpotVaultButton(
-                onClick = {
-                    if (pagerState.currentPage < WelcomeSlides.lastIndex) {
-                        scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
-                    } else {
-                        showDriveStep = true
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(56.dp)
-            ) {
-                Text(
-                    if (pagerState.currentPage < WelcomeSlides.lastIndex) "Next" else "Get Started",
-                    fontWeight = FontWeight.Bold
+        when (step) {
+            OnboardingStep.DRIVE -> {
+                DriveConnectStep(
+                    statusPad = statusPad,
+                    navPad = navPad,
+                    driveState = driveState,
+                    onConnectDrive = onConnectDrive,
+                    onResolveConflict = onResolveConflict,
+                    onFinish = onFinish
                 )
             }
+            OnboardingStep.PERMISSIONS -> {
+                PermissionsPrimerStep(
+                    statusPad = statusPad,
+                    navPad = navPad,
+                    onContinue = { step = OnboardingStep.DRIVE }
+                )
+            }
+            OnboardingStep.WELCOME -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 24.dp)
+                        .padding(top = statusPad + 16.dp, bottom = navPad)
+                ) {
+                    TextButton(onClick = { step = OnboardingStep.PERMISSIONS }, modifier = Modifier.align(Alignment.End)) {
+                        Text("Skip", color = SpotVaultColors.Muted)
+                    }
+                    HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
+                        val slide = WelcomeSlides[page]
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(96.dp)
+                                    .background(SpotVaultColors.Teal.copy(alpha = 0.15f), androidx.compose.foundation.shape.CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(slide.icon, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(48.dp))
+                            }
+                            Spacer(modifier = Modifier.height(32.dp))
+                            Text(slide.title, color = SpotVaultColors.OnSurface, fontWeight = FontWeight.Black, fontSize = 26.sp)
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                slide.body,
+                                color = SpotVaultColors.Muted,
+                                fontSize = 15.sp,
+                                lineHeight = 22.sp,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        repeat(WelcomeSlides.size) { index ->
+                            Box(
+                                modifier = Modifier
+                                    .padding(4.dp)
+                                    .size(if (pagerState.currentPage == index) 10.dp else 8.dp)
+                                    .background(
+                                        if (pagerState.currentPage == index) SpotVaultColors.Teal else SpotVaultColors.Muted.copy(alpha = 0.4f),
+                                        androidx.compose.foundation.shape.CircleShape
+                                    )
+                            )
+                        }
+                    }
+                    SpotVaultButton(
+                        onClick = {
+                            if (pagerState.currentPage < WelcomeSlides.lastIndex) {
+                                scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+                            } else {
+                                step = OnboardingStep.PERMISSIONS
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().height(56.dp)
+                    ) {
+                        Text(
+                            if (pagerState.currentPage < WelcomeSlides.lastIndex) "Next" else "Get Started",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Primes the user for the system permission dialogs MainActivity fires right after onboarding
+ * finishes (see the has_requested_initial_permissions LaunchedEffect) — a plain "Continue" here
+ * would leave those dialogs feeling like they came out of nowhere. Purely informational, so it
+ * has no Skip of its own: there's nothing to opt out of, just one button forward. */
+@Composable
+private fun PermissionsPrimerStep(
+    statusPad: androidx.compose.ui.unit.Dp,
+    navPad: androidx.compose.ui.unit.Dp,
+    onContinue: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp)
+            .padding(top = statusPad + 16.dp, bottom = navPad),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(96.dp)
+                        .background(SpotVaultColors.Teal.copy(alpha = 0.15f), androidx.compose.foundation.shape.CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Shield, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(48.dp))
+                }
+                Spacer(modifier = Modifier.height(32.dp))
+                Text(
+                    "Just A Heads Up",
+                    color = SpotVaultColors.OnSurface,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 26.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "DropPin Vault needs a few permissions to work its magic. We need Location access to drop your pins and track your parking, and Camera access if you want to snap photos of your spots. We only use these to get you back to your car.",
+                    color = SpotVaultColors.Muted,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+        }
+        SpotVaultButton(onClick = onContinue, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+            Text("Got It", fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -207,7 +275,7 @@ private fun DriveConnectStep(
                 Text("Never Lose Your Vault", color = SpotVaultColors.OnSurface, fontWeight = FontWeight.Black, fontSize = 26.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 Spacer(modifier = Modifier.height(12.dp))
                 val body = when (driveState) {
-                    is DriveOnboardingState.Idle -> "If this phone is ever lost, broken, or replaced, your saved spots go with it — unless they're backed up. Connect your Google Drive and DropPin Vault will back itself up automatically, in the background, for free. It's private: only this app can see it, tucked away in a hidden spot in your own Drive."
+                    is DriveOnboardingState.Idle -> "If you lose your phone, you lose your spots. Connect Google Drive for automatic, private, and free background backups. Only DropPin Vault can see this hidden folder."
                     is DriveOnboardingState.Working -> "Just a moment…"
                     is DriveOnboardingState.Connected -> {
                         val restored = driveState.restoredCount
