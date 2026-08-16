@@ -4205,6 +4205,15 @@ fun VaultIconStylePicker(
                     color = SpotVaultColors.Muted,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     lineHeight = 12.sp,
+                    // A Row sizes to its tallest child even when that child is scrolled off to
+                    // the side — one style with a long subtitle (Mag Lock, or the seasonal
+                    // Halloween/Christmas ones) used to wrap to 3-4 lines while its neighbors
+                    // wrapped to 2, inflating the whole picker's height and leaving dead space
+                    // below whichever shorter card was actually in view. Capping every card to
+                    // the same 2 lines keeps them uniform regardless of which style's text is
+                    // longest.
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 2.dp)
                 )
             }
