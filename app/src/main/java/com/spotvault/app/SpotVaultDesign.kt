@@ -1055,15 +1055,11 @@ private fun LeafButtonPreview(modifier: Modifier = Modifier) {
             .fillMaxWidth(0.9f)
             .height(36.dp)
             .clip(shape)
-            .background(
-                Brush.linearGradient(
-                    listOf(
-                        themeColors.PrimaryBright.copy(alpha = 0.95f),
-                        themeColors.Primary,
-                        themeColors.Teal.copy(alpha = 0.85f)
-                    )
-                )
-            )
+            // Same fill as every other preview — every button style but Wild only ever changes
+            // shape in the real app (see spotVaultButtonShape()); the color always comes from the
+            // caller's normal theme Primary. A per-style gradient here would preview a look you
+            // can never actually get by picking this style.
+            .background(Brush.horizontalGradient(listOf(themeColors.Primary, themeColors.PrimaryBright)))
             .border(1.dp, themeColors.Teal.copy(alpha = 0.45f), shape),
         contentAlignment = Alignment.Center
     ) {
@@ -1077,10 +1073,10 @@ private fun LeafButtonPreview(modifier: Modifier = Modifier) {
             )
         }
         Text(
-            "LEAF",
+            "BUTTON",
             fontSize = 9.sp,
             fontWeight = FontWeight.Black,
-            color = Color.White,
+            color = SpotVaultColors.OnPrimary,
             letterSpacing = 1.sp
         )
     }
@@ -1095,15 +1091,7 @@ private fun HexButtonPreview(modifier: Modifier = Modifier) {
             .fillMaxWidth(0.9f)
             .height(36.dp)
             .clip(shape)
-            .background(
-                Brush.linearGradient(
-                    listOf(
-                        themeColors.PrimaryBright.copy(alpha = 0.92f),
-                        themeColors.Primary,
-                        themeColors.PrimaryDeep
-                    )
-                )
-            )
+            .background(Brush.horizontalGradient(listOf(themeColors.Primary, themeColors.PrimaryBright)))
             .border(1.5.dp, themeColors.Teal.copy(alpha = 0.5f), shape),
         contentAlignment = Alignment.Center
     ) {
@@ -1124,10 +1112,10 @@ private fun HexButtonPreview(modifier: Modifier = Modifier) {
             )
         }
         Text(
-            "HEX",
+            "BUTTON",
             fontSize = 9.sp,
             fontWeight = FontWeight.Black,
-            color = Color.White,
+            color = SpotVaultColors.OnPrimary,
             letterSpacing = 1.1.sp
         )
     }
@@ -1142,14 +1130,7 @@ private fun WaveButtonPreview(modifier: Modifier = Modifier) {
             .fillMaxWidth(0.9f)
             .height(36.dp)
             .clip(shape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        themeColors.Teal.copy(alpha = 0.88f),
-                        themeColors.TealDeep.copy(alpha = 0.95f)
-                    )
-                )
-            )
+            .background(Brush.horizontalGradient(listOf(themeColors.Primary, themeColors.PrimaryBright)))
             .border(1.dp, themeColors.TealSoft.copy(alpha = 0.55f), shape),
         contentAlignment = Alignment.Center
     ) {
@@ -1166,10 +1147,10 @@ private fun WaveButtonPreview(modifier: Modifier = Modifier) {
             )
         }
         Text(
-            "TIDE",
+            "BUTTON",
             fontSize = 9.sp,
             fontWeight = FontWeight.Black,
-            color = SpotVaultColors.OnTeal,
+            color = SpotVaultColors.OnPrimary,
             letterSpacing = 1.sp
         )
     }
@@ -1179,34 +1160,38 @@ private fun WaveButtonPreview(modifier: Modifier = Modifier) {
 private fun TacticalButtonPreview(modifier: Modifier = Modifier) {
     val themeColors = LocalSpotVaultColors.current
     val shape = remember { tacticalButtonPreviewShape() }
+    // Resolved once here, outside the Canvas draw closure below — SpotVaultColors.OnPrimary is a
+    // @Composable getter (it auto-contrasts against Primary, with a custom-theme override), and
+    // DrawScope lambdas aren't a composable context.
+    val onPrimary = SpotVaultColors.OnPrimary
     Box(
         modifier = modifier
             .fillMaxWidth(0.9f)
             .height(36.dp)
             .clip(shape)
-            .background(themeColors.Elevated)
+            .background(Brush.horizontalGradient(listOf(themeColors.Primary, themeColors.PrimaryBright)))
             .border(1.5.dp, themeColors.Teal.copy(alpha = 0.55f), shape),
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.matchParentSize()) {
             val cx = size.width * 0.5f
             drawCircle(
-                color = themeColors.Muted.copy(alpha = 0.65f),
+                color = onPrimary.copy(alpha = 0.5f),
                 radius = size.minDimension * 0.055f,
                 center = Offset(cx, size.height * 0.08f)
             )
             drawLine(
-                color = themeColors.Teal.copy(alpha = 0.35f),
+                color = onPrimary.copy(alpha = 0.3f),
                 start = Offset(size.width * 0.12f, size.height * 0.72f),
                 end = Offset(size.width * 0.88f, size.height * 0.72f),
                 strokeWidth = 1f
             )
         }
         Text(
-            "TAG",
+            "BUTTON",
             fontSize = 9.sp,
             fontWeight = FontWeight.Black,
-            color = themeColors.OnSurface,
+            color = onPrimary,
             letterSpacing = 1.2.sp
         )
     }
@@ -1250,7 +1235,7 @@ private fun WildButtonPreview(modifier: Modifier = Modifier) {
     ) {
         WildPortalFloatingLabel {
             Text(
-                "WILD",
+                "BUTTON",
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Black,
                 color = Color.White,
