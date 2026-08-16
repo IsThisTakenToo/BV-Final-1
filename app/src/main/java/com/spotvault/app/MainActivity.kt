@@ -924,23 +924,14 @@ class MainActivity : FragmentActivity() {
                 showSplash = false
             }
 
-            LaunchedEffect(showSplash, showWelcome) {
-                if (!showSplash && !showWelcome && !prefs.getBoolean("has_requested_initial_permissions", false)) {
-                    prefs.edit().putBoolean("has_requested_initial_permissions", true).apply()
-                    // Location first — it's what this app is actually for, and camera is only
-                    // needed for Snap specifically, not for saving a pin at all.
-                    val perms = mutableListOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                        Manifest.permission.CAMERA
-                    )
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        perms.add(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                    requestPermissionsLauncher.launch(perms.toTypedArray())
-                }
-            }
-            
+            // No eager batch permission request here on purpose — checkPermissionsAndAction()
+            // already asks for exactly what's missing (camera + location for Snap, location alone
+            // for Pin) the moment the user actually taps one of those buttons, and notifications
+            // gets its own narrower ask when Active Tracking is actually chosen (see
+            // processPhotoAndPin's isActiveTracking check). Firing every permission at once right
+            // after onboarding — before the user had done anything — meant up to four system
+            // dialogs stacked back to back with no context for why any of them mattered.
+
             SpotVaultTheme(darkTheme = true) {
                 androidx.compose.animation.Crossfade(
                     targetState = showSplash,

@@ -47,7 +47,7 @@ val WelcomeSlides = listOf(
     WelcomeSlide(
         R.drawable.onboard_quick_actions,
         "Quick Pins & Widgets",
-        "Quick Pin saves your spot instantly, no dialog — perfect on the move. Quick Track does the same but keeps a live notification until you tap Found. Add the home-screen widget for one-tap access without even opening the app."
+        "Save your spot instantly. Use Quick Track for a live parking notification, or add the home-screen widget to drop a pin without even opening the app."
     ),
     WelcomeSlide(
         R.drawable.onboard_compass,
@@ -56,7 +56,7 @@ val WelcomeSlides = listOf(
     )
 )
 
-private enum class OnboardingStep { WELCOME, PERMISSIONS, DRIVE }
+private enum class OnboardingStep { WELCOME, DRIVE }
 
 @Composable
 fun WelcomeOnboardingScreen(
@@ -88,13 +88,6 @@ fun WelcomeOnboardingScreen(
                     onFinish = onFinish
                 )
             }
-            OnboardingStep.PERMISSIONS -> {
-                PermissionsPrimerStep(
-                    statusPad = statusPad,
-                    navPad = navPad,
-                    onContinue = { step = OnboardingStep.DRIVE }
-                )
-            }
             OnboardingStep.WELCOME -> {
                 Column(
                     modifier = Modifier
@@ -102,7 +95,7 @@ fun WelcomeOnboardingScreen(
                         .padding(horizontal = 24.dp)
                         .padding(top = statusPad + 16.dp, bottom = navPad)
                 ) {
-                    TextButton(onClick = { step = OnboardingStep.PERMISSIONS }, modifier = Modifier.align(Alignment.End)) {
+                    TextButton(onClick = { step = OnboardingStep.DRIVE }, modifier = Modifier.align(Alignment.End)) {
                         Text("Skip", color = SpotVaultColors.Muted)
                     }
                     HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
@@ -155,7 +148,7 @@ fun WelcomeOnboardingScreen(
                             if (pagerState.currentPage < WelcomeSlides.lastIndex) {
                                 scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
                             } else {
-                                step = OnboardingStep.PERMISSIONS
+                                step = OnboardingStep.DRIVE
                             }
                         },
                         modifier = Modifier.fillMaxWidth().height(56.dp)
@@ -167,62 +160,6 @@ fun WelcomeOnboardingScreen(
                     }
                 }
             }
-        }
-    }
-}
-
-/** Primes the user for the system permission dialogs MainActivity fires right after onboarding
- * finishes (see the has_requested_initial_permissions LaunchedEffect) — a plain "Continue" here
- * would leave those dialogs feeling like they came out of nowhere. Purely informational, so it
- * has no Skip of its own: there's nothing to opt out of, just one button forward. */
-@Composable
-private fun PermissionsPrimerStep(
-    statusPad: androidx.compose.ui.unit.Dp,
-    navPad: androidx.compose.ui.unit.Dp,
-    onContinue: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 24.dp)
-            .padding(top = statusPad + 16.dp, bottom = navPad),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.verticalScroll(rememberScrollState())
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(96.dp)
-                        .background(SpotVaultColors.Teal.copy(alpha = 0.15f), androidx.compose.foundation.shape.CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Shield, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(48.dp))
-                }
-                Spacer(modifier = Modifier.height(32.dp))
-                Text(
-                    "Just A Heads Up",
-                    color = SpotVaultColors.OnSurface,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 26.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    "DropPin Vault needs a few permissions to work its magic. We need Location access to drop your pins and track your parking, and Camera access if you want to snap photos of your spots. We only use these to get you back to your car.",
-                    color = SpotVaultColors.Muted,
-                    fontSize = 15.sp,
-                    lineHeight = 22.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-        }
-        SpotVaultButton(onClick = onContinue, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-            Text("Got It", fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -280,7 +217,7 @@ private fun DriveConnectStep(
                 Text("Never Lose Your Vault", color = SpotVaultColors.OnSurface, fontWeight = FontWeight.Black, fontSize = 26.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 Spacer(modifier = Modifier.height(12.dp))
                 val body = when (driveState) {
-                    is DriveOnboardingState.Idle -> "If you lose your phone, you lose your spots. Connect Google Drive for automatic, private, and free background backups. Only DropPin Vault can see this hidden folder."
+                    is DriveOnboardingState.Idle -> "If you lose your phone, you lose your spots. Connect Google Drive for automatic, private background backups."
                     is DriveOnboardingState.Working -> "Just a moment…"
                     is DriveOnboardingState.Connected -> {
                         val restored = driveState.restoredCount
