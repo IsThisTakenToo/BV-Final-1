@@ -28,6 +28,18 @@ import android.service.quicksettings.TileService
  */
 class QuickTrackTileService : TileService() {
 
+    // onTileAdded() fires exactly once, right when the user adds this tile — but on some OEM
+    // panels (Samsung's included, confirmed on a real Note 20) onStartListening() doesn't reliably
+    // follow immediately on that first add, and subtitle has no static XML default to fall back
+    // on (it's Tile.subtitle, settable only at runtime), so the tile sat with no "Tap to start
+    // tracking"/"Tap to mark Found" text underneath it until the panel was closed and reopened —
+    // the next onStartListening() is what actually fixed it, not the tap itself. Calling the same
+    // update here too means the first-ever display is already correct.
+    override fun onTileAdded() {
+        super.onTileAdded()
+        updateTileState()
+    }
+
     override fun onStartListening() {
         super.onStartListening()
         updateTileState()
