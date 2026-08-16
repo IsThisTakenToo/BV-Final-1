@@ -1775,6 +1775,25 @@ fun TimerSettingsContent(
     }
     var batteryOptDisabled by remember { mutableStateOf(isBatteryOptimizationDisabled(settingsContext)) }
 
+    // requestBatteryOptimizationExemption() below just fires the system settings screen and
+    // returns immediately — the immediate isBatteryOptimizationDisabled() re-check right after it
+    // reads the state before the user has even seen that screen, let alone answered it, so it
+    // always reads as still-disabled. There's no launcher callback for a system settings screen
+    // either (the user backs out on their own), so nothing else updates this state when they
+    // return — which is why the button used to require a second tap: that second tap's own
+    // immediate check just happened to land after the real grant. Same fix already used by
+    // Automatic Parking settings for this identical case — re-read on ON_RESUME instead.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                batteryOptDisabled = isBatteryOptimizationDisabled(settingsContext)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // Active Tracking's pinned timer runs as a foreground service — OEMs like Samsung and
         // Xiaomi still kill it in the background unless the app is exempted from battery
