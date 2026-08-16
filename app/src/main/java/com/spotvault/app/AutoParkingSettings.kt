@@ -787,7 +787,11 @@ fun AutomaticParkingSettingsContent(
 fun PermissionStatusRow(title: String, granted: Boolean, explanation: String) {
     val color = if (granted) SpotVaultColors.Teal else SpotVaultColors.Muted
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Top, not CenterVertically — matters once the title can wrap to a second line (see
+        // below): top-aligns the icon and the Granted/Needed label with the title's first line
+        // instead of the vertical middle of the whole wrapped block. Identical to
+        // CenterVertically for the common single-line case.
+        Row(verticalAlignment = Alignment.Top) {
             Icon(
                 if (granted) Icons.Default.Check else Icons.Default.LocationOn,
                 contentDescription = null,
@@ -799,11 +803,22 @@ fun PermissionStatusRow(title: String, granted: Boolean, explanation: String) {
                 color = SpotVaultColors.OnSurface,
                 fontWeight = FontWeight.Medium,
                 fontSize = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 8.dp).weight(1f, fill = false)
+                // Wraps instead of eliding — this used to be maxLines = 1 with
+                // TextOverflow.Ellipsis, which silently cut "Battery optimization disabled" down
+                // to "Battery opt…" even after fixing the row's weight split above to give it the
+                // real available width, because the raised text-size setting (this app's own
+                // "Default" is already 1.15x, "Extra Large" 1.3x) can still outgrow a single line
+                // on top of that. Letting it wrap is the only fix that can't silently truncate
+                // again at a larger scale or a longer title string added later.
+                // A plain weight(1f) — not weight(1f, fill = false) plus a same-weight Spacer.
+                // That split the row's leftover width 50/50 between title and spacer regardless
+                // of whether the spacer actually needed any of it, capping the title at half the
+                // real available width even when the row had plenty of room to spare. A single
+                // weight(1f) here claims all of that leftover space for the title (still renders
+                // left-aligned, so short titles look identical) and still pushes the Granted/
+                // Needed label to the row's end on its own, no separate Spacer needed.
+                modifier = Modifier.padding(start = 8.dp, end = 8.dp).weight(1f)
             )
-            Spacer(modifier = Modifier.weight(1f))
             Text(if (granted) "Granted" else "Needed", color = color, fontSize = 12.sp, maxLines = 1, softWrap = false)
         }
         Text(explanation, color = SpotVaultColors.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, start = 26.dp))
