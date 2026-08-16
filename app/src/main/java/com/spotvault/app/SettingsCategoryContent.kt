@@ -846,6 +846,7 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                 selectedStyleId = compassStyle,
                 onStyleSelected = { style ->
                     compassStyle = style.id
+                    ThemeState.compassStyle = style.id
                     prefs.edit().putString("compass_style", style.id).apply()
                 },
                 isLocked = { id -> !premiumUnlocked && id != PremiumFreeTier.freeCompassStyleId },

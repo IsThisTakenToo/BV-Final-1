@@ -131,7 +131,10 @@ fun VaultCompassDial(
     // perpetually redrawing because of two animations only two of them actually use. Only
     // creating the animated state when the selected style needs it means the other styles now
     // only redraw when the bearing/heading itself changes, same visuals either way.
-    val pulsePhase = if (style == CompassStyle.BEACON_PULSE) {
+    // compactPreview means this is a Settings-picker thumbnail, not the live compass screen —
+    // freeze on a static frame there instead of subscribing to the infinite transition, same
+    // fix as the other Appearance-screen preview swatches (background patterns, vault icon).
+    val pulsePhase = if (style == CompassStyle.BEACON_PULSE && !compactPreview) {
         val infinite = rememberInfiniteTransition(label = "compassPulse")
         val phase by infinite.animateFloat(
             initialValue = 0f,
@@ -143,7 +146,7 @@ fun VaultCompassDial(
     } else {
         0f
     }
-    val sweepPhase = if (style == CompassStyle.SCI_FI) {
+    val sweepPhase = if (style == CompassStyle.SCI_FI && !compactPreview) {
         val infinite = rememberInfiniteTransition(label = "compassSweep")
         val phase by infinite.animateFloat(
             initialValue = 0f,
