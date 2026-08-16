@@ -1420,7 +1420,11 @@ fun GradientCtaCard(
                         text = subtitle,
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        color = titleColor?.copy(alpha = 0.85f) ?: ctaLabelColor.copy(alpha = 0.88f),
+                        // Full opacity, not the faded alpha this used to carry — against a solid
+                        // gradient card (as opposed to a neutral surface) that fade read as washed
+                        // out next to the home screen's Quick Pin/Quick Track row right below it,
+                        // which uses the button's plain, undimmed content color for its label.
+                        color = titleColor ?: ctaLabelColor,
                         modifier = Modifier.padding(top = if (dense) 2.dp else 4.dp)
                     )
                 }
