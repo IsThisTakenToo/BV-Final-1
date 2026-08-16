@@ -62,8 +62,13 @@ object WidgetThemeHelper {
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
     )
 
-    fun buttonStyleFromPrefs(prefs: SharedPreferences): String =
-        loadButtonStyleFromPrefs(prefs)
+    /** The button style widgets actually render with — "classic" (Rounded, the app's own
+     * default) when widget layout sync is off, otherwise whatever the app's active Button
+     * Style is. Mirrors [effectiveThemeId]'s separate toggle for widget colors. */
+    fun buttonStyleFromPrefs(prefs: SharedPreferences): String {
+        if (!prefs.getBoolean("widget_layout_sync", true)) return "classic"
+        return loadButtonStyleFromPrefs(prefs)
+    }
 
     /** The theme id widgets actually render with — "gold_cobalt" when widget theme sync is off,
      * otherwise whatever the app's active color theme is. Shared by [paletteFromPrefs] and

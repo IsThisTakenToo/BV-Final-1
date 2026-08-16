@@ -2396,11 +2396,16 @@ fun FullScreenImageViewer(
                                         Icon(
                                             Icons.Default.AddAPhoto,
                                             contentDescription = null,
-                                            tint = SpotVaultColors.Teal,
+                                            // Was hardcoded to Teal regardless of theme — this pill's
+                                            // background is PrimaryDeep, not Teal, so on themes where
+                                            // the two are close in luminance the icon/text nearly
+                                            // vanished. OnPrimary auto-contrasts against Primary-family
+                                            // backgrounds (and respects the Button Text Color override).
+                                            tint = SpotVaultColors.OnPrimary,
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Add Photo", color = SpotVaultColors.Teal, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                        Text("Add Photo", color = SpotVaultColors.OnPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }

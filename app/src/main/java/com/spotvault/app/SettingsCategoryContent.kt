@@ -1272,6 +1272,7 @@ private fun FontFamilyPicker(
 fun WidgetsSettingsContent(prefs: SharedPreferences) {
     val settingsContext = LocalContext.current
     var widgetThemeSync by remember { mutableStateOf(prefs.getBoolean("widget_theme_sync", true)) }
+    var widgetLayoutSync by remember { mutableStateOf(prefs.getBoolean("widget_layout_sync", true)) }
     var widgetRefreshOnOpen by remember { mutableStateOf(prefs.getBoolean("widget_refresh_on_open", true)) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1286,6 +1287,15 @@ fun WidgetsSettingsContent(prefs: SharedPreferences) {
                 onCheckedChange = {
                     widgetThemeSync = it
                     saveThemePref(prefs, settingsContext) { putBoolean("widget_theme_sync", it) }
+                }
+            )
+            SettingsToggleRow(
+                title = "Sync Widget Layout With Theme",
+                subtitle = "Off keeps widget buttons on the default Rounded shape, regardless of your in-app Button Style",
+                checked = widgetLayoutSync,
+                onCheckedChange = {
+                    widgetLayoutSync = it
+                    saveThemePref(prefs, settingsContext) { putBoolean("widget_layout_sync", it) }
                 }
             )
             SettingsToggleRow(
