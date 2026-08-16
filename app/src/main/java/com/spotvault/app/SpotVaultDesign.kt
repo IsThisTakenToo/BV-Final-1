@@ -132,20 +132,20 @@ object SpotVaultColors {
     val Outline: Color @androidx.compose.runtime.Composable get() = LocalSpotVaultColors.current.Outline
     val Danger: Color @androidx.compose.runtime.Composable get() = LocalSpotVaultColors.current.Danger
     /** Text/icon color for content sitting on a Primary-colored background — auto-contrasts by
-     * luminance, unless the custom theme has an explicit override set (Settings > Appearance >
-     * custom theme > Primary Button Text), for when auto-contrast doesn't match what someone
-     * actually wants after picking an unusual color from the wheel. */
+     * luminance, unless overridden (Settings > Appearance > Button Text Color), for when
+     * auto-contrast doesn't match what someone actually wants. Applies no matter which color
+     * theme is active — preset or custom — not just when a custom theme is selected. */
     val OnPrimary: Color @androidx.compose.runtime.Composable get() {
         val override = ThemeState.customOnPrimaryArgb
-        if (ThemeState.currentTheme == "custom" && override != null) return Color(override)
+        if (override != null) return Color(override)
         return if (LocalSpotVaultColors.current.Primary.luminance() > 0.4f) LocalSpotVaultColors.current.Ink else androidx.compose.ui.graphics.Color.White
     }
     /** Guaranteed-readable text/icon color for content sitting on a Teal-colored background —
-     * unlike the per-theme fixed [Ink], this checks Teal's actual brightness so a dark custom
-     * accent color never pairs with dark text, unless overridden (see [OnPrimary]). */
+     * unlike the per-theme fixed [Ink], this checks Teal's actual brightness so a dark accent
+     * color never pairs with dark text, unless overridden (see [OnPrimary]). */
     val OnTeal: Color @androidx.compose.runtime.Composable get() {
         val override = ThemeState.customOnAccentArgb
-        if (ThemeState.currentTheme == "custom" && override != null) return Color(override)
+        if (override != null) return Color(override)
         return if (LocalSpotVaultColors.current.Teal.luminance() > 0.4f) LocalSpotVaultColors.current.Ink else androidx.compose.ui.graphics.Color.White
     }
 }

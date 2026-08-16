@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoDelete
 import androidx.compose.material.icons.filled.Bluetooth
@@ -150,16 +151,6 @@ private fun persistVaultDisplayName(
 
 private enum class CustomThemeRole { PRIMARY, SECONDARY }
 
-/** Matches the app's own auto-contrast threshold (see SpotVaultDesign.kt's OnPrimary/OnTeal) —
- * used here for the custom-theme preview card's button text, which resolves its color locally
- * from in-progress wheel state rather than through ThemeState/LocalSpotVaultColors, so it never
- * depends on composition-order timing to show the correct preview while dragging. */
-private fun resolveCustomThemeTextColor(background: Color, mode: String): Color = when (mode) {
-    "white" -> Color.White
-    "black" -> Color.Black
-    else -> if (background.luminance() > 0.4f) Color.Black else Color.White
-}
-
 private fun saveCustomThemeFromPicker(
     prefs: SharedPreferences,
     context: android.content.Context,
@@ -250,6 +241,7 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
     }
     var hasCustomTheme by remember { mutableStateOf(prefs.getBoolean(HAS_CUSTOM_THEME_PREF, false)) }
     var showCustomPicker by remember { mutableStateOf(false) }
+    var showButtonTextColorPicker by remember { mutableStateOf(false) }
     var primaryTextMode by remember { mutableStateOf(prefs.getString("custom_on_primary_mode", "auto") ?: "auto") }
     var accentTextMode by remember { mutableStateOf(prefs.getString("custom_on_accent_mode", "auto") ?: "auto") }
 
@@ -605,61 +597,8 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                 // more precise wheel and a shorter dialog overall.
                 var editingRole by remember { mutableStateOf(CustomThemeRole.PRIMARY) }
                 val editingColor = if (editingRole == CustomThemeRole.PRIMARY) customPrimary else customAccent
-                val editingTextMode = if (editingRole == CustomThemeRole.PRIMARY) primaryTextMode else accentTextMode
 
-                // Live preview: actual button mockups in their real selected text colors, not
-                // just a gradient strip — the whole point is showing what "Auto"/White/Black
-                // actually looks like against whatever color the wheel is currently on, for both
-                // roles at once regardless of which one is being edited right now.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 44.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(customPrimary)
-                            .border(
-                                width = if (editingRole == CustomThemeRole.PRIMARY) 2.dp else 0.dp,
-                                color = SpotVaultColors.OnSurface.copy(alpha = 0.6f),
-                                shape = RoundedCornerShape(12.dp)
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "Primary Button",
-                            color = resolveCustomThemeTextColor(customPrimary, primaryTextMode),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 44.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(customAccent)
-                            .border(
-                                width = if (editingRole == CustomThemeRole.SECONDARY) 2.dp else 0.dp,
-                                color = SpotVaultColors.OnSurface.copy(alpha = 0.6f),
-                                shape = RoundedCornerShape(12.dp)
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "Secondary Button",
-                            color = resolveCustomThemeTextColor(customAccent, accentTextMode),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-
-                // Role toggle — switches which color (and text mode) every control below acts on.
+                // Role toggle — switches which color the wheel below acts on.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -713,13 +652,6 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                         showLabel = false
                     )
                 }
-                TextColorModeRow(
-                    label = "Button Text",
-                    mode = editingTextMode,
-                    onModeChange = { mode ->
-                        if (editingRole == CustomThemeRole.PRIMARY) primaryTextMode = mode else accentTextMode = mode
-                    }
-                )
 
                 Box(
                     modifier = Modifier
@@ -754,6 +686,114 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                         color = SpotVaultColors.OnPrimary
                     )
                 }
+            }
+
+            // Auto/White/Black applies to whichever color theme is active — preset or custom —
+            // so it lives here at the top level instead of nested inside the custom theme editor
+            // above, where it used to be reachable only while building a custom theme.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(SpotVaultColors.Elevated.copy(alpha = 0.55f))
+                    .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                    .clickable { showButtonTextColorPicker = true }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Button Text Color", color = SpotVaultColors.OnSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Auto, White, or Black on your theme's buttons", color = SpotVaultColors.Muted, fontSize = 11.sp)
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = SpotVaultColors.Muted
+                )
+            }
+
+            if (showButtonTextColorPicker) {
+                AlertDialog(
+                    onDismissRequest = { showButtonTextColorPicker = false },
+                    containerColor = SpotVaultColors.Surface,
+                    titleContentColor = SpotVaultColors.OnSurface,
+                    textContentColor = SpotVaultColors.Muted,
+                    title = { Text("Button Text Color") },
+                    text = {
+                        Column {
+                            Text(
+                                "Applies to your current theme's buttons everywhere in the app.",
+                                fontSize = 12.sp,
+                                color = SpotVaultColors.Muted
+                            )
+                            // Live preview against the theme that's actually active right now
+                            // (whatever ThemeState currently resolves, preset or custom) — picking
+                            // a mode below updates these instantly since Primary/Teal/OnPrimary/
+                            // OnTeal all read straight from ThemeState.
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 44.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(SpotVaultColors.Primary),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "Primary Button",
+                                        color = SpotVaultColors.OnPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 44.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(SpotVaultColors.Teal),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "Secondary Button",
+                                        color = SpotVaultColors.OnTeal,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                            TextColorModeRow(
+                                label = "Primary Button Text",
+                                mode = primaryTextMode,
+                                onModeChange = { mode ->
+                                    primaryTextMode = mode
+                                    ThemeState.customOnPrimaryArgb = textModeToArgb(mode)
+                                    saveThemePref(prefs, settingsContext) { putString("custom_on_primary_mode", mode) }
+                                }
+                            )
+                            TextColorModeRow(
+                                label = "Secondary Button Text",
+                                mode = accentTextMode,
+                                onModeChange = { mode ->
+                                    accentTextMode = mode
+                                    ThemeState.customOnAccentArgb = textModeToArgb(mode)
+                                    saveThemePref(prefs, settingsContext) { putString("custom_on_accent_mode", mode) }
+                                }
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showButtonTextColorPicker = false }) {
+                            Text("Done", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                )
             }
 
             SettingsToggleRow(

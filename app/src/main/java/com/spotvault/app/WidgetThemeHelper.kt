@@ -120,22 +120,20 @@ object WidgetThemeHelper {
             surface = colors.surface,
             onSurface = colors.onSurface,
             muted = colors.muted,
-            onPrimary = onPrimaryFor(colors.primary, prefs, theme),
-            onAccent = onAccentFor(colors.accent, prefs, theme)
+            onPrimary = onPrimaryFor(colors.primary, prefs),
+            onAccent = onAccentFor(colors.accent, prefs)
         )
     }
 
-    private fun onPrimaryFor(primary: Int, prefs: SharedPreferences, themeId: String): Int {
-        if (themeId == "custom") {
-            textModeToArgb(prefs.getString("custom_on_primary_mode", "auto") ?: "auto")?.let { return it }
-        }
+    // Button Text Color (Settings > Appearance) applies no matter which color theme is active —
+    // preset or custom — matching SpotVaultColors.OnPrimary/OnTeal in the in-app Compose tree.
+    private fun onPrimaryFor(primary: Int, prefs: SharedPreferences): Int {
+        textModeToArgb(prefs.getString("custom_on_primary_mode", "auto") ?: "auto")?.let { return it }
         return readableOn(primary)
     }
 
-    private fun onAccentFor(accent: Int, prefs: SharedPreferences, themeId: String): Int {
-        if (themeId == "custom") {
-            textModeToArgb(prefs.getString("custom_on_accent_mode", "auto") ?: "auto")?.let { return it }
-        }
+    private fun onAccentFor(accent: Int, prefs: SharedPreferences): Int {
+        textModeToArgb(prefs.getString("custom_on_accent_mode", "auto") ?: "auto")?.let { return it }
         return readableOn(accent)
     }
 
