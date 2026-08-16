@@ -4762,6 +4762,22 @@ fun SpotVaultScreen(
         homeLinkedVehicles.filter { !it.bluetoothMac.isNullOrBlank() }
     }
     val homeLegacyMac = remember { loadAutoParkCarMac(prefs) }
+    // Requesting ACTIVITY_RECOGNITION directly from this sheet instead of bouncing to Automatic
+    // Parking settings — Motion only needs this one runtime permission (unlike the master
+    // Auto-Park toggle's longer location/Bluetooth/battery chain), so there's no reason flipping
+    // it on here can't just prompt in place. Mirrors AutoParkingSettings.kt's own
+    // activityRecognitionLauncher grant handling.
+    val homeActivityRecognitionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            prefs.edit().putBoolean(MOTION_AUTOPARK_ENABLED_PREF, true).commit()
+            homeVehiclesWithBluetooth.forEach { armMotionWatchIfAlreadyConnected(context, it.bluetoothMac!!) }
+            homeLegacyMac?.let { armMotionWatchIfAlreadyConnected(context, it) }
+            WidgetThemeHelper.bumpWidgetRevision(prefs)
+            WidgetThemeHelper.refreshAllWidgets(context.applicationContext)
+        }
+    }
 
     androidx.compose.runtime.LaunchedEffect(isPinned) {
         if (isPinned) {
@@ -4881,8 +4897,7 @@ fun SpotVaultScreen(
                         checked = motionAutoParkEnabled,
                         onCheckedChange = { enabled ->
                             if (enabled && !hasActivityRecognitionPermission(context)) {
-                                showMotionToggleSheet = false
-                                onOpenAutoParkSettings()
+                                homeActivityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
                                 return@Switch
                             }
                             prefs.edit().putBoolean(MOTION_AUTOPARK_ENABLED_PREF, enabled).commit()
