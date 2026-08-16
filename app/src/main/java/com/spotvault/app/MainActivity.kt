@@ -6378,17 +6378,30 @@ fun SplashScreen(
                     .size(markSize)
                     .then(
                         when (style) {
+                            SplashStyle.VAULT_DOOR -> Modifier
+                                .scale(splashVaultDoorIconScale(iconProgress))
+                                .rotate(splashVaultDoorIconRotation(iconProgress))
+                                .alpha(0.2f + splashVaultDoorIconAlpha(iconProgress) * 0.8f)
                             SplashStyle.SIGNAL_FORGE -> Modifier
                                 .scale(splashSignalForgeIconScale(iconProgress))
+                                .rotate(splashSignalForgeIconRotation(iconProgress))
                                 .alpha(0.2f + splashSignalForgeIconAlpha(iconProgress) * 0.8f)
+                            SplashStyle.RADAR -> Modifier
+                                .scale(splashRadarIconScale(iconProgress))
+                                .rotate(splashRadarIconRotation(iconProgress))
+                                .alpha(0.2f + splashRadarIconAlpha(iconProgress) * 0.8f)
                             SplashStyle.TRIANGULATE -> Modifier
                                 .scale(splashTriangulateIconScale(iconProgress))
-                                .alpha(0.25f + splashTriangulateIconAlpha(iconProgress) * 0.75f)
-                            SplashStyle.BEACON_WAKE -> Modifier.scale(splashBeaconIconScale(iconProgress))
+                                .rotate(splashTriangulateIconRotation(iconProgress))
+                                .alpha(0.2f + splashTriangulateIconAlpha(iconProgress) * 0.8f)
+                            SplashStyle.SIGNAL_STORM -> Modifier
+                                .scale(splashSignalStormIconScale(iconProgress))
+                                .rotate(splashSignalStormIconRotation(iconProgress))
+                                .alpha(0.2f + splashSignalStormIconAlpha(iconProgress) * 0.8f)
                             SplashStyle.VAULT_BLOOM -> Modifier
                                 .scale(splashVaultBloomIconScale(iconProgress))
                                 .rotate(splashVaultBloomIconRotation(iconProgress))
-                                .alpha(0.3f + splashVaultBloomIconAlpha(iconProgress) * 0.7f)
+                                .alpha(0.2f + splashVaultBloomIconAlpha(iconProgress) * 0.8f)
                             SplashStyle.HALLOWEEN -> Modifier
                                 .scale(splashHalloweenIconScale(iconProgress))
                                 .rotate(splashHalloweenIconRotation(iconProgress))
