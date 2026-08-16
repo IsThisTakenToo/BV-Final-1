@@ -63,7 +63,8 @@ enum class BackgroundPattern(val id: String, val label: String) {
     WAVE_FLOW("wave_flow", "Wave Flow"),
     NEBULA_MIST("nebula_mist", "Nebula Mist"),
     SCAN_SWEEP("scan_sweep", "Scan Sweep"),
-    PIN_FIELD("pin_field", "Pin Field");
+    PIN_FIELD("pin_field", "Pin Field"),
+    PLAIN_DARK("plain_dark", "Plain Dark");
 
     companion object {
         private val legacyIds = setOf(
@@ -95,6 +96,7 @@ fun SpotVaultAmbientBackground(modifier: Modifier = Modifier) {
         BackgroundPattern.NEBULA_MIST -> NebulaMistBackground(modifier)
         BackgroundPattern.SCAN_SWEEP -> ScanSweepBackground(modifier)
         BackgroundPattern.PIN_FIELD -> PinFieldBackground(modifier)
+        BackgroundPattern.PLAIN_DARK -> PlainDarkBackground(modifier)
     }
 }
 
@@ -721,6 +723,23 @@ private fun PinFieldBackground(modifier: Modifier = Modifier, previewBoost: Bool
     )
 }
 
+/** No motif, no motion — just the same base fill and subtle theme wash every other pattern
+ * draws underneath its own decoration, for anyone who'd rather the background just get out of
+ * the way. Cheapest option in the list: no drawWithCache work beyond the shared wash, and
+ * nothing to gate behind reducedMotion since there's nothing animated to begin with. */
+@Composable
+private fun PlainDarkBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
+    val themeColors = LocalSpotVaultColors.current
+    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    Box(
+        modifier = modifier.fillMaxSize().drawWithCache {
+            onDrawBehind {
+                drawPatternBase(baseFill, themeColors, previewBoost)
+            }
+        }
+    )
+}
+
 /** Settings picker — each cell is a small live-rendered preview of the actual pattern, using
  * the current theme's colors, so what you pick is (contrast-boosted, see [BackgroundPatternPreview])
  * recognizably close to what you'll see everywhere. Horizontally scrollable so eight options don't
@@ -825,5 +844,6 @@ private fun BackgroundPatternPreview(pattern: BackgroundPattern, modifier: Modif
         BackgroundPattern.NEBULA_MIST -> NebulaMistBackground(modifier, previewBoost = true)
         BackgroundPattern.SCAN_SWEEP -> ScanSweepBackground(modifier, previewBoost = true)
         BackgroundPattern.PIN_FIELD -> PinFieldBackground(modifier, previewBoost = true)
+        BackgroundPattern.PLAIN_DARK -> PlainDarkBackground(modifier, previewBoost = true)
     }
 }
