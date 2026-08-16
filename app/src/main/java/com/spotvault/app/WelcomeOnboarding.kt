@@ -1,7 +1,9 @@
 package com.spotvault.app
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -12,15 +14,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
-data class WelcomeSlide(val icon: ImageVector, val title: String, val body: String)
+data class WelcomeSlide(val imageRes: Int, val title: String, val body: String)
 
 sealed interface DriveOnboardingState {
     data object Idle : DriveOnboardingState
@@ -36,17 +40,17 @@ sealed interface DriveOnboardingState {
 
 val WelcomeSlides = listOf(
     WelcomeSlide(
-        Icons.Default.CameraAlt,
+        R.drawable.onboard_snap_pin,
         "Snap & Pin",
-        "Snap a photo of where you parked, or drop a quiet Pin — DropPin Vault saves the exact spot, keeps a live notification going, and gets you back with one tap."
+        "Snap a photo of where you parked, or drop a Pin with just your GPS — either way, DropPin Vault saves the exact spot to your Vault, ready to navigate back to anytime."
     ),
     WelcomeSlide(
-        Icons.Default.PushPin,
+        R.drawable.onboard_quick_actions,
         "Quick Pins & Widgets",
-        "Drop a Parked Truck pin in one tap, start an active tracking timer, or add the home-screen widget — everything stays focused on getting you back to your spot."
+        "Quick Pin saves your spot instantly, no dialog — perfect on the move. Quick Track does the same but keeps a live notification until you tap Found. Add the home-screen widget for one-tap access without even opening the app."
     ),
     WelcomeSlide(
-        Icons.Default.Navigation,
+        R.drawable.onboard_compass,
         "Find Your Way Back",
         "Navigate straight back to anything saved in your Vault with compass guidance or your own maps app — free, always."
     )
@@ -108,14 +112,15 @@ fun WelcomeOnboardingScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
-                            Box(
+                            Image(
+                                painter = painterResource(id = slide.imageRes),
+                                contentDescription = null,
+                                contentScale = ContentScale.Fit,
                                 modifier = Modifier
-                                    .size(96.dp)
-                                    .background(SpotVaultColors.Teal.copy(alpha = 0.15f), androidx.compose.foundation.shape.CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(slide.icon, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(48.dp))
-                            }
+                                    .fillMaxWidth(0.78f)
+                                    .heightIn(max = 220.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                            )
                             Spacer(modifier = Modifier.height(32.dp))
                             Text(slide.title, color = SpotVaultColors.OnSurface, fontWeight = FontWeight.Black, fontSize = 26.sp)
                             Spacer(modifier = Modifier.height(12.dp))
