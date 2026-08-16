@@ -501,12 +501,58 @@ object PremiumWidgetRenderer {
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = colorArgb
-            // Was a fixed 8.5dp no matter how tall the label's own row was given — scales with it.
             textSize = (heightPx * 0.68f).coerceIn(12f * density, 20f * density)
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             letterSpacing = 0.06f
         }
         canvas.drawText(label.uppercase(), 4f * density, heightPx - 5f * density, paint)
+        return bitmap
+    }
+
+    fun renderSortIconBitmap(context: Context, colorArgb: Int, sizePx: Int, isOldest: Boolean): Bitmap {
+        val bitmap = Bitmap.createBitmap(sizePx.coerceAtLeast(1), sizePx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = colorArgb
+            strokeWidth = sizePx * 0.1f
+            strokeCap = Paint.Cap.ROUND
+        }
+        val cx = sizePx / 2f
+        val cy = sizePx / 2f
+        val w = sizePx * 0.5f
+        val h = sizePx * 0.4f
+        
+        if (isOldest) {
+            // Sort ascending (oldest first) — bars grow top-to-bottom, standard ascending glyph.
+            canvas.drawLine(cx - w/2, cy - h/2, cx, cy - h/2, paint)
+            canvas.drawLine(cx - w/2, cy, cx + w/4, cy, paint)
+            canvas.drawLine(cx - w/2, cy + h/2, cx + w/2, cy + h/2, paint)
+        } else {
+            // Sort descending (newest first) — bars shrink top-to-bottom, standard descending glyph.
+            canvas.drawLine(cx - w/2, cy - h/2, cx + w/2, cy - h/2, paint)
+            canvas.drawLine(cx - w/2, cy, cx + w/4, cy, paint)
+            canvas.drawLine(cx - w/2, cy + h/2, cx, cy + h/2, paint)
+        }
+        return bitmap
+    }
+
+    fun renderVaultIconBitmap(context: Context, colorArgb: Int, sizePx: Int): Bitmap {
+        val bitmap = Bitmap.createBitmap(sizePx.coerceAtLeast(1), sizePx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = colorArgb
+            style = Paint.Style.STROKE
+            strokeWidth = sizePx * 0.08f
+        }
+        val cx = sizePx / 2f
+        val cy = sizePx / 2f
+        val r = sizePx * 0.35f
+        canvas.drawCircle(cx, cy, r, paint)
+        canvas.drawCircle(cx, cy, r * 0.4f, paint)
+        canvas.drawLine(cx, cy - r, cx, cy - r * 0.4f, paint)
+        canvas.drawLine(cx, cy + r, cx, cy + r * 0.4f, paint)
+        canvas.drawLine(cx - r, cy, cx - r * 0.4f, cy, paint)
+        canvas.drawLine(cx + r, cy, cx + r * 0.4f, cy, paint)
         return bitmap
     }
 

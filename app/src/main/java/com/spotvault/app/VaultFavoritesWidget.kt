@@ -8,6 +8,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
@@ -31,6 +32,7 @@ import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.width
 import androidx.glance.state.GlanceStateDefinition
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +54,7 @@ class VaultFavoritesWidget : GlanceAppWidget() {
             val prefs = currentState<Preferences>()
             val revision = prefs[KEY_REVISION] ?: 0L
             val themeCache = prefs[WidgetGlanceThemeKeys.THEME_CACHE] ?: ""
+            val sortOrder = prefs[KEY_SORT_ORDER] ?: "newest"
             val initialPrefs = remember { context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE) }
             val isPremium = isPremiumUnlocked(initialPrefs)
 
@@ -66,12 +69,16 @@ class VaultFavoritesWidget : GlanceAppWidget() {
             val favoritesState = produceState(
                 initialValue = emptyList<VaultFavoriteEntry>(),
                 key1 = revision,
-                key2 = isPremium
+                key2 = isPremium,
+                key3 = sortOrder
             ) {
                 value = if (isPremium) {
                     withContext(Dispatchers.IO) {
                         val db = AppDatabase.getDatabase(context)
-                        val spots = db.locationDao().getFavoriteSpots()
+                        val spots = db.locationDao().getFavoriteSpots().let { list ->
+                            if (sortOrder == "oldest") list.sortedBy { it.timestamp }
+                            else list.sortedByDescending { it.timestamp }
+                        }
                         val vehicleDao = db.vehicleDao()
                         val vehicleNames = mutableMapOf<Int, String?>()
                         spots.map { spot ->
@@ -97,6 +104,7 @@ class VaultFavoritesWidget : GlanceAppWidget() {
             } else {
                 VaultFavoritesContent(
                     theme = theme,
+                    sortOrder = sortOrder,
                     favorites = favoritesState.value
                 )
             }
@@ -105,11 +113,22 @@ class VaultFavoritesWidget : GlanceAppWidget() {
 
     companion object {
         val KEY_REVISION = longPreferencesKey("widget_revision")
+        val KEY_SORT_ORDER = stringPreferencesKey("widget_sort_order")
     }
 }
 
 class VaultFavoritesWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = VaultFavoritesWidget()
+}
+
+class ToggleFavoritesSortAction : androidx.glance.appwidget.action.ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: androidx.glance.action.ActionParameters) {
+        androidx.glance.appwidget.state.updateAppWidgetState(context, glanceId) { prefs ->
+            val current = prefs[VaultFavoritesWidget.KEY_SORT_ORDER] ?: "newest"
+            prefs[VaultFavoritesWidget.KEY_SORT_ORDER] = if (current == "newest") "oldest" else "newest"
+        }
+        VaultFavoritesWidget().update(context, glanceId)
+    }
 }
 
 private val FavoritesHeaderHeight = 24.dp
@@ -136,6 +155,7 @@ private fun vaultFavoritesContentWidthDp(): Float =
 @Composable
 private fun VaultFavoritesContent(
     theme: GlanceWidgetTheme,
+    sortOrder: String,
     favorites: List<VaultFavoriteEntry>
 ) {
     val context = LocalContext.current
@@ -146,6 +166,7 @@ private fun VaultFavoritesContent(
             FavoritesHeader(
                 theme = theme,
                 widthPx = widthPx,
+                sortOrder = sortOrder,
                 modifier = GlanceModifier.fillMaxWidth().height(FavoritesHeaderHeight)
             )
 
@@ -191,25 +212,64 @@ private fun VaultFavoritesContent(
 private fun FavoritesHeader(
     theme: GlanceWidgetTheme,
     widthPx: Int,
+    sortOrder: String,
     modifier: GlanceModifier
 ) {
     val context = LocalContext.current
     val heightPx = WidgetThemeHelper.dpToPx(context, FavoritesHeaderHeight.value)
-    val bitmap = remember(theme.cacheKey(), widthPx, heightPx) {
+    
+    // Row is [label][sort 24dp][Spacer 8dp][vault 24dp] — reserve exactly that 56dp, not a
+    // guessed value, or the label bitmap gets rendered at the wrong width and FillBounds
+    // stretches it against the box Glance actually lays out.
+    val iconSizePx = WidgetThemeHelper.dpToPx(context, 24f)
+    val labelWidthPx = (widthPx - iconSizePx * 2 - WidgetThemeHelper.dpToPx(context, 8f)).coerceAtLeast(1)
+    
+    val labelBitmap = remember(theme.cacheKey(), labelWidthPx, heightPx) {
         PremiumWidgetRenderer.renderSectionLabelBitmap(
             context,
             "Vault Favorites",
             android.graphics.Color.WHITE,
-            widthPx,
+            labelWidthPx,
             heightPx
         )
     }
-    Image(
-        provider = ImageProvider(bitmap),
-        contentDescription = "Vault Favorites",
+    
+    val sortBitmap = remember(theme.cacheKey(), sortOrder, iconSizePx) {
+        PremiumWidgetRenderer.renderSortIconBitmap(context, android.graphics.Color.WHITE, iconSizePx, sortOrder == "oldest")
+    }
+    
+    val vaultBitmap = remember(theme.cacheKey(), iconSizePx) {
+        PremiumWidgetRenderer.renderVaultIconBitmap(context, android.graphics.Color.WHITE, iconSizePx)
+    }
+    
+    androidx.glance.layout.Row(
         modifier = modifier,
-        contentScale = ContentScale.FillBounds
-    )
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Image(
+            provider = ImageProvider(labelBitmap),
+            contentDescription = "Vault Favorites",
+            modifier = GlanceModifier.defaultWeight().height(FavoritesHeaderHeight),
+            contentScale = ContentScale.FillBounds
+        )
+        Image(
+            provider = ImageProvider(sortBitmap),
+            contentDescription = "Toggle Sort Order",
+            modifier = GlanceModifier.width(24.dp).height(24.dp).clickable(
+                androidx.glance.appwidget.action.actionRunCallback<ToggleFavoritesSortAction>()
+            ),
+            contentScale = ContentScale.Fit
+        )
+        androidx.glance.layout.Spacer(modifier = GlanceModifier.width(8.dp))
+        Image(
+            provider = ImageProvider(vaultBitmap),
+            contentDescription = "Open Vault",
+            modifier = GlanceModifier.width(24.dp).height(24.dp).clickable(
+                actionStartActivity(PremiumWidgetIntents.openVault(context))
+            ),
+            contentScale = ContentScale.Fit
+        )
+    }
 }
 
 @Composable
