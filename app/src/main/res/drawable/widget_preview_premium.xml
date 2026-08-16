@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mirrors the real Premium Dashboard's idle layout (see PremiumWidgetContent /
+     PremiumDefaultContent): a "Recent" header, a couple of thumbnail+text history rows, a
+     full-width "Open Vault" bar, a row of small toggle/share icons, then the 2x2 Snap/Pin/
+     Quick Pin/Quick Track button grid — not an abstract color-block stand-in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="250dp"
+    android:height="270dp"
+    android:viewportWidth="250"
+    android:viewportHeight="270">
+
+    <path
+        android:pathData="M 14,0 L 236,0 A 14,14 0 0 1 250,14 L 250,256 A 14,14 0 0 1 236,270 L 14,270 A 14,14 0 0 1 0,256 L 0,14 A 14,14 0 0 1 14,0 Z"
+        android:fillColor="#0A1020"
+        android:strokeColor="#552962FF"
+        android:strokeWidth="1.2" />
+
+    <!-- "Recent" header -->
+    <path
+        android:pathData="M 12,10 L 226,10 A 8,8 0 0 1 234,18 L 234,30 A 8,8 0 0 1 226,38 L 12,38 A 8,8 0 0 1 4,30 L 4,18 A 8,8 0 0 1 12,10 Z"
+        android:fillColor="#2962FF" />
+
+    <!-- Recent row 1: thumbnail + title/subtitle lines -->
+    <path
+        android:pathData="M 12,44 L 12,68 A 6,6 0 0 1 18,74 L 18,74 A 6,6 0 0 1 12,80 L 12,80 A 6,6 0 0 1 6,74 L 6,74 A 6,6 0 0 1 12,68 Z"
+        android:fillColor="#29365A" />
+    <path android:pathData="M 6,46 L 30,46 A 5,5 0 0 1 35,51 L 35,67 A 5,5 0 0 1 30,72 L 6,72 A 5,5 0 0 1 1,67 L 1,51 A 5,5 0 0 1 6,46 Z" android:fillColor="#17213A" />
+    <path android:pathData="M42,52 h96 v6 h-96 z" android:fillColor="#EAF0FF" />
+    <path android:pathData="M42,63 h130 v4 h-130 z" android:fillColor="#9AA8C2" />
+
+    <!-- Recent row 2 -->
+    <path android:pathData="M 6,80 L 30,80 A 5,5 0 0 1 35,85 L 35,101 A 5,5 0 0 1 30,106 L 6,106 A 5,5 0 0 1 1,101 L 1,85 A 5,5 0 0 1 6,80 Z" android:fillColor="#17213A" />
+    <path android:pathData="M42,86 h108 v6 h-108 z" android:fillColor="#EAF0FF" />
+    <path android:pathData="M42,97 h150 v4 h-150 z" android:fillColor="#9AA8C2" />
+
+    <!-- Open Vault bar -->
+    <path
+        android:pathData="M 12,114 L 226,114 A 8,8 0 0 1 234,122 L 234,136 A 8,8 0 0 1 226,144 L 12,144 A 8,8 0 0 1 4,136 L 4,122 A 8,8 0 0 1 12,114 Z"
+        android:fillColor="#2962FF" />
+    <path android:pathData="M100,125 h50 v6 h-50 z" android:fillColor="#EAF0FF" />
+
+    <!-- Icon row: share / bluetooth-auto / motion -->
+    <path android:pathData="M31,151 m-13,0 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" android:fillColor="#FFD100" />
+    <path android:pathData="M125,151 m-13,0 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" android:fillColor="#2962FF" />
+    <path android:pathData="M219,151 m-13,0 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" android:fillColor="#FFD100" />
+
+    <!-- 2x2 action grid: Snap / Pin -->
+    <path
+        android:pathData="M 6,176 L 118,176 A 8,8 0 0 1 126,184 L 126,212 A 8,8 0 0 1 118,220 L 6,220 A 8,8 0 0 1 -2,212 L -2,184 A 8,8 0 0 1 6,176 Z"
+        android:fillColor="#2962FF" />
+    <path android:pathData="M16,192 a5.5,5.5 0 1,0 0.1,0" android:fillColor="#EAF0FF" />
+    <path android:pathData="M30,190 h64 v8 h-64 z" android:fillColor="#0B0F1A" />
+
+    <path
+        android:pathData="M 132,176 L 244,176 A 8,8 0 0 1 252,184 L 252,212 A 8,8 0 0 1 244,220 L 132,220 A 8,8 0 0 1 124,212 L 124,184 A 8,8 0 0 1 132,176 Z"
+        android:fillColor="#FFD100" />
+    <path android:pathData="M142,192 a5.5,5.5 0 1,0 0.1,0" android:fillColor="#0B0F1A" />
+    <path android:pathData="M156,190 h68 v8 h-68 z" android:fillColor="#0B0F1A" />
+
+    <!-- 2x2 action grid: Quick Pin / Quick Track -->
+    <path
+        android:pathData="M 6,226 L 118,226 A 8,8 0 0 1 126,234 L 126,262 A 8,8 0 0 1 118,270 L 6,270 A 8,8 0 0 1 -2,262 L -2,234 A 8,8 0 0 1 6,226 Z"
+        android:fillColor="#2962FF" />
+    <path android:pathData="M16,242 a5.5,5.5 0 1,0 0.1,0" android:fillColor="#EAF0FF" />
+    <path android:pathData="M30,240 h84 v8 h-84 z" android:fillColor="#0B0F1A" />
+
+    <path
+        android:pathData="M 132,226 L 244,226 A 8,8 0 0 1 252,234 L 252,262 A 8,8 0 0 1 244,270 L 132,270 A 8,8 0 0 1 124,262 L 124,234 A 8,8 0 0 1 132,226 Z"
+        android:fillColor="#FFD100" />
+    <path android:pathData="M142,242 a5.5,5.5 0 1,0 0.1,0" android:fillColor="#0B0F1A" />
+    <path android:pathData="M156,240 h88 v8 h-88 z" android:fillColor="#0B0F1A" />
+</vector>

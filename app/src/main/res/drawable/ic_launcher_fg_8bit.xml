@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 8-Bit — pixel-perfect DropPin Vault: same GPS pin + cobalt vault eye as default (3px grid) -->
+
+    <!-- Pin outline -->
+    <path android:fillColor="#3D2E00" android:pathData="
+        M48,21h12v3h-12z M45,24h18v3h-18z M42,27h24v3h-24z M39,30h30v3h-30z
+        M36,33h36v3h-36z M36,36h36v3h-36z M36,39h36v3h-36z M39,42h30v3h-30z
+        M42,45h24v3h-24z M45,48h18v3h-18z M48,51h12v3h-12z M51,54h6v3h-6z
+        M51,57h6v3h-6z M51,60h6v3h-6z M51,63h6v3h-6z M51,66h6v3h-6z
+        M51,69h6v3h-6z M51,72h6v3h-6z M51,75h6v3h-6z M51,78h6v3h-6z M51,81h6v3h-6z" />
+
+    <!-- Gold pin body -->
+    <path android:fillColor="#FFD100" android:pathData="
+        M48,24h12v3h-12z M45,27h18v3h-18z M42,30h24v3h-24z M39,33h30v3h-30z
+        M39,36h9v3h-9z M60,36h9v3h-9z M39,39h9v3h-9z M60,39h9v3h-9z
+        M39,42h9v3h-9z M60,42h9v3h-9z M42,45h24v3h-24z M45,48h18v3h-18z
+        M48,51h12v3h-12z M51,54h6v3h-6z M51,57h6v3h-6z M51,60h6v3h-6z
+        M51,63h6v3h-6z M51,66h6v3h-6z M51,69h6v3h-6z M51,72h6v3h-6z
+        M51,75h6v3h-6z M51,78h6v3h-6z" />
+
+    <!-- Lower pin depth -->
+    <path android:fillColor="#C8960C" android:pathData="
+        M57,36h9v3h-9z M57,39h9v3h-9z M57,42h9v3h-9z M57,45h9v3h-9z
+        M51,66h6v3h-6z M51,69h6v3h-6z M51,72h6v3h-6z M51,75h6v3h-6z M51,78h6v3h-6z" />
+
+    <!-- Glass specular cap -->
+    <path android:fillColor="#FFF0A8" android:pathData="
+        M48,24h12v3h-12z M45,27h9v3h-9z M42,30h9v3h-9z M39,33h9v3h-9z" />
+
+    <!-- Ground shadow -->
+    <path android:fillColor="#40000000" android:pathData="M45,84h18v3h-18z M48,87h12v3h-12z" />
+
+    <!-- Vault outer ring (gold bezel) -->
+    <path android:fillColor="#8A6800" android:pathData="
+        M39,30h30v3h-30z M36,33h9v3h-9z M63,33h9v3h-9z M36,36h9v3h-9z M63,36h9v3h-9z
+        M36,39h9v3h-9z M63,39h9v3h-9z M36,42h9v3h-9z M63,42h9v3h-9z
+        M36,45h9v3h-9z M63,45h9v3h-9z M36,48h9v3h-9z M63,48h9v3h-9z
+        M36,51h9v3h-9z M63,51h9v3h-9z M39,54h9v3h-9z M60,54h9v3h-9z M42,57h24v3h-24z" />
+    <path android:fillColor="#FFD100" android:pathData="
+        M42,33h24v3h-24z M39,36h6v3h-6z M63,36h6v3h-6z M39,39h6v3h-6z M63,39h6v3h-6z
+        M39,42h6v3h-6z M63,42h6v3h-6z M39,45h6v3h-6z M63,45h6v3h-6z
+        M39,48h6v3h-6z M63,48h6v3h-6z M42,51h24v3h-24z" />
+    <path android:fillColor="#FFE566" android:pathData="
+        M45,36h18v3h-18z M42,39h6v3h-6z M60,39h6v3h-6z M42,42h6v3h-6z M60,42h6v3h-6z
+        M42,45h6v3h-6z M60,45h6v3h-6z M45,48h18v3h-18z" />
+
+    <!-- Cobalt vault door -->
+    <path android:fillColor="#0B1F6E" android:pathData="
+        M45,39h18v3h-18z M42,42h24v3h-24z M42,45h24v3h-24z M42,48h24v3h-24z M45,51h18v3h-18z" />
+    <path android:fillColor="#2962FF" android:pathData="
+        M45,42h18v3h-18z M45,45h18v3h-18z M45,48h18v3h-18z" />
+    <path android:fillColor="#4D8AFF" android:pathData="M45,42h9v3h-9z M45,45h9v3h-9z" />
+    <path android:fillColor="#6B94FF" android:pathData="M48,42h6v3h-6z" />
+
+    <!-- Six vault spokes -->
+    <path android:fillColor="#FFD100" android:pathData="
+        M51,33h6v3h-6z M57,36h3v3h-3z M57,39h3v3h-3z M57,42h3v3h-3z M57,45h3v3h-3z
+        M51,48h6v3h-6z M48,45h3v3h-3z M48,42h3v3h-3z M48,39h3v3h-3z M48,36h3v3h-3z
+        M45,39h3v3h-3z M45,42h3v3h-3z M45,45h3v3h-3z M60,39h3v3h-3z M60,42h3v3h-3z M60,45h3v3h-3z" />
+    <path android:fillColor="#FFE566" android:pathData="
+        M51,33h3v3h-3z M57,36h3v3h-3z M48,36h3v3h-3z M54,36h3v3h-3z" />
+
+    <!-- Lock hub gem -->
+    <path android:fillColor="#2962FF" android:pathData="M48,42h12v9h-12z" />
+    <path android:fillColor="#B8CCFF" android:pathData="M48,42h12v6h-12z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M48,42h6v3h-6z" />
+
+    <!-- Keyhole -->
+    <path android:fillColor="#080E28" android:pathData="M51,45h6v3h-6z M51,48h6v3h-6z M54,51h3v3h-3z" />
+
+    <!-- Pin tip gleam -->
+    <path android:fillColor="#FFFFFF" android:pathData="M51,78h3v3h-3z" />
+
+</vector>

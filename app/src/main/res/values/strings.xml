@@ -1,3 +1,13 @@
 <resources>
-    <string name="app_name">BeaconVault</string>
+    <string name="app_name">DropPin Vault</string>
+    <string name="widget_quick_actions_name">Quick Actions</string>
+    <string name="widget_quick_actions_description">One-tap Quick Pin, Quick Share, and Quick Track — the same shortcuts as the home screen.</string>
+    <string name="widget_premium_name">DropPin Vault Premium Dashboard</string>
+    <string name="widget_premium_description">Premium home-screen dashboard — quick actions, Snap/Pin/Share Photo, recent Vault history, toggles, and live tracking with photo.</string>
+    <string name="widget_vault_favorites_name">Vault Favorites</string>
+    <string name="widget_vault_favorites_description">Scrollable list of every favorite in your Vault — tap any entry to open it.</string>
+    <string name="widget_tag_filter_name">Tag Filter</string>
+    <string name="widget_tag_filter_description">Pick one or more tags when you add this widget — it shows every spot carrying at least one of them, right on your home screen. Long-press to change tags later.</string>
+    <string name="quick_pin_tile_label">Quick Pin</string>
+    <string name="quick_track_tile_label">Quick Track</string>
 </resources>

@@ -1,13 +1,24 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Pre-Android-12 auto backup rules. The vault database, saved photos, and manual export files
+   are excluded so a device's Auto Backup can't silently restore locked vault contents on another
+   device without ever going through App Lock — the app's own Backup & Data export feature is the
+   intended, explicit way to move vault data between devices.
+
+   SharedPreferences are excluded too: without this, a reinstall on the same Google account
+   silently restores a prior test/old install's settings (theme, button style, etc.) via Auto
+   Backup, making a "fresh install" not actually be fresh — it looks like the wrong thing was
+   picked as default when really an old choice was just restored underneath it.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="database" path="spotvault_database" />
+    <!-- Room's WAL-mode sidecar files aren't covered by excluding the base database name above
+         (each is backed up as its own independent file) — without excluding them too, a restore
+         could bring back a stale -wal without its matching base file, which Room may refuse to
+         open. -->
+    <exclude domain="database" path="spotvault_database-wal" />
+    <exclude domain="database" path="spotvault_database-shm" />
+    <exclude domain="file" path="images/" />
+    <exclude domain="file" path="exports/" />
+    <exclude domain="sharedpref" path="SpotVaultPrefs.xml" />
 </full-backup-content>

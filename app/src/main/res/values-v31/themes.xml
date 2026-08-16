@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SpotVault" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/sv_void</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="colorPrimary">@color/sv_primary</item>
+        <item name="colorAccent">@color/sv_teal</item>
+        <item name="android:windowSplashScreenBackground">@color/sv_void</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_spotvault_mark</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/sv_void</item>
+    </style>
+</resources>

@@ -11,23 +11,195 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Without this, the Bluetooth permissions above can make Play Store's device catalog treat
+         Bluetooth hardware as required and silently exclude phones/tablets that lack it — even
+         though Bluetooth is only used for the optional Automatic Parking feature, not anything
+         core (Pin, Snap, Vault, GPS, Compass all work with zero Bluetooth hardware at all). -->
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
+    <!-- This app has no ads and doesn't use the advertising ID for anything. Firebase
+         Analytics auto-merges these in by default; removing them means Analytics simply skips
+         ad-ID/attribution collection, and keeps the Play Data Safety form truthful. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION" tools:node="remove" />
+
+    <!-- Android 11+ package-visibility: without this, resolveActivity()/queryIntentActivities()
+         for RecognizerIntent.ACTION_RECOGNIZE_SPEECH can return null even when a speech
+         recognizer (e.g. Google app) is installed, making voice input silently report as
+         unavailable on every device running API 30+. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
+    <supports-screens
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="true"
+        android:xlargeScreens="true"
+        android:anyDensity="true" />
+
     <application
+        android:name=".BeaconVaultApplication"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+        android:largeHeap="true"
         android:theme="@style/Theme.SpotVault">
         
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:enableOnBackInvokedCallback="true"
+            android:resizeableActivity="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round" />
+
+        <!-- One of these is enabled at a time (see AppIconManager.kt) so the user can pick an
+             alternate home-screen icon; all of them point at the same MainActivity. -->
+        <activity-alias
+            android:name=".IconDefault"
+            android:enabled="true"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconDark"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher_dark"
+            android:roundIcon="@mipmap/ic_launcher_dark_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".Icon8Bit"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher_8bit"
+            android:roundIcon="@mipmap/ic_launcher_8bit_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".Icon8BitDark"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher_8bit_dark"
+            android:roundIcon="@mipmap/ic_launcher_8bit_dark_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconNeon"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher_neon"
+            android:roundIcon="@mipmap/ic_launcher_neon_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconMinimal"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher_minimal"
+            android:roundIcon="@mipmap/ic_launcher_minimal_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconGlass"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher_glass"
+            android:roundIcon="@mipmap/ic_launcher_glass_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconEmber"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher_ember"
+            android:roundIcon="@mipmap/ic_launcher_ember_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconPastel"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:icon="@mipmap/ic_launcher_pastel"
+            android:roundIcon="@mipmap/ic_launcher_pastel_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity
+            android:name=".QuickActionRelayActivity"
+            android:exported="false"
+            android:theme="@style/Theme.SpotVault.Transparent"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.spotvault.app.widgetrelay" />
+
+        <!-- Widget configuration screen — the OS requires config Activities to be exported and
+             to declare the APPWIDGET_CONFIGURE intent-filter so the launcher can invoke it both
+             on first placement and again from "Edit" (widgetFeatures="reconfigurable" in
+             tag_filter_widget_info.xml). -->
+        <activity
+            android:name=".TagFilterWidgetConfigActivity"
+            android:exported="true"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
             </intent-filter>
         </activity>
 
@@ -42,24 +214,58 @@
         </provider>
         
         <receiver android:name=".ClearNotificationReceiver" android:exported="false" />
-        <receiver android:name=".ExportReceiver" android:exported="false" />
-        
-        <receiver android:name=".SpotVaultWidget" android:exported="true">
+        <receiver android:name=".NotificationGuardReceiver" android:exported="false" />
+
+        <receiver
+            android:name=".EverydayQuickActionsWidgetReceiver"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/widget_quick_actions_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/spot_vault_widget_info" />
+                android:resource="@xml/everyday_quick_actions_widget_info" />
         </receiver>
-        
-        <receiver android:name=".CompactSpotVaultWidget" android:exported="true">
+
+        <receiver
+            android:name=".PremiumGlanceWidgetReceiver"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/widget_premium_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/spot_vault_widget_compact_info" />
+                android:resource="@xml/premium_glance_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".VaultFavoritesWidgetReceiver"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/widget_vault_favorites_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/vault_favorites_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".TagFilterWidgetReceiver"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/widget_tag_filter_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/tag_filter_widget_info" />
         </receiver>
 
         <receiver android:name=".BootReceiver" android:exported="true">
@@ -69,11 +275,58 @@
             </intent-filter>
         </receiver>
 
-        <service 
+        <!-- Manifest-declared so ACL connect/disconnect fires even when the app process is not running. -->
+        <receiver
+            android:name=".CarBluetoothReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Receives Activity Recognition transition results for Motion & Fitness auto-park. -->
+        <receiver
+            android:name=".MotionActivityReceiver"
+            android:exported="false" />
+
+        <service
             android:name=".TimerService"
             android:foregroundServiceType="location|specialUse"
+            android:stopWithTask="false"
             android:exported="false">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Timer" />
+        </service>
+
+        <!-- Quick Settings tile — toggles active tracking (Track / Found) without opening the
+             app. ACTIVE_TILE lets us push a state update the moment tracking starts/stops
+             elsewhere (see QuickTrackTileService.requestTileUpdate), not just while the tile
+             happens to be visible in an open shade. -->
+        <service
+            android:name=".QuickTrackTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_quick_track"
+            android:label="@string/quick_track_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="true" />
+        </service>
+
+        <!-- Quick Settings tile — a one-shot silent pin drop at the current location, no toggle
+             state, so no ACTIVE_TILE meta-data (nothing to push an out-of-band update for). -->
+        <service
+            android:name=".QuickPinTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_quick_pin"
+            android:label="@string/quick_pin_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
         </service>
     </application>
 </manifest>

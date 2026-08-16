@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <cache-path name="spotvault_photos" path="images/" />
+    <files-path name="spotvault_photos" path="images/" />
+    <files-path name="spotvault_exports" path="exports/" />
 </paths>

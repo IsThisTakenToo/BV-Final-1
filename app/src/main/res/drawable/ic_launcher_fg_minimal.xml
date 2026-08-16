@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Minimal — clean gold line pin, cobalt vault dot -->
+
+    <path android:fillColor="#00000000" android:strokeWidth="2.8" android:strokeColor="#FFD100"
+        android:pathData="M54,26 C41.8,26 32,35.8 32,48 C32,60.5 44.8,72.5 54,82 C63.2,72.5 76,60.5 76,48 C76,35.8 66.2,26 54,26 Z" />
+
+    <path android:fillColor="#00000000" android:strokeWidth="2.2" android:strokeColor="#FFD100"
+        android:pathData="M54,36 A11,11 0 1,0 54,58 A11,11 0 1,0 54,36 Z" />
+
+    <!-- Cobalt vault hub -->
+    <path android:fillColor="#2962FF" android:pathData="M54,47 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path android:fillColor="#FFD100" android:pathData="M54,47 m-1.5,0 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0" />
+
+    <!-- Four minimal spokes -->
+    <path android:strokeWidth="1.4" android:strokeColor="#FFD100" android:fillColor="#00000000"
+        android:pathData="M54,38 L54,56 M43,47 L65,47" />
+
+</vector>

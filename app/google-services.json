@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "800144938529",
+    "project_id": "beaconvault-971df",
+    "storage_bucket": "beaconvault-971df.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:800144938529:android:ff4f20382ef6dc12c37560",
+        "android_client_info": {
+          "package_name": "com.beaconvault.app.abceef"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC5DBb63M81woCx_-GyumofyesqRze79ts"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:800144938529:android:e6fce521eca632bec37560",
+        "android_client_info": {
+          "package_name": "com.droppinvault.app.abceef"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC5DBb63M81woCx_-GyumofyesqRze79ts"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

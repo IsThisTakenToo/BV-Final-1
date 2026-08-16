@@ -11,10 +11,18 @@ class BootReceiver : BroadcastReceiver() {
             val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
             if (prefs.getBoolean("is_pinned", false)) {
                 val serviceIntent = Intent(context, TimerService::class.java).apply {
-                    action = "RESUME"
+                    action = TimerService.ACTION_RESUME
                 }
-                ContextCompat.startForegroundService(context, serviceIntent)
+                try {
+                    ContextCompat.startForegroundService(context, serviceIntent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
+            // See MotionWatchRearmWorker's doc — Play Services' ActivityRecognitionClient
+            // registration isn't guaranteed to survive this reboot even though the "armed"
+            // SharedPreferences state does.
+            enqueueMotionWatchRearm(context)
         }
     }
 }

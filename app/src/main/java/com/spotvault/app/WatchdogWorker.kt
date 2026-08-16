@@ -11,7 +11,7 @@ class WatchdogWorker(private val context: Context, workerParams: WorkerParameter
         val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
         if (prefs.getBoolean("is_pinned", false)) {
             val serviceIntent = Intent(context, TimerService::class.java).apply {
-                action = "RESUME"
+                action = TimerService.ACTION_RESUME
             }
             try {
                 ContextCompat.startForegroundService(context, serviceIntent)

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mirrors the real widget's layout (see VaultFavoritesContent): a "Vault Favorites" header
+     followed by scrollable rows, each a photo thumbnail plus title/subtitle text — not an
+     abstract color-block stand-in for a row. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="250dp"
+    android:height="180dp"
+    android:viewportWidth="250"
+    android:viewportHeight="180">
+
+    <path
+        android:pathData="M 13,0 L 237,0 A 13,13 0 0 1 250,13 L 250,167 A 13,13 0 0 1 237,180 L 13,180 A 13,13 0 0 1 0,167 L 0,13 A 13,13 0 0 1 13,0 Z"
+        android:fillColor="#0A1020"
+        android:strokeColor="#552962FF"
+        android:strokeWidth="1.2" />
+
+    <!-- Header -->
+    <path
+        android:pathData="M 12,10 L 238,10 A 8,8 0 0 1 246,18 L 246,32 A 8,8 0 0 1 238,40 L 12,40 A 8,8 0 0 1 4,32 L 4,18 A 8,8 0 0 1 12,10 Z"
+        android:fillColor="#17213A"
+        android:strokeColor="#802962FF"
+        android:strokeWidth="1" />
+    <path
+        android:pathData="M 22,17 L 24.5,23.5 L 31.5,23.5 L 26,27.5 L 28,34 L 22,30 L 16,34 L 18,27.5 L 12.5,23.5 L 19.5,23.5 Z"
+        android:fillColor="#FFD54F" />
+    <path android:pathData="M40,22 h80 v6 h-80 z" android:fillColor="#EAF0FF" />
+
+    <!-- Row 1: thumbnail + title/subtitle -->
+    <path android:pathData="M 12,48 L 236,48 A 9,9 0 0 1 246,57 L 246,87 A 9,9 0 0 1 236,97 L 12,97 A 9,9 0 0 1 2,87 L 2,57 A 9,9 0 0 1 12,48 Z" android:fillColor="#17213A" android:strokeColor="#552962FF" android:strokeWidth="0.8" />
+    <path android:pathData="M 20,57 L 44,57 A 7,7 0 0 1 51,64 L 51,80 A 7,7 0 0 1 44,87 L 20,87 A 7,7 0 0 1 13,80 L 13,64 A 7,7 0 0 1 20,57 Z" android:fillColor="#2962FF" />
+    <path android:pathData="M62,65 h116 v7 h-116 z" android:fillColor="#EAF0FF" />
+    <path android:pathData="M62,78 h150 v5 h-150 z" android:fillColor="#9AA8C2" />
+
+    <!-- Row 2 -->
+    <path android:pathData="M 12,103 L 236,103 A 9,9 0 0 1 246,112 L 246,142 A 9,9 0 0 1 236,152 L 12,152 A 9,9 0 0 1 2,142 L 2,112 A 9,9 0 0 1 12,103 Z" android:fillColor="#17213A" android:strokeColor="#552962FF" android:strokeWidth="0.8" />
+    <path android:pathData="M 20,112 L 44,112 A 7,7 0 0 1 51,119 L 51,135 A 7,7 0 0 1 44,142 L 20,142 A 7,7 0 0 1 13,135 L 13,119 A 7,7 0 0 1 20,112 Z" android:fillColor="#FFD100" />
+    <path android:pathData="M62,120 h140 v7 h-140 z" android:fillColor="#EAF0FF" />
+    <path android:pathData="M62,133 h110 v5 h-110 z" android:fillColor="#9AA8C2" />
+</vector>

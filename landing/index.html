@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>DropPin Vault — Never lose your spot again</title>
+<meta name="description" content="DropPin Vault pins your exact location — your car, your campsite, anywhere worth remembering — and guides you back with a live compass. Free forever, private by default. Coming soon to Google Play." />
+
+<!-- ================================================================
+     STRUCTURED APP-NAME SIGNALS
+     Added specifically so anything checking "what is this app called"
+     programmatically (Open Graph parsers, schema.org readers, OAuth
+     consent-screen homepage verification, link-preview bots) has an
+     unambiguous, machine-readable answer instead of having to infer it
+     from prose. The app name is "DropPin Vault" everywhere below, byte
+     for byte identical to what's configured on the OAuth consent screen.
+================================================================= -->
+<meta name="application-name" content="DropPin Vault" />
+<meta property="og:site_name" content="DropPin Vault" />
+<meta property="og:title" content="DropPin Vault — Never lose your spot again" />
+<meta property="og:description" content="DropPin Vault pins your exact location — your car, your campsite, anywhere worth remembering — and guides you back with a live compass. Free forever, private by default." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://droppinvault.com/" />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="DropPin Vault" />
+<meta name="twitter:description" content="Never lose your spot again — snap a photo or drop a pin, and walk straight back with a live compass." />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "MobileApplication",
+  "name": "DropPin Vault",
+  "url": "https://droppinvault.com/",
+  "description": "DropPin Vault pins your exact location — your car, your campsite, anywhere worth remembering — and guides you back with a live compass. Free forever, private by default.",
+  "operatingSystem": "Android",
+  "applicationCategory": "NavigationApplication",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  }
+}
+</script>
+
+<!-- ================================================================
+     FONTS
+     Chakra Petch (display / HUD), Manrope (body), JetBrains Mono (data/labels).
+     Loaded from Google Fonts per the "no external deps except fonts" brief.
+     If you later want a zero-network single file, swap this <link> block
+     for base64 @font-face data URIs of the same three families.
+================================================================= -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<style>
+/* ================================================================
+   TOKENS
+   Deliberately dark-committed — this is a brand marketing page for a
+   field-instrument-style app, not a UI the reader configures. Neutrals
+   carry a faint navy bias to match the app icon's own gold pin / cobalt
+   vault-eye palette, rather than true grey/black.
+================================================================= */
+:root{
+  --void:        #04060c;
+  --surface:     #0a0e1c;
+  --surface-2:   #111a2e;
+  --surface-3:   #16213a;
+  --line:        #1f2d4d;
+  --line-bright: #2c4270;
+
+  --ink:         #f3f5fb;
+  --ink-soft:    #c7cee0;
+  --muted:       #8d97b0;
+  --faint:       #5c6884;
+
+  --primary:     #2962ff;
+  --primary-2:   #6fa1ff;
+  --primary-ink: #f4f8ff;
+  --teal:        #ffd100;
+  --teal-ink:    #2b1e00;
+
+  --danger:      #ff6b6b;
+
+  --radius-card: 18px;
+  --radius-pill: 999px;
+
+  --ease: cubic-bezier(.16,.84,.44,1);
+
+  --fs-xs:   0.75rem;
+  --fs-sm:   0.875rem;
+  --fs-base: 1rem;
+  --fs-md:   1.125rem;
+  --fs-lg:   1.375rem;
+  --fs-xl:   2rem;
+  --fs-2xl:  2.75rem;
+  --fs-3xl:  3.4rem;
+
+  --space-1: .5rem;
+  --space-2: 1rem;
+  --space-3: 1.5rem;
+  --space-4: 2rem;
+  --space-5: 3rem;
+  --space-6: 4.5rem;
+  --space-7: 6.5rem;
+  --space-8: 9rem;
+
+  --maxw: 1180px;
+  color-scheme: dark;
+}
+
+@media (min-width: 860px){
+  :root{
+    --fs-xl:  2.5rem;
+    --fs-2xl: 3.75rem;
+    --fs-3xl: 5rem;
+  }
+}
+
+/* ================================================================
+   RESET
+================================================================= */
+*, *::before, *::after{ box-sizing: border-box; }
+html{ -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce){
+  html{ scroll-behavior: auto; }
+  *, *::before, *::after{
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+body{
+  margin: 0;
+  background: var(--void);
+  color: var(--ink);
+  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+img, svg{ display: block; max-width: 100%; }
+a{ color: inherit; text-decoration: none; }
+h1,h2,h3,p,figure{ margin: 0; }
+ul{ margin: 0; padding: 0; list-style: none; }
+button{ font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+:focus-visible{ outline: 2px solid var(--teal); outline-offset: 3px; border-radius: 4px; }
+
+.display{
+  font-family: 'Chakra Petch', 'Manrope', sans-serif;
+  text-wrap: balance;
+  letter-spacing: -0.01em;
+}
+.mono{
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.eyebrow{
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--teal);
+  display: inline-flex;
+  align-items: center;
+  gap: .55em;
+}
+.eyebrow::before{
+  content: '';
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 0 3px rgba(255,209,0,.18);
+}
+
+.wrap{
+  width: 100%;
+  max-width: var(--maxw);
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
+@media (min-width: 860px){ .wrap{ padding-inline: 2.5rem; } }
+
+/* ================================================================
+   REVEAL-ON-LOAD
+   Deliberately NOT scroll-triggered (no IntersectionObserver) — that
+   earlier version left every content section, including the "what this
+   app does" text Google's OAuth reviewer needs to read, sitting at
+   opacity:0 until a real visitor scrolled it into view. A crawler/
+   reviewer that renders JS but never scrolls the page would capture a
+   snapshot where that text simply never appeared, which is exactly the
+   kind of thing that gets a homepage rejected for "doesn't explain the
+   purpose of the app." This runs as a plain CSS animation tied to page
+   load instead, so content becomes visible on a timer, not a scroll
+   position — works identically with JS on, JS off, or never scrolled.
+================================================================= */
+.reveal{
+  animation: reveal-in .7s var(--ease) both;
+}
+@keyframes reveal-in{
+  from{ opacity: 0; transform: translateY(22px); }
+  to{ opacity: 1; transform: translateY(0); }
+}
+
+/* ================================================================
+   TOPOGRAPHIC FIELD BACKGROUND
+   Contour-line texture + a slow radar sweep behind the hero, built
+   entirely from layered CSS gradients — no images, no canvas.
+================================================================= */
+.field{
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.field::before{
+  /* contour rings */
+  content: '';
+  position: absolute;
+  inset: -20%;
+  background-image:
+    repeating-radial-gradient(circle at 78% 22%, transparent 0 38px, rgba(41,98,255,.10) 39px 40px, transparent 41px 96px),
+    repeating-radial-gradient(circle at 12% 82%, transparent 0 30px, rgba(255,209,0,.07) 31px 32px, transparent 33px 78px);
+  opacity: .8;
+}
+.field::after{
+  /* fine grid, like a topo sheet */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(245,242,251,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245,242,251,.035) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(ellipse 70% 60% at 62% 30%, #000 40%, transparent 85%);
+}
+.sweep{
+  position: absolute;
+  top: 18%;
+  right: 6%;
+  width: min(52vw, 620px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  z-index: 0;
+  pointer-events: none;
+}
+.sweep::before{
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(255,209,0,.32), transparent 26%);
+  animation: sweep-spin 7s linear infinite;
+  mask-image: radial-gradient(circle, transparent 0, #000 2%, transparent 72%);
+}
+.sweep .ring{
+  position: absolute;
+  border: 1px solid rgba(41,98,255,.22);
+  border-radius: 50%;
+  inset: 50%;
+  translate: -50% -50%;
+}
+.sweep .ring.r1{ width: 30%; height: 30%; }
+.sweep .ring.r2{ width: 58%; height: 58%; border-color: rgba(41,98,255,.15); }
+.sweep .ring.r3{ width: 86%; height: 86%; border-color: rgba(41,98,255,.09); }
+.sweep .pin{
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 14px; height: 14px;
+  translate: -50% -50%;
+}
+.sweep .pin::before{
+  content:'';
+  position:absolute; inset:0;
+  background: var(--teal);
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px rgba(255,209,0,.16), 0 0 24px 4px rgba(255,209,0,.55);
+}
+.sweep .pin::after{
+  content:'';
+  position:absolute;
+  inset: -14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,209,0,.5);
+  animation: ping 2.6s var(--ease) infinite;
+}
+@keyframes sweep-spin{ to{ transform: rotate(360deg); } }
+@keyframes ping{
+  0%{ transform: scale(.4); opacity: .9; }
+  80%,100%{ transform: scale(2.1); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce){
+  .sweep::before{ animation: none; opacity: .5; }
+  .sweep .pin::after{ animation: none; display: none; }
+}
+@media (max-width: 720px){
+  .sweep{ width: 78vw; top: 4%; right: -18%; opacity: .8; }
+}
+
+/* ================================================================
+   NAV
+================================================================= */
+.nav{
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  background: rgba(4,2,8,.62);
+  border-bottom: 1px solid var(--line);
+}
+.nav-inner{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 72px;
+}
+.brand{
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  font-family: 'Chakra Petch', sans-serif;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: .01em;
+}
+.brand-mark{
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(155deg, var(--teal), #c8960c);
+  box-shadow: 0 4px 18px -4px rgba(255,209,0,.55), inset 0 0 0 1px rgba(255,255,255,.25);
+  flex-shrink: 0;
+}
+.brand-mark svg{ width: 18px; height: 18px; }
+.nav-cta{
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: .55rem .9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+}
+.nav-cta .dot{
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 8px 1px rgba(255,209,0,.7);
+}
+
+/* ================================================================
+   HERO
+================================================================= */
+.hero{
+  position: relative;
+  padding-block: var(--space-7) var(--space-6);
+  isolation: isolate;
+}
+.hero-grid{
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-6);
+}
+@media (min-width: 960px){
+  .hero-grid{
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-5);
+  }
+}
+.hero-inner{
+  max-width: 760px;
+  width: 100%;
+}
+@media (min-width: 960px){
+  .hero-inner{ flex: 1 1 auto; min-width: 0; }
+}
+.hero-visual{
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+/* Compound selector (.phone.phone-hero) used throughout this block, not just .phone-hero —
+   the base .phone{ width:100%; max-width:220px; aspect-ratio:9/19.5 } rule is declared
+   later in this file, and same-specificity single-class selectors resolve by source order,
+   not which one "sounds" more specific. .phone.phone-hero has higher specificity, so it
+   reliably wins regardless of where either rule sits. Fixed pixel widths (not %) also avoid
+   a flexbox circular-sizing trap: a percentage width on a flex item whose flex-container
+   parent has no explicit width of its own can collapse to ~0 during layout. The aspect-ratio
+   matches the real screenshot's own ratio (1440×2813) exactly, so object-fit:cover has
+   nothing left to crop and no UI element gets clipped on any edge. */
+.phone.phone-hero{
+  width: min(64vw, 260px);
+  max-width: 260px;
+  aspect-ratio: 1440 / 2813;
+}
+@media (min-width: 960px){
+  .phone.phone-hero{ width: 280px; max-width: 280px; }
+}
+.phone-hero .phone-screen{ background: var(--surface); }
+.hero .eyebrow{ margin-bottom: var(--space-3); }
+.hero h1{
+  font-size: var(--fs-3xl);
+  font-weight: 700;
+  line-height: .98;
+  background: linear-gradient(120deg, var(--ink) 30%, var(--primary-2) 78%, var(--teal) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hero .tagline{
+  margin-top: var(--space-3);
+  font-size: var(--fs-md);
+  color: var(--ink-soft);
+  max-width: 46ch;
+  line-height: 1.65;
+}
+.hero .tagline b{ color: var(--ink); font-weight: 700; }
+
+.hero-actions{
+  margin-top: var(--space-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Wraps the button so the "Coming soon" badge can sit outside the button's own
+   clip-path — a child of a clipped element gets clipped too, which is why the
+   badge used to look cut off. The badge is a sibling of .btn-store instead. */
+.btn-store-wrap{
+  position: relative;
+  display: inline-flex;
+}
+
+/* store button — angular "instrument" corners via clip-path, not a rounded pill */
+.btn-store{
+  --cut: 10px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: .7rem;
+  padding: 1rem 1.5rem;
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+  background: linear-gradient(135deg, var(--primary), #1943c9);
+  color: var(--primary-ink);
+  font-family: 'Chakra Petch', sans-serif;
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: .01em;
+  cursor: not-allowed;
+  user-select: none;
+  transition: transform .35s var(--ease), box-shadow .35s var(--ease), filter .35s var(--ease);
+  box-shadow: 0 14px 34px -12px rgba(41,98,255,.65);
+}
+.btn-store:hover{
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+  box-shadow: 0 20px 40px -12px rgba(41,98,255,.8);
+}
+.btn-store svg{ width: 20px; height: 20px; flex-shrink: 0; }
+.btn-store .label{ display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.btn-store .label .small{
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .62rem;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  opacity: .85;
+}
+.btn-store .label .big{ font-size: 1.02rem; }
+.btn-store-wrap .status{
+  position: absolute;
+  top: -10px; right: -10px;
+  z-index: 1;
+  background: var(--teal);
+  color: var(--teal-ink);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .58rem;
+  font-weight: 500;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: .3rem .55rem;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 4px 14px -4px rgba(255,209,0,.7);
+}
+
+.hero-note{
+  font-size: var(--fs-sm);
+  color: var(--faint);
+}
+
+.coord-ticker{
+  margin-top: var(--space-6);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .4rem .6rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-2);
+  max-width: 100%;
+}
+.coord-ticker .lock{
+  color: var(--teal);
+  min-width: 1ch;
+}
+.coord-ticker .val{ color: var(--muted); }
+
+/* ================================================================
+   SECTION SCAFFOLDING
+================================================================= */
+section{ position: relative; }
+.section-pad{ padding-block: var(--space-6); }
+.section-head{
+  max-width: 640px;
+  margin-bottom: var(--space-5);
+}
+.section-head .eyebrow{ margin-bottom: var(--space-2); }
+.section-head h2{
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1.1;
+}
+.section-head p{
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-md);
+  max-width: 52ch;
+}
+.rule{
+  height: 1px;
+  background: linear-gradient(90deg, var(--line), transparent 85%);
+}
+
+/* ================================================================
+   PHONE FRAME (shared by the hero screenshot mockup)
+================================================================= */
+.phone{
+  width: 100%;
+  max-width: 220px;
+  aspect-ratio: 9 / 19.5;
+  border-radius: 34px;
+  padding: 10px;
+  background: linear-gradient(165deg, #18233d, #0a0e1a);
+  box-shadow:
+    0 0 0 1px var(--line-bright),
+    0 30px 60px -24px rgba(0,0,0,.75),
+    0 0 0 8px rgba(255,255,255,.015) inset;
+  transition: transform .5s var(--ease), box-shadow .5s var(--ease);
+}
+.hero-visual:hover .phone{
+  transform: translateY(-8px) rotate(-1deg);
+  box-shadow:
+    0 0 0 1px var(--primary-2),
+    0 40px 70px -20px rgba(41,98,255,.35),
+    0 0 0 8px rgba(255,255,255,.02) inset;
+}
+.phone-screen{
+  position: relative;
+  width: 100%; height: 100%;
+  border-radius: 24px;
+  overflow: hidden;
+  background: radial-gradient(circle at 30% 12%, #1c2c50, var(--surface) 60%);
+}
+.phone-screen .notch{
+  position: absolute;
+  top: 8px; left: 50%;
+  translate: -50% 0;
+  width: 40%; height: 18px;
+  background: #050308;
+  border-radius: var(--radius-pill);
+  z-index: 2;
+}
+.phone-screen .scan{
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(180deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px);
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+/* ================================================================
+   INSTRUMENT PANEL (real app mark + HUD stat strip)
+================================================================= */
+.panel-section{ overflow: visible; }
+.panel-mark{
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: var(--space-5);
+}
+.panel-glow{
+  position: absolute;
+  top: 50%; left: 50%;
+  translate: -50% -50%;
+  width: 260px; height: 260px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,209,0,.28), rgba(41,98,255,.14) 55%, transparent 75%);
+  filter: blur(6px);
+  animation: panel-pulse 4.5s var(--ease) infinite;
+}
+@keyframes panel-pulse{
+  0%, 100%{ opacity: .75; transform: scale(1); }
+  50%{ opacity: 1; transform: scale(1.08); }
+}
+@media (prefers-reduced-motion: reduce){
+  .panel-glow{ animation: none; }
+}
+.mark-svg{
+  position: relative;
+  width: 132px; height: 132px;
+  filter: drop-shadow(0 12px 32px rgba(0,0,0,.55));
+}
+@media (min-width: 640px){
+  .mark-svg{ width: 168px; height: 168px; }
+}
+
+.stat-strip{
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  max-width: 720px;
+  margin-inline: auto;
+}
+@media (min-width: 640px){
+  .stat-strip{ grid-template-columns: repeat(4, 1fr); }
+}
+.stat{
+  background: var(--surface);
+  padding: var(--space-3) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: .35rem;
+}
+.stat-value{
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 1.6rem;
+  font-weight: 700;
+  background: linear-gradient(120deg, var(--teal), var(--primary-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.stat-label{
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .68rem;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ================================================================
+   FEATURES
+================================================================= */
+.features-grid{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+@media (min-width: 640px){
+  .features-grid{ grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 1040px){
+  .features-grid{ grid-template-columns: repeat(3, 1fr); }
+}
+.feature{
+  position: relative;
+  background: var(--surface);
+  padding: var(--space-4) var(--space-3);
+  transition: background .35s var(--ease);
+}
+.feature:hover{ background: var(--surface-2); }
+.feature .corner{
+  position: absolute;
+  width: 14px; height: 14px;
+  top: 12px; left: 12px;
+  border-top: 1.5px solid var(--line-bright);
+  border-left: 1.5px solid var(--line-bright);
+  opacity: 0;
+  transition: opacity .35s var(--ease);
+}
+.feature:hover .corner{ opacity: 1; border-color: var(--teal); }
+.feature-icon{
+  width: 44px; height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(155deg, rgba(41,98,255,.18), rgba(255,209,0,.10));
+  border: 1px solid var(--line-bright);
+  margin-bottom: var(--space-3);
+}
+.feature-icon svg{ width: 22px; height: 22px; stroke: var(--teal); }
+.feature h3{
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: .55rem;
+}
+.feature p{
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.65;
+}
+
+/* ================================================================
+   INFO PANELS (what it does / why Google Drive)
+================================================================= */
+.info-grid{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+@media (min-width: 860px){
+  .info-grid{ grid-template-columns: repeat(2, 1fr); }
+}
+.info-panel{
+  position: relative;
+  background: var(--surface);
+  padding: var(--space-4);
+}
+.info-panel .corner{
+  position: absolute;
+  width: 14px; height: 14px;
+  top: 12px; left: 12px;
+  border-top: 1.5px solid var(--teal);
+  border-left: 1.5px solid var(--teal);
+  opacity: .6;
+}
+.info-panel h3{
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+  color: var(--ink);
+}
+.info-panel p{
+  color: var(--ink-soft);
+  font-size: var(--fs-sm);
+  line-height: 1.75;
+  margin-bottom: var(--space-2);
+}
+.info-panel p:last-child{ margin-bottom: 0; }
+.info-panel code{
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .85em;
+  background: var(--surface-3);
+  border: 1px solid var(--line-bright);
+  border-radius: 5px;
+  padding: .1em .45em;
+  color: var(--teal);
+}
+.info-panel a{ color: var(--teal); text-decoration: underline; text-underline-offset: 2px; }
+.info-panel a:hover{ color: var(--primary-2); }
+
+/* ================================================================
+   CTA
+================================================================= */
+.cta{
+  position: relative;
+  border-radius: 28px;
+  padding: var(--space-6) var(--space-3);
+  text-align: center;
+  overflow: hidden;
+  background: radial-gradient(ellipse 90% 140% at 50% -20%, rgba(41,98,255,.28), transparent 60%), var(--surface);
+  border: 1px solid var(--line-bright);
+}
+.cta::before{
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(245,242,251,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245,242,251,.03) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: radial-gradient(ellipse 60% 60% at 50% 20%, #000, transparent 80%);
+}
+.cta-inner{ position: relative; max-width: 560px; margin-inline: auto; }
+.cta .eyebrow{ justify-content: center; margin-bottom: var(--space-2); }
+.cta h2{
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1.12;
+}
+.cta p{
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+.cta p b{ color: var(--ink-soft); font-weight: 700; }
+
+/* secondary "follow" link — softer/rounder than the angular Play button so
+   it reads as the lower-priority action */
+.btn-follow{
+  display: inline-flex;
+  align-items: center;
+  gap: .55rem;
+  padding: 0 1.3rem;
+  height: 52px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-bright);
+  background: rgba(245,242,251,.03);
+  color: var(--ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: .85rem;
+  font-weight: 500;
+  transition: border-color .3s var(--ease), color .3s var(--ease), background .3s var(--ease), transform .3s var(--ease);
+}
+.btn-follow:hover{
+  border-color: var(--teal);
+  color: var(--teal);
+  background: rgba(255,209,0,.08);
+  transform: translateY(-2px);
+}
+.btn-follow svg{ width: 15px; height: 15px; flex-shrink: 0; }
+.cta .hero-actions{ justify-content: center; margin-top: var(--space-4); }
+.cta .hero-note{ margin-top: var(--space-2); }
+
+/* ================================================================
+   FOOTER
+================================================================= */
+footer{
+  border-top: 1px solid var(--line);
+  padding-block: var(--space-4);
+}
+.footer-inner{
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  font-size: var(--fs-sm);
+  color: var(--faint);
+}
+@media (min-width: 640px){
+  .footer-inner{ flex-direction: row; align-items: center; justify-content: space-between; }
+}
+.footer-brand{
+  display: flex; align-items: center; gap: .55rem;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: .04em;
+  color: var(--muted);
+}
+.footer-links{ display: flex; gap: var(--space-3); }
+.footer-links a{ color: var(--faint); transition: color .25s var(--ease); }
+.footer-links a:hover{ color: var(--teal); }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 2C7.6 2 4 5.6 4 10c0 6 8 12 8 12s8-6 8-12c0-4.4-3.6-8-8-8Z" fill="#fff" fill-opacity=".95"/><circle cx="12" cy="10" r="3" fill="#2962ff"/></svg>
+      </span>
+      DropPin&nbsp;Vault
+    </div>
+    <span class="nav-cta"><span class="dot" aria-hidden="true"></span>Coming soon</span>
+  </div>
+</nav>
+
+<!-- ==================================================================
+     HERO
+================================================================== -->
+<header class="hero">
+  <div class="field" aria-hidden="true"></div>
+  <div class="sweep" aria-hidden="true">
+    <div class="ring r3"></div>
+    <div class="ring r2"></div>
+    <div class="ring r1"></div>
+    <div class="pin"></div>
+  </div>
+
+  <div class="wrap">
+    <div class="hero-grid">
+      <div class="hero-inner reveal">
+        <span class="eyebrow">GPS-locked · always free</span>
+        <h1 class="display">DropPin Vault</h1>
+        <p class="tagline"><b>The purpose of the DropPin Vault app</b> is to easily save, tag, and organize your favorite locations and parking spots directly on your device. Your car. Your campsite. A Shop. A Restaurant. Your favorite spot on earth. <b>DropPin Vault</b> pinpoints it with GPS — typically within about 10 meters under open sky, tighter or looser depending on conditions — and walks you straight back with a live compass, no map or signal required.</p>
+
+        <div class="hero-actions">
+          <!-- ============================================================
+               PLAY STORE BUTTON — UPDATE WHEN LIVE
+               1. Change href="#" to your Google Play listing URL.
+               2. Delete the <span class="status">Coming soon</span> badge.
+               3. Remove "is-disabled" behavior by deleting the
+                  cursor:not-allowed rule on .btn-store in the CSS above
+                  (search "cursor: not-allowed").
+          ============================================================= -->
+          <span class="btn-store-wrap">
+            <a class="btn-store" href="#" aria-disabled="true" onclick="return false;">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4.5 2.9c-.3.3-.5.8-.5 1.4v15.4c0 .6.2 1.1.5 1.4l.1.1L13 12.7v-.2L4.6 2.8l-.1.1Z"/><path d="m15.9 15.6-2.9-2.9v-.2l2.9-2.9 3.6 2c1 .6 1 1.6 0 2.2l-3.6 2Z" opacity=".7"/><path d="M15.9 15.6 13 12.7 4.6 21.1c.4.4 1 .4 1.6.1l9.7-5.6Z" opacity=".9"/><path d="M15.9 8.4 6.2 2.8c-.6-.3-1.2-.3-1.6.1L13 12.7l2.9-4.3Z" opacity=".9"/></svg>
+              <span class="label">
+                <span class="small">Get it on</span>
+                <span class="big">Google Play</span>
+              </span>
+            </a>
+            <span class="status">Coming soon</span>
+          </span>
+        </div>
+        <p class="hero-note">Free forever — no account, no subscription, no ads reading your movements.</p>
+
+        <div class="coord-ticker">
+          <span class="lock" id="tickerLock">◎</span>
+          <span class="mono">SIGNAL</span>
+          <span class="val mono" id="tickerVal">searching…</span>
+        </div>
+      </div>
+
+      <div class="hero-visual reveal">
+        <div class="phone phone-hero">
+          <div class="phone-screen">
+            <!-- No fake .notch here on purpose — the real screenshot already has its
+                 own status area and DropPin Vault wordmark right at the top; overlaying
+                 the placeholder notch pill cropped straight through the logo. -->
+            <img
+              src="assets/screenshot-home.jpg"
+              alt="DropPin Vault's home screen: a large blue Snap button, a yellow Pin button, and Quick Pin / Quick Track shortcuts"
+              style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position: top center;"
+              loading="lazy"
+            />
+            <div class="scan"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- ==================================================================
+       INSTRUMENT PANEL — the real app mark, blown up and glowing, with
+       a HUD-style stat strip underneath. Swaps out the old generic icon
+       placeholders for something that's actually DropPin Vault's brand.
+  ================================================================== -->
+  <section class="section-pad panel-section">
+    <div class="wrap">
+      <div class="panel-mark reveal" aria-hidden="true">
+        <div class="panel-glow"></div>
+        <svg viewBox="0 0 108 108" class="mark-svg">
+          <defs>
+            <radialGradient id="pgHalo" cx="54" cy="44" r="32" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#FFD100" stop-opacity="0.4"/>
+              <stop offset="0.45" stop-color="#2962FF" stop-opacity="0.16"/>
+              <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="pgPinBody" x1="30" y1="22" x2="78" y2="86" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#FFFDF5"/>
+              <stop offset="0.12" stop-color="#FFF0A8"/>
+              <stop offset="0.38" stop-color="#FFD100"/>
+              <stop offset="0.68" stop-color="#C8960C"/>
+              <stop offset="1" stop-color="#5C4500"/>
+            </linearGradient>
+            <linearGradient id="pgSpecular" x1="54" y1="22" x2="54" y2="40" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.8"/>
+              <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.267"/>
+              <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="pgRing" x1="37" y1="30" x2="71" y2="64" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#FFF4B8"/>
+              <stop offset="0.4" stop-color="#FFD100"/>
+              <stop offset="1" stop-color="#8A6800"/>
+            </linearGradient>
+            <radialGradient id="pgVaultDoor" cx="51" cy="41" r="14" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#4D8AFF"/>
+              <stop offset="0.45" stop-color="#2962FF"/>
+              <stop offset="1" stop-color="#0B1F6E"/>
+            </radialGradient>
+            <radialGradient id="pgLockGem" cx="52.5" cy="42.5" r="6.5" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#FFFFFF"/>
+              <stop offset="0.3" stop-color="#B8CCFF"/>
+              <stop offset="0.7" stop-color="#2962FF"/>
+              <stop offset="1" stop-color="#0B1F6E"/>
+            </radialGradient>
+          </defs>
+          <path fill="url(#pgHalo)" d="M54,48 m-32,0 a32,32 0 1,0 64,0 a32,32 0 1,0 -64,0"/>
+          <path fill="url(#pgPinBody)" d="M54,22 C38.6,22 27,33.6 27,47.2 C27,62.4 42.6,76.2 54,87 C65.4,76.2 81,62.4 81,47.2 C81,33.6 69.4,22 54,22 Z"/>
+          <path fill="url(#pgSpecular)" d="M54,22 C44,22 35,28 32,36 C40,30 47,28 54,29 C61,28 68,30 76,36 C73,28 64,22 54,22 Z"/>
+          <path fill="url(#pgRing)" d="M54,30 A17,17 0 1,0 54,64 A17,17 0 1,0 54,30 Z"/>
+          <path fill="url(#pgVaultDoor)" d="M54,33.5 A13.5,13.5 0 1,0 54,60.5 A13.5,13.5 0 1,0 54,33.5 Z"/>
+          <path fill="url(#pgLockGem)" d="M54,41 A6,6 0 1,0 54,53 A6,6 0 1,0 54,41 Z"/>
+          <path fill="#080E28" d="M54,44.2 m-1.6,0 a1.6,1.6 0 1,0 3.2,0 a1.6,1.6 0 1,0 -3.2,0"/>
+          <path fill="#080E28" d="M52.5,45.6 h3 v3.4 h-1 v-2.2 h-1 v2.2 h-1 z"/>
+        </svg>
+      </div>
+
+      <div class="stat-strip reveal">
+        <div class="stat">
+          <span class="stat-value">~10m</span>
+          <span class="stat-label">Typical GPS accuracy</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">100%</span>
+          <span class="stat-label">On-device storage</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">0</span>
+          <span class="stat-label">Ads &amp; trackers</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">$0</span>
+          <span class="stat-label">Forever, no catch</span>
+        </div>
+      </div>
+      <p class="reveal" style="text-align:center; margin-top: var(--space-2); color: var(--faint); font-size: var(--fs-xs);">
+        GPS accuracy depends on sky visibility and conditions — often tighter under open sky, sometimes 10m or more near tall buildings, dense tree cover, or indoors.
+      </p>
+    </div>
+  </section>
+
+  <div class="wrap"><div class="rule"></div></div>
+
+  <!-- ==================================================================
+       FEATURES
+  ================================================================== -->
+  <section class="section-pad">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">Capabilities</span>
+        <h2 class="display">Built like a tool, not an app</h2>
+        <p>No feeds, no streaks, no engagement tricks. Just the fastest way back to somewhere that matters.</p>
+      </div>
+
+      <div class="features-grid reveal">
+        <article class="feature">
+          <span class="corner" aria-hidden="true"></span>
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C7.6 2 4 5.6 4 10c0 6 8 12 8 12s8-6 8-12c0-4.4-3.6-8-8-8Z"/><circle cx="12" cy="10" r="2.6"/></svg>
+          </div>
+          <h3>Instant Quick Pin</h3>
+          <p>One tap from your home screen widget. Your exact location is saved before you've let go of your keys.</p>
+        </article>
+
+        <article class="feature">
+          <span class="corner" aria-hidden="true"></span>
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5 17.5 17.5M6.5 17.5 17.5 6.5M12 2v20"/></svg>
+          </div>
+          <h3>Auto-Park Detection</h3>
+          <p>Disconnect from your car's Bluetooth and DropPin Vault saves your spot on its own. Nothing to remember.</p>
+        </article>
+
+        <article class="feature">
+          <span class="corner" aria-hidden="true"></span>
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m14.5 9.5-2 5-5 2 2-5 5-2Z"/></svg>
+          </div>
+          <h3>Compass or Turn-By-Turn</h3>
+          <p>A live on-screen compass points you straight back — no map or data connection needed. Want turn-by-turn instead? One tap opens the spot in your phone's default maps app.</p>
+        </article>
+
+        <article class="feature">
+          <span class="corner" aria-hidden="true"></span>
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 4 2 5 2 7H4c0-2 2-3 2-7Z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+          </div>
+          <h3>Sticky Live Notification</h3>
+          <p>By default, saving a spot posts a live notification that stays parked in your shade — glance at it, tap it, and you're headed straight back. No need to even open the app. (Prefer things quiet? Silent saving is one tap away in Settings.)</p>
+        </article>
+
+        <article class="feature">
+          <span class="corner" aria-hidden="true"></span>
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
+          </div>
+          <h3>Home Screen Widgets</h3>
+          <p>A whole family of widgets — one-tap Quick Pin, your Favorites at a glance, tag filters, and a live tracking widget with one-tap Compass and Navigate shortcuts — so getting back to a spot never even requires opening the app.</p>
+        </article>
+
+        <article class="feature">
+          <span class="corner" aria-hidden="true"></span>
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5.5V11c0 5 3.4 8.6 8 11 4.6-2.4 8-6 8-11V5.5L12 2Z"/></svg>
+          </div>
+          <h3>Private By Default</h3>
+          <p>Everything lives on your device first — no account required, no ads reading your movements. Want a safety net for a lost or broken phone? Optional backup to your own Google Drive is there when you want it, off when you don't.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap"><div class="rule"></div></div>
+
+  <!-- ==================================================================
+       WHAT THE APP DOES + WHY IT ASKS FOR GOOGLE DRIVE ACCESS
+       Written in plain, explicit prose (not just tagline fragments) on
+       purpose — this page doubles as the "homepage" reviewed for Google
+       OAuth verification, which specifically checks that the app name,
+       what the app does, and why it requests each Google scope are all
+       clearly and explicitly stated here.
+  ================================================================== -->
+  <section class="section-pad">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="eyebrow">About the app</span>
+        <h2 class="display">What DropPin Vault does</h2>
+      </div>
+
+      <div class="info-grid reveal">
+        <article class="info-panel">
+          <span class="corner" aria-hidden="true"></span>
+          <h3>Saving and finding your spot</h3>
+          <p><b>DropPin Vault</b> is an Android app for remembering where you left something — most often a parked car, but just as often a campsite, a stall at a festival, or anywhere else worth finding again. You save a spot two ways: <b>Snap</b> a photo of your surroundings (with automatic text recognition for things like parking level signs), or drop an instant <b>Pin</b> using your phone's GPS. DropPin Vault can also detect that you've parked automatically, by watching for your phone disconnecting from your car's Bluetooth, and save the spot without you doing anything at all.</p>
+          <p>By default, saving a spot posts a live notification that stays parked in your notification shade — tap it any time and you're headed back, no need to even open the app (this can be turned off in Settings for a quieter, notification-free save). Every saved spot also goes into your <b>Vault</b> — a searchable, taggable list on your device — plus a family of home screen widgets for one-tap access. When you're ready to head back, follow a live on-screen compass (no map data or signal required), or tap once to open the spot in your phone's default maps app for full turn-by-turn directions. That's the entire product: a fast way to mark a place, and several reliable ways to get back to it.</p>
+        </article>
+
+        <article class="info-panel">
+          <span class="corner" aria-hidden="true"></span>
+          <h3>Why we ask for Google Drive access</h3>
+          <p>Everything DropPin Vault saves — locations, photos, notes, tags — is stored locally on your device by default. We don't operate a server and we can't see it.</p>
+          <p>The app <i>optionally</i> offers to back that data up automatically so a lost, broken, or replaced phone doesn't mean losing everything you've saved. If you turn this on, DropPin Vault requests one narrow permission — <code>drive.appdata</code> — which grants access to nothing but a single hidden folder inside <i>your own</i> Google Drive account, invisible in your normal Drive file list and inaccessible to any other app. Your backup travels directly from your device to that folder and back again if you restore it. We never receive, host, or have access to a copy of it ourselves.</p>
+          <p>Full details are in the <a href="privacy.html">Privacy Policy</a>.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================================================================
+       CTA
+  ================================================================== -->
+  <section class="section-pad">
+    <div class="wrap">
+      <div class="cta reveal">
+        <div class="field" aria-hidden="true" style="opacity:.5"></div>
+        <div class="cta-inner">
+          <span class="eyebrow">Standing by</span>
+          <h2 class="display">Get notified the moment we launch</h2>
+          <p>DropPin Vault is in final testing. <b>Follow @DropPinVault on X</b> — that's where launch day gets announced first.</p>
+
+          <div class="hero-actions">
+            <!-- Same button as the hero — see the update instructions above -->
+            <span class="btn-store-wrap">
+              <a class="btn-store" href="#" aria-disabled="true" onclick="return false;">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4.5 2.9c-.3.3-.5.8-.5 1.4v15.4c0 .6.2 1.1.5 1.4l.1.1L13 12.7v-.2L4.6 2.8l-.1.1Z"/><path d="m15.9 15.6-2.9-2.9v-.2l2.9-2.9 3.6 2c1 .6 1 1.6 0 2.2l-3.6 2Z" opacity=".7"/><path d="M15.9 15.6 13 12.7 4.6 21.1c.4.4 1 .4 1.6.1l9.7-5.6Z" opacity=".9"/><path d="M15.9 8.4 6.2 2.8c-.6-.3-1.2-.3-1.6.1L13 12.7l2.9-4.3Z" opacity=".9"/></svg>
+                <span class="label">
+                  <span class="small">Get it on</span>
+                  <span class="big">Google Play</span>
+                </span>
+              </a>
+              <span class="status">Coming soon</span>
+            </span>
+
+            <!-- X (Twitter) follow link — update the href if the handle ever changes -->
+            <a class="btn-follow" href="https://x.com/DropPinVault" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7.6 8.7L23 22h-6.9l-5.4-6.9L4.4 22H1.3l8.1-9.3L1 2h7l4.9 6.3L18.9 2Zm-1.2 18h1.9L7.4 4H5.3l12.4 16Z"/></svg>
+              @DropPinVault
+            </a>
+          </div>
+          <p class="hero-note">Free forever — no account, no subscription, no ads reading your movements.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap footer-inner">
+    <span class="footer-brand">DropPin&nbsp;Vault · © 2026</span>
+   <nav class="footer-links">
+      <a href="https://x.com/DropPinVault" target="_blank" rel="noopener">@DropPinVault</a>
+      <a href="https://DropPinVault.com/privacy">Privacy Policy</a>
+      <a href="https://DropPinVault.com/terms">Terms of Service</a>
+      <a href="mailto:DropPinVault@gmail.com">Contact</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Decorative coordinate ticker in the hero — purely atmospheric flavor,
+  // not real geolocation. Safe to delete this whole block along with
+  // the .coord-ticker markup if you'd rather not have it.
+  if (!reduceMotion) {
+    var spots = [
+      { lock: '◎', val: '40.7128° N · 74.0060° W' },
+      { lock: '◎', val: '34.0522° N · 118.2437° W' },
+      { lock: '◎', val: '51.5072° N · 0.1276° W' },
+      { lock: '◎', val: '35.6762° N · 139.6503° E' }
+    ];
+    var i = 0;
+    var lockEl = document.getElementById('tickerLock');
+    var valEl = document.getElementById('tickerVal');
+    if (valEl) {
+      setInterval(function(){
+        i = (i + 1) % spots.length;
+        valEl.style.opacity = 0;
+        setTimeout(function(){
+          valEl.textContent = spots[i].val;
+          valEl.style.opacity = 1;
+        }, 260);
+      }, 3200);
+      valEl.style.transition = 'opacity .26s ease';
+      setTimeout(function(){ valEl.textContent = spots[0].val; }, 900);
+    }
+  }
+})();
+</script>
+</body>
+</html>
