@@ -1740,11 +1740,11 @@ fun QuickPinSettingsContent(prefs: SharedPreferences) {
 
         SettingsSectionCard(
             title = "Home Screen Shortcuts",
-            subtitle = "The everyday quick-action row above Snap & Pin"
+            subtitle = "The everyday quick-action row below Snap & Pin"
         ) {
             SettingsToggleRow(
                 title = "Quick Pin / Quick Track Row",
-                subtitle = "The two one-tap buttons above Snap & Pin on the home screen",
+                subtitle = "The two one-tap buttons below Snap & Pin on the home screen",
                 checked = showInstantActionsRow,
                 onCheckedChange = {
                     showInstantActionsRow = it
