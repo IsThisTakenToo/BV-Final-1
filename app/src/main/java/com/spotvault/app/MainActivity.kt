@@ -6879,12 +6879,26 @@ fun SettingsDialog(
     initialCategoryId: String? = null
 ) {
     val settingsContext = LocalContext.current
-    var selectedSettingsCategory by remember { mutableStateOf(initialCategoryId) }
+    // A real back-stack, not just the current category — Settings screens can navigate into each
+    // other (Automatic Parking's "Add Vehicle" prompt, any locked feature's "Premium" link), and
+    // hardware back needs to unwind one hop at a time back to wherever you actually came from,
+    // not always straight to the root category list.
+    //
+    // [floorStack] is where this particular SettingsDialog instance started. When opened from the
+    // root category list (initialCategoryId null), the floor is the empty stack, so back can still
+    // land on that root list — it's a screen this session actually visited. But when opened via a
+    // direct shortcut that skips the root list entirely (e.g. the home screen's Appearance/Help
+    // icons, which pass initialCategoryId straight in), the floor is that one category — the root
+    // list was never shown, so back from it should dismiss straight back to Home in one press
+    // instead of surfacing a screen the user never navigated through.
+    val floorStack = remember { listOfNotNull(initialCategoryId) }
+    var settingsCategoryStack by remember { mutableStateOf(floorStack) }
     var settingsSearchQuery by remember { mutableStateOf("") }
+    val selectedSettingsCategory = settingsCategoryStack.lastOrNull()
 
     BackHandler {
-        if (selectedSettingsCategory != null) {
-            selectedSettingsCategory = null
+        if (settingsCategoryStack.size > floorStack.size) {
+            settingsCategoryStack = settingsCategoryStack.dropLast(1)
         } else {
             onDismiss()
         }
@@ -6897,17 +6911,17 @@ fun SettingsDialog(
                 SettingsCategoryListScreen(
                     searchQuery = settingsSearchQuery,
                     onSearchQueryChange = { settingsSearchQuery = it },
-                    onCategoryClick = { selectedSettingsCategory = it }
+                    onCategoryClick = { settingsCategoryStack = settingsCategoryStack + it }
                 )
             } else {
                 SettingsCategoryDetailScreen(
                     categoryId = category,
                     prefs = prefs,
                     dao = dao,
-                    onBack = { selectedSettingsCategory = null },
+                    onBack = { settingsCategoryStack = settingsCategoryStack.dropLast(1) },
                     onPickRingtone = onPickRingtone,
                     onAppLockChanged = onAppLockChanged,
-                    onNavigateToCategory = { selectedSettingsCategory = it }
+                    onNavigateToCategory = { settingsCategoryStack = settingsCategoryStack + it }
                 )
             }
         }
