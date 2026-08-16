@@ -287,6 +287,9 @@ interface LocationDao {
 
     @Query("SELECT * FROM location_history WHERE timestamp < :timeThreshold")
     suspend fun getSpotsOlderThan(timeThreshold: Long): List<LocationSpot>
+
+    @Query("SELECT * FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND timestamp >= :sinceTimestamp ORDER BY timestamp DESC")
+    suspend fun getActiveSpotsSince(sinceTimestamp: Long): List<LocationSpot>
 }
 
 @Dao

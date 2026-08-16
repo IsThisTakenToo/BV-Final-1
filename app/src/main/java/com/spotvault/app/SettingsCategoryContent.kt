@@ -86,6 +86,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -1480,6 +1481,8 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
     var confirmDelete by remember { mutableStateOf(prefs.getBoolean("confirm_delete", true)) }
     var autoDeleteEnabled by remember { mutableStateOf(prefs.getBoolean("auto_delete_enabled", false)) }
     var autoDeleteInterval by remember { mutableStateOf(prefs.getString("auto_delete_interval", AutoDeleteInterval.MONTH.id) ?: AutoDeleteInterval.MONTH.id) }
+    var smartDeduplicationEnabled by remember { mutableStateOf(isSmartDeduplicationEnabled(prefs)) }
+    var deduplicationWindowHours by remember { mutableStateOf(loadDeduplicationWindowHours(prefs)) }
     var showAutoDeleteIntervalDialog by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
     var showTagManager by remember { mutableStateOf(false) }
@@ -1583,6 +1586,45 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
                         }
                     }
                 }
+            }
+        }
+
+        SettingsSectionCard(
+            title = "Prevent Duplicates",
+            subtitle = "Merge repeat saves of the same spot instead of piling up new entries"
+        ) {
+            SettingsToggleRow(
+                title = "Prevent Duplicate Spots",
+                subtitle = "Silently updates a recent nearby pin instead of saving a new one",
+                checked = smartDeduplicationEnabled,
+                onCheckedChange = {
+                    smartDeduplicationEnabled = it
+                    prefs.edit().putBoolean(SMART_DEDUPLICATION_ENABLED_PREF, it).apply()
+                }
+            )
+            if (smartDeduplicationEnabled) {
+                Text(
+                    "Merge window: $deduplicationWindowHours hours",
+                    color = SpotVaultColors.OnSurface,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+                Slider(
+                    value = deduplicationWindowHours.toFloat(),
+                    onValueChange = { newValue ->
+                        val hours = newValue.toInt()
+                        deduplicationWindowHours = hours
+                        prefs.edit().putInt(DEDUPLICATION_WINDOW_HOURS_PREF, hours).apply()
+                    },
+                    valueRange = MIN_DEDUPLICATION_WINDOW_HOURS.toFloat()..MAX_DEDUPLICATION_WINDOW_HOURS.toFloat(),
+                    steps = (MAX_DEDUPLICATION_WINDOW_HOURS - MIN_DEDUPLICATION_WINDOW_HOURS) / 6 - 1
+                )
+                Text(
+                    "Spots saved within about 25 meters of each other inside this window are treated as the same place — only the timestamp and any blank fields (photo, notes) are updated.",
+                    color = SpotVaultColors.Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
             }
         }
 

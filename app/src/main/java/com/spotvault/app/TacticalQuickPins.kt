@@ -654,27 +654,44 @@ suspend fun quietSaveTacticalPin(
     }
 
     // Every Quick Pin creates its own dated Vault entry now — same as Quick Track — instead of
-    // silently overwriting a previous "Parked Truck" spot in place.
-    val spot = buildQuickPinSpot(option, prefs, lat, lng, timestamp, resolvedVehicleId, photoPath)
-    val savedId = dao.insertSpotAndGetId(spot).toInt()
+    // silently overwriting a previous "Parked Truck" spot in place. Smart Deduplication (opt-in,
+    // off by default) is the one exception: when it's on and a recent spot already sits within
+    // the merge radius, this folds into it instead of creating another entry.
+    val mergeTarget = findDeduplicationMergeTarget(dao, prefs, lat, lng)
+    val savedId: Int
+    if (mergeTarget != null) {
+        savedId = mergeDeduplicatedSpot(
+            dao = dao,
+            target = mergeTarget,
+            newTimestamp = timestamp,
+            newImagePath = photoPath,
+            newLocationDetails = option.details,
+            newVehicleId = resolvedVehicleId
+        ).id
+        // Coordinates didn't move, so the merge target's address is still correct — no need to
+        // re-geocode or risk the block below overwriting its title/notes with generic ones.
+    } else {
+        val spot = buildQuickPinSpot(option, prefs, lat, lng, timestamp, resolvedVehicleId, photoPath)
+        savedId = dao.insertSpotAndGetId(spot).toInt()
 
-    if (prefs.getBoolean("auto_fetch_address", true) && (lat != 0.0 || lng != 0.0)) {
-        val geocoded = reverseGeocodeAddress(context, lat, lng)
-        val spotToUpdate = dao.getSpotById(savedId)
-        if (spotToUpdate != null) {
-            dao.updateSpot(
-                spotToUpdate.copy(
-                    address = geocoded.full,
-                    locationDetails = option.details,
-                    city = geocoded.city,
-                    state = geocoded.state,
-                    title = if (isInstantQuickActionId(option.id)) {
-                        quickActionSpotTitle(geocoded, lat, lng)
-                    } else {
-                        spotToUpdate.title
-                    }
+        if (prefs.getBoolean("auto_fetch_address", true) && (lat != 0.0 || lng != 0.0)) {
+            val geocoded = reverseGeocodeAddress(context, lat, lng)
+            val spotToUpdate = dao.getSpotById(savedId)
+            if (spotToUpdate != null) {
+                dao.updateSpot(
+                    spotToUpdate.copy(
+                        address = geocoded.full,
+                        locationDetails = option.details,
+                        city = geocoded.city,
+                        state = geocoded.state,
+                        title = if (isInstantQuickActionId(option.id)) {
+                            quickActionSpotTitle(geocoded, lat, lng)
+                        } else {
+                            spotToUpdate.title
+                        }
+                    )
                 )
-            )
+            }
         }
     }
 
@@ -724,8 +741,32 @@ suspend fun quickActiveTrackPin(
         .also { editor -> applyPinnedVehiclePrefs(editor, pinnedVehicle) }
         .commit()
 
-    val spot = buildQuickPinSpot(option, prefs, lat, lng, timestamp, resolvedVehicleId, photoPath)
-    val savedId = dao.insertSpotAndGetId(spot).toInt()
+    // Smart Deduplication (opt-in, off by default): merge into a recent nearby spot instead of
+    // inserting a new one. See quietSaveTacticalPin's matching comment for why this is the one
+    // exception to "every Quick action creates its own dated entry."
+    val mergeTarget = findDeduplicationMergeTarget(dao, prefs, lat, lng)
+    val savedId: Int
+    if (mergeTarget != null) {
+        val merged = mergeDeduplicatedSpot(
+            dao = dao,
+            target = mergeTarget,
+            newTimestamp = timestamp,
+            newImagePath = photoPath,
+            newLocationDetails = option.details,
+            newVehicleId = resolvedVehicleId
+        )
+        savedId = merged.id
+        // Coordinates didn't move, so the merge target's address is still correct — push it into
+        // the live-tracking prefs now instead of leaving "Loading address..." stuck, since the
+        // geocode below is skipped for merges.
+        prefs.edit()
+            .putString("current_address", merged.address)
+            .putString("location_details", merged.locationDetails)
+            .apply()
+    } else {
+        val spot = buildQuickPinSpot(option, prefs, lat, lng, timestamp, resolvedVehicleId, photoPath)
+        savedId = dao.insertSpotAndGetId(spot).toInt()
+    }
 
     // Start the persistent notification/foreground service before anything else that can be
     // slow or get cancelled (geocoding can retry for over a second — see
@@ -762,26 +803,28 @@ suspend fun quickActiveTrackPin(
     }
 
     if (prefs.getBoolean("auto_fetch_address", true) && (lat != 0.0 || lng != 0.0)) {
-        val geocoded = reverseGeocodeAddress(context, lat, lng)
-        prefs.edit()
-            .putString("current_address", geocoded.full)
-            .putString("location_details", option.details)
-            .apply()
-        val spotToUpdate = dao.getSpotById(savedId)
-        if (spotToUpdate != null) {
-            dao.updateSpot(
-                spotToUpdate.copy(
-                    address = geocoded.full,
-                    locationDetails = option.details,
-                    city = geocoded.city,
-                    state = geocoded.state,
-                    title = if (isInstantQuickActionId(option.id)) {
-                        quickActionSpotTitle(geocoded, lat, lng)
-                    } else {
-                        spotToUpdate.title
-                    }
+        if (mergeTarget == null) {
+            val geocoded = reverseGeocodeAddress(context, lat, lng)
+            prefs.edit()
+                .putString("current_address", geocoded.full)
+                .putString("location_details", option.details)
+                .apply()
+            val spotToUpdate = dao.getSpotById(savedId)
+            if (spotToUpdate != null) {
+                dao.updateSpot(
+                    spotToUpdate.copy(
+                        address = geocoded.full,
+                        locationDetails = option.details,
+                        city = geocoded.city,
+                        state = geocoded.state,
+                        title = if (isInstantQuickActionId(option.id)) {
+                            quickActionSpotTitle(geocoded, lat, lng)
+                        } else {
+                            spotToUpdate.title
+                        }
+                    )
                 )
-            )
+            }
         }
         context.startService(
             android.content.Intent(context, TimerService::class.java).apply {

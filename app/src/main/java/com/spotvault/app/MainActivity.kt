@@ -1586,24 +1586,51 @@ class MainActivity : FragmentActivity() {
                 }
                 editor.apply()
 
-                val newSpot = LocationSpot(
-                    imagePath = currentPhotoPath,
-                    locationDetails = initialLocationDetails,
-                    timestamp = timestamp,
-                    lat = lat,
-                    lng = lng,
-                    address = "",
-                    isFavorite = false,
-                    title = title,
-                    vehicleId = resolvedVehicleId
-                )
-                // Needs the real generated id (not the 0 default still sitting on newSpot) — tags
-                // are assigned through the junction table by locationId, so this has to be the
-                // actual row Room just created, not a fresh insert-and-forget.
-                val insertedId = dao.insertSpotAndGetId(newSpot).toInt()
+                // Smart Deduplication: if a recent spot already sits within the merge radius,
+                // fold this save into it (fresh timestamp, blanks filled in) instead of creating
+                // a second vault entry for the same real-world location.
+                val mergeTarget = findDeduplicationMergeTarget(dao, prefs, lat, lng)
+                val (insertedId, resultSpot, wasMerged) = if (mergeTarget != null) {
+                    val merged = mergeDeduplicatedSpot(
+                        dao = dao,
+                        target = mergeTarget,
+                        newTimestamp = timestamp,
+                        newImagePath = currentPhotoPath,
+                        newLocationDetails = initialLocationDetails,
+                        newTitle = title,
+                        newVehicleId = resolvedVehicleId
+                    )
+                    Triple(merged.id, merged, true)
+                } else {
+                    val newSpot = LocationSpot(
+                        imagePath = currentPhotoPath,
+                        locationDetails = initialLocationDetails,
+                        timestamp = timestamp,
+                        lat = lat,
+                        lng = lng,
+                        address = "",
+                        isFavorite = false,
+                        title = title,
+                        vehicleId = resolvedVehicleId
+                    )
+                    // Needs the real generated id (not the 0 default still sitting on newSpot) —
+                    // tags are assigned through the junction table by locationId, so this has to
+                    // be the actual row Room just created, not a fresh insert-and-forget.
+                    val id = dao.insertSpotAndGetId(newSpot).toInt()
+                    Triple(id, newSpot.copy(id = id), false)
+                }
                 if (tags.isNotEmpty()) {
                     val tagDao = AppDatabase.getDatabase(this@MainActivity).tagDao()
                     tags.forEach { tagDao.assignTag(insertedId, it) }
+                }
+                if (wasMerged) {
+                    // Coordinates didn't change, so the merge target's address is still correct —
+                    // skip the "Loading address..." placeholder entirely instead of leaving it
+                    // stuck since the address-refresh block below is skipped for merges.
+                    prefs.edit()
+                        .putString("current_address", resultSpot.address)
+                        .putString("location_details", resultSpot.locationDetails)
+                        .apply()
                 }
 
                 PinWorkResult(
@@ -1616,7 +1643,8 @@ class MainActivity : FragmentActivity() {
                     timeMs = timeMs,
                     isActiveTracking = isActiveTracking,
                     insertedId = insertedId,
-                    newSpot = newSpot
+                    newSpot = resultSpot,
+                    wasMerged = wasMerged
                 )
             }
 
@@ -1644,7 +1672,7 @@ class MainActivity : FragmentActivity() {
                 WidgetThemeHelper.refreshAllWidgets(this@MainActivity)
             }
 
-            if ((pinWork.lat != 0.0 || pinWork.lng != 0.0) && prefs.getBoolean("auto_fetch_address", true)) {
+            if (!pinWork.wasMerged && (pinWork.lat != 0.0 || pinWork.lng != 0.0) && prefs.getBoolean("auto_fetch_address", true)) {
                 lifecycleScope.launch(Dispatchers.IO) {
                     val dao = AppDatabase.getDatabase(this@MainActivity).locationDao()
                     val geocoded = reverseGeocodeAddress(this@MainActivity, pinWork.lat, pinWork.lng)
@@ -1713,7 +1741,8 @@ class MainActivity : FragmentActivity() {
         val timeMs: Long = 0L,
         val isActiveTracking: Boolean = true,
         val insertedId: Int = 0,
-        val newSpot: LocationSpot? = null
+        val newSpot: LocationSpot? = null,
+        val wasMerged: Boolean = false
     )
 
     @SuppressLint("MissingPermission")
