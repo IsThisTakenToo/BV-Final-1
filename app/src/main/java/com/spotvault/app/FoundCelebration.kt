@@ -52,8 +52,17 @@ object FoundCelebration {
 
     private fun playSuccessTone(context: Context) {
         runCatching {
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                ?: return
+            // Same "alarm_sound_uri" pref used for the Timer Alert channel and the expired-timer
+            // alarm — was hardcoded to the system's default notification sound here regardless of
+            // what the user actually picked in Settings, so "Found" sounded different from every
+            // other alert the app makes.
+            val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+            val soundUriStr = prefs.getString("alarm_sound_uri", null)
+            val uri = if (!soundUriStr.isNullOrEmpty()) {
+                android.net.Uri.parse(soundUriStr)
+            } else {
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            } ?: return
             val ringtone = RingtoneManager.getRingtone(context, uri) ?: return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 ringtone.audioAttributes = AudioAttributes.Builder()

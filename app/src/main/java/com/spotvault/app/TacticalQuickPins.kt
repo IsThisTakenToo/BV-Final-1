@@ -30,83 +30,6 @@ data class QuickPinDef(
     val sortOrder: Int
 )
 
-object QuickPinStore {
-    private const val PREFS_KEY = "quick_pin_defs_json"
-    @Volatile private var cache: List<QuickPinDef>? = null
-
-    fun current(): List<QuickPinDef> = cache ?: emptyList()
-
-    fun defaults(): List<QuickPinDef> = listOf(
-        QuickPinDef("PARK_TRUCK", "🚗", "Parked Truck", "Parked truck / vehicle", "General", 0),
-        QuickPinDef("PARKING", "🅿️", "Parking Spot", "Parking spot or garage level", "General", 1),
-        QuickPinDef("ENTRANCE", "🚪", "Entrance", "Building or venue entrance", "Places", 2),
-        QuickPinDef("FOOD", "🍽️", "Food / Restaurant", "Restaurant or food stop", "Places", 3),
-        QuickPinDef("HOTEL", "🏨", "Hotel / Lodging", "Hotel or lodging check-in", "Places", 4),
-        QuickPinDef("RESTROOM", "🚻", "Restroom", "Restroom or facility", "Places", 5),
-        QuickPinDef("LANDMARK", "📍", "Landmark", "Memorable landmark or meet-up point", "Places", 6)
-    )
-
-    fun load(prefs: SharedPreferences): List<QuickPinDef> {
-        val raw = prefs.getString(PREFS_KEY, null)
-        val result = if (raw == null) {
-            defaults()
-        } else {
-            try {
-                val arr = org.json.JSONArray(raw)
-                (0 until arr.length()).map { i ->
-                    val o = arr.getJSONObject(i)
-                    QuickPinDef(
-                        id = o.getString("id"),
-                        emoji = o.getString("emoji"),
-                        label = o.getString("label"),
-                        details = o.getString("details"),
-                        section = o.getString("section"),
-                        sortOrder = o.getInt("sortOrder")
-                    )
-                }.sortedBy { it.sortOrder }
-            } catch (e: Exception) {
-                defaults()
-            }
-        }
-        cache = result
-        if (raw == null) save(prefs, result)
-        return result
-    }
-
-    fun save(prefs: SharedPreferences, defs: List<QuickPinDef>) {
-        val ordered = defs.mapIndexed { index, def -> def.copy(sortOrder = index) }
-        val arr = org.json.JSONArray()
-        ordered.forEach { def ->
-            val o = org.json.JSONObject()
-            o.put("id", def.id); o.put("emoji", def.emoji); o.put("label", def.label)
-            o.put("details", def.details)
-            o.put("section", def.section)
-            o.put("sortOrder", def.sortOrder)
-            arr.put(o)
-        }
-        prefs.edit().putString(PREFS_KEY, arr.toString()).apply()
-        cache = ordered
-    }
-
-    fun addOrUpdate(prefs: SharedPreferences, def: QuickPinDef) {
-        val list = load(prefs).toMutableList()
-        val idx = list.indexOfFirst { it.id == def.id }
-        if (idx >= 0) list[idx] = def else list.add(def)
-        save(prefs, list)
-    }
-
-    fun delete(prefs: SharedPreferences, id: String) {
-        save(prefs, load(prefs).filterNot { it.id == id })
-    }
-
-    fun reorder(prefs: SharedPreferences, newOrder: List<QuickPinDef>) {
-        save(prefs, newOrder)
-    }
-
-    fun findById(prefs: SharedPreferences, id: String): QuickPinDef? =
-        load(prefs).firstOrNull { it.id == id } ?: defaults().firstOrNull { it.id == id }
-}
-
 /** The Quick Pin every "instant" one-tap surface fires — home screen button, Everyday widget,
  * and the Quick Pin Quick Settings tile. Deliberately not configurable: this used to be resolved
  * through a per-surface pref key (`prefs.getString(settingKey, null)`, matched against the
@@ -517,20 +440,25 @@ private suspend fun fetchFirstAddress(context: Context, lat: Double, lng: Double
 
 private fun buildQuickPinSpot(
     option: QuickPinDef,
-    prefs: SharedPreferences,
     lat: Double,
     lng: Double,
     timestamp: Long,
     vehicleId: Int? = null,
     photoPath: String = ""
 ): LocationSpot {
-    val namingFormat = prefs.getString("quick_pin_naming_format", "datetime") ?: "datetime"
-    val isInstantQuickAction = isInstantQuickActionId(option.id)
-    val autoTitle = when {
-        isInstantQuickAction -> quickActionSpotTitle(null, lat, lng)
-        namingFormat == "coordinates" -> "${option.label} - ${String.format(Locale.US, "%.4f, %.4f", lat, lng)}"
-        namingFormat == "label_only" -> option.label
-        else -> "${option.label}\n${java.text.SimpleDateFormat("MMM d, h:mm a", Locale.US).format(java.util.Date(timestamp))}"
+    // Only two shapes of option ever reach here: the fixed Quick Pin/Quick Track ids (their title
+    // gets replaced by a real address once the async geocode in the caller resolves) and
+    // Auto-Park's per-vehicle id, which keeps this "label + timestamp" title as-is. There used to
+    // be a per-install "Auto-Pin Naming" format picker in Settings that branched this — Quick
+    // Pin/Quick Track were always hardcoded exempt from it, and its other two formats were only
+    // ever reachable through a custom-preset picker UI that never existed (see GENERIC_QUICK_PIN's
+    // doc for the matching history on that), so in practice it only ever changed Auto-Park's
+    // title format, invisibly, from a screen with no mention of Auto-Park. Removed; this is the
+    // "datetime" format every install already got by default.
+    val autoTitle = if (isInstantQuickActionId(option.id)) {
+        quickActionSpotTitle(null, lat, lng)
+    } else {
+        "${option.label}\n${java.text.SimpleDateFormat("MMM d, h:mm a", Locale.US).format(java.util.Date(timestamp))}"
     }
     return LocationSpot(
         imagePath = photoPath,
@@ -559,15 +487,38 @@ private const val FALLBACK_PARKED_NOTIFICATION_ID = 9201
  * on demand rather than assuming TimerService's already exist — TimerService.onCreate() (where
  * those are normally set up) never got to run if starting it just failed. */
 private fun postFallbackParkedNotification(context: Context) {
+    // Same user-picked "alarm_sound_uri" every other alert in the app uses — this channel used to
+    // never call setSound() at all, silently falling back to the system's default notification
+    // sound. Hash-suffixed like MainActivity's TIMER_ALERT channel: a channel's sound is locked in
+    // the moment it's first created and never updates in place, so picking a new Alert Sound needs
+    // a new channel id, not just a new value passed to setSound() on the old one.
+    val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+    val soundUriStr = prefs.getString("alarm_sound_uri", null)
+    val channelId = if (!soundUriStr.isNullOrEmpty()) {
+        "${FALLBACK_PARKED_CHANNEL_ID}_${soundUriStr.hashCode()}"
+    } else {
+        FALLBACK_PARKED_CHANNEL_ID
+    }
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        manager.createNotificationChannel(
-            android.app.NotificationChannel(
-                FALLBACK_PARKED_CHANNEL_ID,
-                "Parking Confirmations",
-                android.app.NotificationManager.IMPORTANCE_HIGH
-            )
+        val channel = android.app.NotificationChannel(
+            channelId,
+            "Parking Confirmations",
+            android.app.NotificationManager.IMPORTANCE_HIGH
         )
+        val soundUri = if (!soundUriStr.isNullOrEmpty()) {
+            android.net.Uri.parse(soundUriStr)
+        } else {
+            android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+        }
+        channel.setSound(
+            soundUri,
+            android.media.AudioAttributes.Builder()
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                .build()
+        )
+        manager.createNotificationChannel(channel)
     }
     val openIntent = android.content.Intent(context, MainActivity::class.java).apply {
         flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -578,7 +529,7 @@ private fun postFallbackParkedNotification(context: Context) {
         openIntent,
         android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
     )
-    val notification = androidx.core.app.NotificationCompat.Builder(context, FALLBACK_PARKED_CHANNEL_ID)
+    val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
         .setSmallIcon(android.R.drawable.ic_menu_camera)
         .setContentTitle("Car Parked")
         .setContentText("Tap to view in DropPin Vault")
@@ -671,7 +622,7 @@ suspend fun quietSaveTacticalPin(
         // Coordinates didn't move, so the merge target's address is still correct — no need to
         // re-geocode or risk the block below overwriting its title/notes with generic ones.
     } else {
-        val spot = buildQuickPinSpot(option, prefs, lat, lng, timestamp, resolvedVehicleId, photoPath)
+        val spot = buildQuickPinSpot(option, lat, lng, timestamp, resolvedVehicleId, photoPath)
         savedId = dao.insertSpotAndGetId(spot).toInt()
 
         if (prefs.getBoolean("auto_fetch_address", true) && (lat != 0.0 || lng != 0.0)) {
@@ -764,7 +715,7 @@ suspend fun quickActiveTrackPin(
             .putString("location_details", merged.locationDetails)
             .apply()
     } else {
-        val spot = buildQuickPinSpot(option, prefs, lat, lng, timestamp, resolvedVehicleId, photoPath)
+        val spot = buildQuickPinSpot(option, lat, lng, timestamp, resolvedVehicleId, photoPath)
         savedId = dao.insertSpotAndGetId(spot).toInt()
     }
 

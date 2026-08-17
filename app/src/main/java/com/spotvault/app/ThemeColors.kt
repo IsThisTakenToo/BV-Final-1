@@ -577,13 +577,33 @@ val VaultIconStyles = listOf(
     VaultIconOption("christmas", "Winter Vault", "Glossy ornament dial with aurora, holly bolts, and a North Star lock", activeMonths = listOf(11, 12))
 )
 
-/** "white"/"black" -> a concrete override color; "auto" (or anything else) -> null, meaning
- * keep the existing luminance-based auto-contrast. */
-fun textModeToArgb(mode: String): Int? = when (mode) {
-    "white" -> Color.White.toArgbInt()
-    "black" -> Color.Black.toArgbInt()
-    else -> null
+/** WCAG-standard relative luminance from sRGB channels in [0f, 1f] — gamma-corrects each channel
+ * before weighting, the same formula Compose's own Color.luminance() implements. Kept as plain
+ * math (no Compose Color dependency) so the widget path (raw ARGB ints via RemoteViews, which
+ * can't use @Composable getters) and the in-app Compose path share one implementation, rather
+ * than silently drifting apart the way they had — the widget path used a completely different
+ * (non-WCAG, perceptual-luma) formula and threshold than the in-app one before this. */
+private fun srgbChannelToLinear(c: Float): Float =
+    if (c <= 0.03928f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+
+fun relativeLuminance(r: Float, g: Float, b: Float): Float =
+    0.2126f * srgbChannelToLinear(r) + 0.7152f * srgbChannelToLinear(g) + 0.0722f * srgbChannelToLinear(b)
+
+/** WCAG contrast ratio between two relative-luminance values — always >= 1, higher means more
+ * contrast: (L_lighter + 0.05) / (L_darker + 0.05). */
+fun contrastRatio(l1: Float, l2: Float): Float {
+    val lighter = maxOf(l1, l2)
+    val darker = minOf(l1, l2)
+    return (lighter + 0.05f) / (darker + 0.05f)
 }
+
+/** True if [lightLum] gives higher actual contrast against [backgroundLum] than [darkLum] does —
+ * NOT a fixed luminance cutoff. A flat 0.4 or 0.5 threshold (what this used to be) picks the
+ * wrong option for backgrounds roughly in the 0.18-0.4 luminance band: the true WCAG crossover
+ * point, where contrast(background, white) == contrast(background, black), works out to
+ * ln(21)/2 - ish math landing near 0.179, not a round number. */
+fun lightWinsContrast(backgroundLum: Float, lightLum: Float, darkLum: Float): Boolean =
+    contrastRatio(backgroundLum, lightLum) >= contrastRatio(backgroundLum, darkLum)
 
 fun androidx.compose.ui.graphics.Color.toArgbInt(): Int = toArgb()
 
@@ -616,10 +636,6 @@ object ThemeState {
     var textScale by mutableStateOf(1.15f)
     var fontFamilyId by mutableStateOf(AppFontOptions.DEFAULT_ID)
     var backgroundPatternId by mutableStateOf(BackgroundPattern.GRADIENT_MESH.id)
-    /** Overrides for the auto-computed text/icon color on Primary/Teal-colored buttons —
-     * null means "keep auto-contrasting by luminance," only meaningful for the custom theme. */
-    var customOnPrimaryArgb by mutableStateOf<Int?>(null)
-    var customOnAccentArgb by mutableStateOf<Int?>(null)
 
     /** Whether the user has the Dynamic Color toggle on — independent of [currentTheme]/the
      * "color_theme" pref entirely, so turning it off always cleanly reverts to whichever preset

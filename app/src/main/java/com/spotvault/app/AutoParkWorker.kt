@@ -16,6 +16,26 @@ const val AUTO_PARK_MAC_KEY = "auto_park_mac"
 const val AUTO_PARK_CACHED_LAT_KEY = "auto_park_cached_lat"
 const val AUTO_PARK_CACHED_LNG_KEY = "auto_park_cached_lng"
 
+/** Reported in every doWork() outcome (real disconnect or manual test alike) via output Data —
+ * the real trigger has nobody watching it, but "Test Auto-Park Now" does, and its whole point is
+ * telling the user WHY nothing showed up in the Vault instead of a blind "queued" toast that
+ * looks identical whether the save succeeded or silently no-opped for any of half a dozen reasons. */
+const val AUTO_PARK_OUTCOME_KEY = "auto_park_outcome"
+const val AUTO_PARK_OUTCOME_SAVED = "saved"
+const val AUTO_PARK_OUTCOME_DISABLED = "disabled"
+const val AUTO_PARK_OUTCOME_NO_BACKGROUND_LOCATION = "no_background_location"
+const val AUTO_PARK_OUTCOME_NO_VEHICLE = "no_vehicle"
+const val AUTO_PARK_OUTCOME_VEHICLE_ARCHIVED = "vehicle_archived"
+const val AUTO_PARK_OUTCOME_QUIET_ZONE_SKIP = "quiet_zone_skip"
+const val AUTO_PARK_OUTCOME_STILL_CONNECTED = "still_connected"
+const val AUTO_PARK_OUTCOME_FAILED = "failed"
+
+// Fully qualified, not a plain "Result" — at file (non-class) scope that resolves to
+// kotlin.Result<T> instead of androidx.work.ListenableWorker.Result, which doWork() itself
+// only gets to use unqualified because CoroutineWorker's class scope shadows the stdlib one.
+private fun outcomeResult(outcome: String): androidx.work.ListenableWorker.Result =
+    androidx.work.ListenableWorker.Result.success(Data.Builder().putString(AUTO_PARK_OUTCOME_KEY, outcome).build())
+
 private const val UNIQUE_WORK_NAME_PREFIX = "auto_park_bluetooth_disconnect"
 
 /** Past this many attempts, doWork() stops retrying a total GPS failure and saves with the
@@ -54,13 +74,13 @@ class AutoParkWorker(
 
     override suspend fun doWork(): Result {
         val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
-        if (!isAutoParkEnabled(prefs)) return Result.success()
+        if (!isAutoParkEnabled(prefs)) return outcomeResult(AUTO_PARK_OUTCOME_DISABLED)
         // Defensive, not just the earlier check in CarBluetoothReceiver — this worker is also
         // reachable via enqueueAutoParkWorkForVehicle (the "Test Auto-Park Now" button), and
         // WorkManager can run this well after enqueue, by which point the app may no longer have
         // any foreground presence. Result.success() rather than retry() — missing permission
         // won't fix itself, so retrying is just wasted battery for a guaranteed-to-fail attempt.
-        if (!hasBackgroundLocationPermission(context)) return Result.success()
+        if (!hasBackgroundLocationPermission(context)) return outcomeResult(AUTO_PARK_OUTCOME_NO_BACKGROUND_LOCATION)
 
         val disconnectedMac = inputData.getString(AUTO_PARK_MAC_KEY)
         val vehicleId = inputData.getInt(AUTO_PARK_VEHICLE_ID_KEY, -1).takeIf { it > 0 }
@@ -75,12 +95,12 @@ class AutoParkWorker(
                     ?: legacyVehicleFromPrefs(prefs, disconnectedMac)
             }
             else -> {
-                val legacyMac = loadAutoParkCarMac(prefs) ?: return Result.success()
+                val legacyMac = loadAutoParkCarMac(prefs) ?: return outcomeResult(AUTO_PARK_OUTCOME_NO_VEHICLE)
                 vehicleDao.findByBluetoothMac(legacyMac) ?: legacyVehicleFromPrefs(prefs, legacyMac)
             }
-        } ?: return Result.success()
+        } ?: return outcomeResult(AUTO_PARK_OUTCOME_NO_VEHICLE)
 
-        if (vehicle.isArchived) return Result.success()
+        if (vehicle.isArchived) return outcomeResult(AUTO_PARK_OUTCOME_VEHICLE_ARCHIVED)
 
         val cachedLat = inputData.getDouble(AUTO_PARK_CACHED_LAT_KEY, Double.NaN)
         val cachedLng = inputData.getDouble(AUTO_PARK_CACHED_LNG_KEY, Double.NaN)
@@ -99,7 +119,7 @@ class AutoParkWorker(
             zones = loadAutoParkQuietZones(prefs)
         )
         if (decision == AutoParkQuietZoneDecision.SKIP) {
-            return Result.success()
+            return outcomeResult(AUTO_PARK_OUTCOME_QUIET_ZONE_SKIP)
         }
 
         // Re-checked here, this late, not just at the top of doWork() — both of these can go
@@ -111,8 +131,8 @@ class AutoParkWorker(
         // own doc already acknowledged this as a known gap) — without this check, a user who got
         // back in the car within a few seconds could still get a save + a live Active Tracking
         // notification for a car they never actually left.
-        if (!isAutoParkEnabled(prefs)) return Result.success()
-        if (disconnectedMac != null && isMacCurrentlyConnected(prefs, disconnectedMac)) return Result.success()
+        if (!isAutoParkEnabled(prefs)) return outcomeResult(AUTO_PARK_OUTCOME_DISABLED)
+        if (disconnectedMac != null && isMacCurrentlyConnected(prefs, disconnectedMac)) return outcomeResult(AUTO_PARK_OUTCOME_STILL_CONNECTED)
 
         val dao = db.locationDao()
         val option = autoParkOptionForVehicle(vehicle)
@@ -126,9 +146,9 @@ class AutoParkWorker(
             return when (val result = quietSaveTacticalPin(context.applicationContext, dao, prefs, option, vehicleId = vehicle.id, resolvedLocation = location)) {
                 is QuietSaveResult.Saved -> {
                     markPendingAutoParkSpot(prefs, disconnectedMac, result.spotId)
-                    Result.success()
+                    outcomeResult(AUTO_PARK_OUTCOME_SAVED)
                 }
-                else -> Result.success()
+                else -> outcomeResult(AUTO_PARK_OUTCOME_FAILED)
             }
         }
 
@@ -148,7 +168,7 @@ class AutoParkWorker(
         ) {
             is QuietSaveResult.Saved -> {
                 markPendingAutoParkSpot(prefs, disconnectedMac, result.spotId)
-                Result.success()
+                outcomeResult(AUTO_PARK_OUTCOME_SAVED)
             }
             QuietSaveResult.Failed -> {
                 // Nothing will ever start TimerService for this attempt — it's the only place
@@ -156,7 +176,7 @@ class AutoParkWorker(
                 // SAVE_SILENT quiet zone), so leaving it set here would silently mute the next,
                 // completely unrelated active-tracking notification instead of just this one.
                 prefs.edit().remove(PINNED_NOTIFICATION_SILENT_PREF).apply()
-                Result.success()
+                outcomeResult(AUTO_PARK_OUTCOME_FAILED)
             }
             QuietSaveResult.NeedsNotificationPermission -> {
                 // There's no UI here to prompt for POST_NOTIFICATIONS — falling back to a quiet
@@ -170,9 +190,9 @@ class AutoParkWorker(
                 when (fallback) {
                     is QuietSaveResult.Saved -> {
                         markPendingAutoParkSpot(prefs, disconnectedMac, fallback.spotId)
-                        Result.success()
+                        outcomeResult(AUTO_PARK_OUTCOME_SAVED)
                     }
-                    else -> Result.success()
+                    else -> outcomeResult(AUTO_PARK_OUTCOME_FAILED)
                 }
             }
         }
@@ -283,6 +303,10 @@ fun enqueueAutoParkReconnectCleanup(context: Context, mac: String) {
     )
 }
 
+/** Exposed so a caller (the "Test Auto-Park Now" button) can observe this exact job's WorkInfo
+ * and read back its [AUTO_PARK_OUTCOME_KEY] once finished, instead of firing it blind. */
+fun autoParkManualTestWorkName(vehicleId: Int): String = "${UNIQUE_WORK_NAME_PREFIX}_manual_$vehicleId"
+
 /** Used when the caller already has a resolved vehicle (e.g. a manual "simulate auto-park"
  * debug/test action from within the app, which does run with normal database access). */
 fun enqueueAutoParkWorkForVehicle(context: Context, vehicleId: Int) {
@@ -299,7 +323,7 @@ fun enqueueAutoParkWorkForVehicle(context: Context, vehicleId: Int) {
         }
         .build()
     WorkManager.getInstance(context).enqueueUniqueWork(
-        "${UNIQUE_WORK_NAME_PREFIX}_manual_$vehicleId",
+        autoParkManualTestWorkName(vehicleId),
         ExistingWorkPolicy.REPLACE,
         request
     )

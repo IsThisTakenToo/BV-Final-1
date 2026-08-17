@@ -710,9 +710,11 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
 
         prefs = getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
-        AppIconManager.migrateLegacyIconIfNeeded(this, prefs)
+        lifecycleScope.launch {
+            AppIconManager.migrateLegacyIconIfNeeded(this@MainActivity, prefs)
+            AppIconManager.reconcileIconState(this@MainActivity, prefs)
+        }
         ingestWidgetIntent(intent)
-        QuickPinStore.load(prefs)
         isPinned.value = prefs.getBoolean("is_pinned", false)
         ThemeState.currentTheme = loadColorThemeFromPrefs(prefs)
         ThemeState.vaultIconStyle = premiumGatedId(
@@ -745,8 +747,6 @@ class MainActivity : FragmentActivity() {
             normalizeBackgroundPatternId(prefs.getString("background_pattern", BackgroundPattern.GRADIENT_MESH.id)),
             PremiumFreeTier.freeBackgroundPatternId
         )
-        ThemeState.customOnPrimaryArgb = textModeToArgb(prefs.getString("custom_on_primary_mode", "auto") ?: "auto")
-        ThemeState.customOnAccentArgb = textModeToArgb(prefs.getString("custom_on_accent_mode", "auto") ?: "auto")
         ThemeState.dynamicColorEnabled = prefs.getBoolean("dynamic_color_enabled", false)
         refreshDynamicColors(applicationContext)
         com.spotvault.app.SpotVaultColors.updateAmoled(prefs.getBoolean("amoled_black", false))
@@ -1281,8 +1281,6 @@ class MainActivity : FragmentActivity() {
             normalizeBackgroundPatternId(prefs.getString("background_pattern", BackgroundPattern.GRADIENT_MESH.id)),
             PremiumFreeTier.freeBackgroundPatternId
         )
-        ThemeState.customOnPrimaryArgb = textModeToArgb(prefs.getString("custom_on_primary_mode", "auto") ?: "auto")
-        ThemeState.customOnAccentArgb = textModeToArgb(prefs.getString("custom_on_accent_mode", "auto") ?: "auto")
         ThemeState.dynamicColorEnabled = prefs.getBoolean("dynamic_color_enabled", false)
         refreshDynamicColors(applicationContext)
         com.spotvault.app.SpotVaultColors.updateAmoled(prefs.getBoolean("amoled_black", false))
@@ -2802,11 +2800,15 @@ fun HistoryDialogContent(
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var pendingSwipeDeleteSpot by remember { mutableStateOf<LocationSpot?>(null) }
     var vaultViewMode by remember { mutableStateOf(loadVaultViewMode(prefs)) }
-    var showCalendarDialog by remember { mutableStateOf(false) }
-    var selectedCalendarDay by remember { mutableStateOf<Long?>(null) }
+    // rememberSaveable, not remember — tapping a spot from Calendar/Location Browser navigates
+    // to the SPOT_DETAIL route via the NavHost, which disposes this whole composable and rebuilds
+    // it fresh on the way back. Plain remember state doesn't survive that round trip, so back used
+    // to always drop straight to the bare Vault list instead of wherever the user actually was.
+    var showCalendarDialog by rememberSaveable { mutableStateOf(false) }
+    var selectedCalendarDay by rememberSaveable { mutableStateOf<Long?>(null) }
     var showRecentlyDeleted by remember { mutableStateOf(false) }
     var showArchivedSpots by remember { mutableStateOf(false) }
-    var showLocationBrowser by remember { mutableStateOf(false) }
+    var showLocationBrowser by rememberSaveable { mutableStateOf(false) }
     var autoDeleteEnabled by remember { mutableStateOf(prefs.getBoolean("auto_delete_enabled", false)) }
     var showVaultMenu by remember { mutableStateOf(false) }
     var showAutoDeleteIntervalDialog by remember { mutableStateOf(false) }
@@ -2845,7 +2847,12 @@ fun HistoryDialogContent(
     BackHandler(enabled = showAutoDeleteIntervalDialog) { showAutoDeleteIntervalDialog = false }
     BackHandler(enabled = showDeleteConfirmDialog) { showDeleteConfirmDialog = false }
     BackHandler(enabled = showCalendarDialog) { showCalendarDialog = false }
-    BackHandler(enabled = selectedCalendarDay != null) { selectedCalendarDay = null }
+    // Steps back to the month grid instead of dropping straight to the Vault list — Day Results
+    // was only ever reached by picking a day off that grid, so back should retrace that step.
+    BackHandler(enabled = selectedCalendarDay != null) {
+        selectedCalendarDay = null
+        showCalendarDialog = true
+    }
 
     val vaultHistorySpots = remember(historyList) { historyList.filter { !it.isWishlist } }
 
@@ -3202,6 +3209,23 @@ private fun SaveScreenTagField(
     var showPicker by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Button comes before the chip cloud (not after) so this column's top edge — the part
+        // that lines up against the Vehicles column next to it — never moves. Chips spill
+        // downward below it instead of pushing the button down as they accumulate, which used
+        // to leave the two columns' tops lopsided as soon as any tag was added.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                .clickable { showPicker = true }
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.Sell, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Add Tag", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.OnSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        }
         if (selectedTags.isNotEmpty()) {
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -3229,23 +3253,6 @@ private fun SaveScreenTagField(
                     }
                 }
             }
-        }
-        // A compact button opening a picker sheet, not an inline search box — the search field
-        // plus its suggestion cloud used to always be on screen here even collapsed/empty,
-        // eating a chunk of the card's height on every single Snap/Pin save regardless of
-        // whether the user was tagging this spot at all.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-                .clickable { showPicker = true }
-                .padding(horizontal = 12.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.Sell, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(15.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Add Tag", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.OnSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         }
     }
 
@@ -4375,7 +4382,10 @@ fun TimerSelectionDialog(
                         .imePadding()
                         .padding(horizontal = 16.dp, vertical = 12.dp)
                         .padding(bottom = navPad),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    // Tightened from 10.dp to 7.dp — exactly offsets the 3dp the label below grew
+                    // (10sp/13 lineHeight -> 12sp/16 lineHeight), so this bar's total height is
+                    // unchanged and the weighted photo/card area above doesn't resize.
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
                     // Was inside the scrollable card, right after the Tracking toggle — its position
                     // depended on scroll offset and how much other content was above it. Living in the
@@ -4387,9 +4397,9 @@ fun TimerSelectionDialog(
                         } else {
                             "Silent save — no alerts"
                         },
-                        fontSize = 10.sp,
+                        fontSize = 12.sp,
                         color = SpotVaultColors.Muted.copy(alpha = 0.85f),
-                        lineHeight = 13.sp
+                        lineHeight = 16.sp
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -4474,7 +4484,8 @@ fun TimerSelectionDialog(
                     vehicleId = null,
                     vehicleDao = vehicleDao,
                     locationDao = vehicleLocationDao,
-                    onBack = { showAddVehicle = false }
+                    onBack = { showAddVehicle = false },
+                    onSaved = { newVehicleId -> selectedVehicleId = newVehicleId }
                 )
             }
         }
@@ -5370,6 +5381,34 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
         }
     }
 
+    // Unlike Pin/Snap (MainActivity.checkPermissionsAndAction), these two buttons never checked
+    // location permission at all — on a fresh install neither button ever prompted for it, so
+    // every save silently fell through to the "No GPS signal" placeholder with no indication why.
+    // Proceeds with the action either way once the round trip resolves, granted or denied — same
+    // as Pin/Snap's own denial handling, since the save itself already falls back gracefully
+    // rather than blocking.
+    var pendingLocationAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        pendingLocationAction?.invoke()
+        pendingLocationAction = null
+    }
+
+    fun runWithLocationPermission(action: () -> Unit) {
+        val fineGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (fineGranted || coarseGranted) {
+            action()
+        } else {
+            pendingLocationAction = action
+            markPermissionRequested(prefs, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+            locationPermissionLauncher.launch(
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+            )
+        }
+    }
+
     // Centered so Quick Track's shadow (see below) has equal breathing room top and bottom
     // instead of being clipped flush against the row's own bounds — that clipping was what made
     // the bottom of both buttons look "cut off": Quick Track's glow ran straight into the row's
@@ -5382,10 +5421,12 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
         SpotVaultButton(
             onClick = {
                 if (!isSaving) {
-                    if (prefs.getBoolean("quick_pin_auto_photo", false)) {
-                        requestCameraThenCapture("pin")
-                    } else {
-                        runQuickPin()
+                    runWithLocationPermission {
+                        if (prefs.getBoolean("quick_pin_auto_photo", false)) {
+                            requestCameraThenCapture("pin")
+                        } else {
+                            runQuickPin()
+                        }
                     }
                 }
             },
@@ -5407,10 +5448,12 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
         SpotVaultButton(
             onClick = {
                 if (!isSaving) {
-                    if (prefs.getBoolean("quick_track_auto_photo", false)) {
-                        requestCameraThenCapture("track")
-                    } else {
-                        runQuickTrack()
+                    runWithLocationPermission {
+                        if (prefs.getBoolean("quick_track_auto_photo", false)) {
+                            requestCameraThenCapture("track")
+                        } else {
+                            runQuickTrack()
+                        }
                     }
                 }
             },
@@ -6728,7 +6771,8 @@ internal fun SettingsActionRow(
 fun SettingsCategoryListScreen(
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
-    onCategoryClick: (String) -> Unit
+    onCategoryClick: (String) -> Unit,
+    onSearchResultClick: (SettingsSearchResult) -> Unit = {}
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val filtered = remember(searchQuery) {
@@ -6739,6 +6783,13 @@ fun SettingsCategoryListScreen(
                 cat.keywords.any { it.contains(searchQuery, ignoreCase = true) }
         }
     }
+    // The dozen category-level keyword buckets above only ever matched a whole settings screen at
+    // a time. This is the finer-grained half — every individual setting/feature described in
+    // HelpTopics, searched by its own name, description, and section — so a specific word (say
+    // "haptic" or "GPX") finds the one thing that mentions it instead of requiring the user to
+    // already know which of the 12 category buckets it lives under.
+    val filteredItems = remember(searchQuery) { buildSettingsSearchResults(searchQuery) }
+    val showGroupHeaders = searchQuery.isNotBlank() && filtered.isNotEmpty() && filteredItems.isNotEmpty()
     val scrollState = rememberScrollState()
     val canScroll by remember { derivedStateOf { scrollState.maxValue > 0 } }
     val atBottom by remember { derivedStateOf { scrollState.value >= scrollState.maxValue - 8 } }
@@ -6809,6 +6860,15 @@ fun SettingsCategoryListScreen(
                     )
                 )
                 Spacer(modifier = Modifier.height(4.dp))
+                if (showGroupHeaders) {
+                    Text(
+                        "CATEGORIES",
+                        color = SpotVaultColors.Muted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp
+                    )
+                }
                 filtered.forEach { cat ->
                     Row(
                         modifier = Modifier
@@ -6837,7 +6897,45 @@ fun SettingsCategoryListScreen(
                         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = SpotVaultColors.Muted, modifier = Modifier.size(20.dp))
                     }
                 }
-                if (filtered.isEmpty()) {
+                if (showGroupHeaders) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "SPECIFIC SETTINGS",
+                        color = SpotVaultColors.Muted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp
+                    )
+                }
+                filteredItems.forEach { result ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(SpotVaultColors.Elevated.copy(alpha = 0.6f))
+                            .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                            .clickable { onSearchResultClick(result) }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(SpotVaultColors.Teal.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(result.icon, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(20.dp))
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(result.label, color = SpotVaultColors.OnSurface, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                            Text("in ${result.sectionLabel}", color = SpotVaultColors.Muted, fontSize = 12.sp)
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = SpotVaultColors.Muted, modifier = Modifier.size(20.dp))
+                    }
+                }
+                if (filtered.isEmpty() && filteredItems.isEmpty()) {
                     Text("No settings match \"$searchQuery\"", color = SpotVaultColors.Muted, modifier = Modifier.padding(top = 24.dp))
                 }
                 Spacer(modifier = Modifier.fillMaxWidth().height(navBarBottom + 24.dp))
@@ -6890,7 +6988,9 @@ fun SettingsCategoryDetailScreen(
     onBack: () -> Unit,
     onPickRingtone: () -> Unit,
     onAppLockChanged: (Boolean) -> Unit = {},
-    onNavigateToCategory: (String) -> Unit = {}
+    onNavigateToCategory: (String) -> Unit = {},
+    helpHighlight: HelpHighlightTarget? = null,
+    onHelpHighlightConsumed: () -> Unit = {}
 ) {
     val category = SettingsCategories.first { it.id == categoryId }
     val scrollState = rememberScrollState()
@@ -6942,7 +7042,7 @@ fun SettingsCategoryDetailScreen(
                     "vehicles" -> VehiclesSettingsContent(prefs, dao)
                     "data" -> DataSettingsContent(prefs, dao, onAppLockChanged = onAppLockChanged)
                     "premium" -> PremiumSettingsContent(prefs)
-                    "help" -> HelpGuideSettingsContent()
+                    "help" -> HelpGuideSettingsContent(highlightTopic = helpHighlight, onHighlightConsumed = onHelpHighlightConsumed)
                     "about" -> AboutSettingsContent()
                 }
                 Spacer(modifier = Modifier.fillMaxWidth().height(navBarBottom + 24.dp))
@@ -7007,6 +7107,7 @@ fun SettingsDialog(
     val floorStack = remember { listOfNotNull(initialCategoryId) }
     var settingsCategoryStack by remember { mutableStateOf(floorStack) }
     var settingsSearchQuery by remember { mutableStateOf("") }
+    var pendingHelpHighlight by remember { mutableStateOf<HelpHighlightTarget?>(null) }
     val selectedSettingsCategory = settingsCategoryStack.lastOrNull()
 
     BackHandler {
@@ -7024,7 +7125,11 @@ fun SettingsDialog(
                 SettingsCategoryListScreen(
                     searchQuery = settingsSearchQuery,
                     onSearchQueryChange = { settingsSearchQuery = it },
-                    onCategoryClick = { settingsCategoryStack = settingsCategoryStack + it }
+                    onCategoryClick = { settingsCategoryStack = settingsCategoryStack + it },
+                    onSearchResultClick = { result ->
+                        pendingHelpHighlight = result.highlight
+                        settingsCategoryStack = settingsCategoryStack + result.categoryId
+                    }
                 )
             } else {
                 SettingsCategoryDetailScreen(
@@ -7034,7 +7139,9 @@ fun SettingsDialog(
                     onBack = { settingsCategoryStack = settingsCategoryStack.dropLast(1) },
                     onPickRingtone = onPickRingtone,
                     onAppLockChanged = onAppLockChanged,
-                    onNavigateToCategory = { settingsCategoryStack = settingsCategoryStack + it }
+                    onNavigateToCategory = { settingsCategoryStack = settingsCategoryStack + it },
+                    helpHighlight = pendingHelpHighlight,
+                    onHelpHighlightConsumed = { pendingHelpHighlight = null }
                 )
             }
         }

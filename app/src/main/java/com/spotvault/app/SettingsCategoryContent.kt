@@ -17,6 +17,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -157,14 +159,10 @@ private fun saveCustomThemeFromPicker(
     context: android.content.Context,
     customPrimary: Color,
     customAccent: Color,
-    primaryTextMode: String = "auto",
-    accentTextMode: String = "auto",
     applyAsActiveTheme: Boolean = true
 ) {
     ThemeState.customPrimaryArgb = customPrimary.toArgbInt()
     ThemeState.customAccentArgb = customAccent.toArgbInt()
-    ThemeState.customOnPrimaryArgb = textModeToArgb(primaryTextMode)
-    ThemeState.customOnAccentArgb = textModeToArgb(accentTextMode)
     if (applyAsActiveTheme) {
         ThemeState.currentTheme = "custom"
     }
@@ -172,8 +170,6 @@ private fun saveCustomThemeFromPicker(
         putBoolean(HAS_CUSTOM_THEME_PREF, true)
         putInt("custom_primary_color", customPrimary.toArgbInt())
         putInt("custom_accent_color", customAccent.toArgbInt())
-        putString("custom_on_primary_mode", primaryTextMode)
-        putString("custom_on_accent_mode", accentTextMode)
         if (applyAsActiveTheme) {
             putString("color_theme", "custom")
         }
@@ -242,17 +238,12 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
     }
     var hasCustomTheme by remember { mutableStateOf(prefs.getBoolean(HAS_CUSTOM_THEME_PREF, false)) }
     var showCustomPicker by remember { mutableStateOf(false) }
-    var showButtonTextColorPicker by remember { mutableStateOf(false) }
-    var primaryTextMode by remember { mutableStateOf(prefs.getString("custom_on_primary_mode", "auto") ?: "auto") }
-    var accentTextMode by remember { mutableStateOf(prefs.getString("custom_on_accent_mode", "auto") ?: "auto") }
 
     val latestVaultDisplayName by rememberUpdatedState(vaultDisplayName)
     val latestSavedVaultDisplayName by rememberUpdatedState(savedVaultDisplayName)
     val latestShowCustomPicker by rememberUpdatedState(showCustomPicker)
     val latestCustomPrimary by rememberUpdatedState(customPrimary)
     val latestCustomAccent by rememberUpdatedState(customAccent)
-    val latestPrimaryTextMode by rememberUpdatedState(primaryTextMode)
-    val latestAccentTextMode by rememberUpdatedState(accentTextMode)
 
     // Live preview while the picker is open — every wheel drag pushes straight into ThemeState
     // so the whole app (not just the little swatch here) shows the color as it's being picked,
@@ -260,12 +251,10 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
     // nothing is actually committed until Save runs (or the DisposableEffect below, which
     // already treats leaving the screen with the picker open as an implicit save — unchanged
     // from before, just now visible the whole time instead of only at the end).
-    LaunchedEffect(showCustomPicker, customPrimary, customAccent, primaryTextMode, accentTextMode) {
+    LaunchedEffect(showCustomPicker, customPrimary, customAccent) {
         if (showCustomPicker) {
             ThemeState.customPrimaryArgb = customPrimary.toArgbInt()
             ThemeState.customAccentArgb = customAccent.toArgbInt()
-            ThemeState.customOnPrimaryArgb = textModeToArgb(primaryTextMode)
-            ThemeState.customOnAccentArgb = textModeToArgb(accentTextMode)
             ThemeState.currentTheme = "custom"
         }
     }
@@ -294,7 +283,7 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
     BackHandler(enabled = showCustomPicker) {
         saveCustomThemeFromPicker(
             prefs, settingsContext, customPrimary, customAccent,
-            primaryTextMode, accentTextMode, applyAsActiveTheme = true
+            applyAsActiveTheme = true
         )
         savedCustomPrimary = customPrimary
         savedCustomAccent = customAccent
@@ -313,8 +302,6 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                     settingsContext,
                     latestCustomPrimary,
                     latestCustomAccent,
-                    latestPrimaryTextMode,
-                    latestAccentTextMode,
                     applyAsActiveTheme = true
                 )
             }
@@ -337,8 +324,8 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SettingsSectionCard(
-            title = "Color & Motion",
-            subtitle = "Themes, contrast, and animation",
+            title = "App Identity",
+            subtitle = "Name and icon that represent your vault",
             padding = 10.dp,
             contentSpacing = 6.dp
         ) {
@@ -433,6 +420,35 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                 PremiumLockBanner(onUpgradeClick = goToPremium)
             }
 
+            Text(
+                "App Icon",
+                color = SpotVaultColors.OnSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                "Changes your home screen icon — closes the app for a moment to apply",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp
+            )
+            AppIconPicker(
+                selectedIconId = appIconId,
+                onIconSelected = { icon -> pendingIconChange = icon },
+                isLocked = { id -> !premiumUnlocked && id != PremiumFreeTier.freeAppIconId },
+                onLockedClick = goToPremium,
+                premiumUnlocked = premiumUnlocked
+            )
+            if (!premiumUnlocked) {
+                PremiumLockBanner(onUpgradeClick = goToPremium, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+
+        SettingsSectionCard(
+            title = "Colors & Background",
+            subtitle = "Theme colors, wallpaper matching, and backdrop",
+            padding = 10.dp,
+            contentSpacing = 6.dp
+        ) {
             Text("Color Theme", color = SpotVaultColors.OnSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             val colorThemeScrollState = rememberScrollState()
             Box(modifier = Modifier.fillMaxWidth()) {
@@ -672,7 +688,7 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                         .clickable {
                             saveCustomThemeFromPicker(
                                 prefs, settingsContext, customPrimary, customAccent,
-                                primaryTextMode, accentTextMode, applyAsActiveTheme = true
+                                applyAsActiveTheme = true
                             )
                             savedCustomPrimary = customPrimary
                             savedCustomAccent = customAccent
@@ -687,114 +703,6 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                         color = SpotVaultColors.OnPrimary
                     )
                 }
-            }
-
-            // Auto/White/Black applies to whichever color theme is active — preset or custom —
-            // so it lives here at the top level instead of nested inside the custom theme editor
-            // above, where it used to be reachable only while building a custom theme.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(SpotVaultColors.Elevated.copy(alpha = 0.55f))
-                    .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                    .clickable { showButtonTextColorPicker = true }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Button Text Color", color = SpotVaultColors.OnSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text("Auto, White, or Black on your theme's buttons", color = SpotVaultColors.Muted, fontSize = 11.sp)
-                }
-                Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = SpotVaultColors.Muted
-                )
-            }
-
-            if (showButtonTextColorPicker) {
-                AlertDialog(
-                    onDismissRequest = { showButtonTextColorPicker = false },
-                    containerColor = SpotVaultColors.Surface,
-                    titleContentColor = SpotVaultColors.OnSurface,
-                    textContentColor = SpotVaultColors.Muted,
-                    title = { Text("Button Text Color") },
-                    text = {
-                        Column {
-                            Text(
-                                "Applies to your current theme's buttons everywhere in the app.",
-                                fontSize = 12.sp,
-                                color = SpotVaultColors.Muted
-                            )
-                            // Live preview against the theme that's actually active right now
-                            // (whatever ThemeState currently resolves, preset or custom) — picking
-                            // a mode below updates these instantly since Primary/Teal/OnPrimary/
-                            // OnTeal all read straight from ThemeState.
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 10.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 44.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(SpotVaultColors.Primary),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        "Primary Button",
-                                        color = SpotVaultColors.OnPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp
-                                    )
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 44.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(SpotVaultColors.Teal),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        "Secondary Button",
-                                        color = SpotVaultColors.OnTeal,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp
-                                    )
-                                }
-                            }
-                            TextColorModeRow(
-                                label = "Primary Button Text",
-                                mode = primaryTextMode,
-                                onModeChange = { mode ->
-                                    primaryTextMode = mode
-                                    ThemeState.customOnPrimaryArgb = textModeToArgb(mode)
-                                    saveThemePref(prefs, settingsContext) { putString("custom_on_primary_mode", mode) }
-                                }
-                            )
-                            TextColorModeRow(
-                                label = "Secondary Button Text",
-                                mode = accentTextMode,
-                                onModeChange = { mode ->
-                                    accentTextMode = mode
-                                    ThemeState.customOnAccentArgb = textModeToArgb(mode)
-                                    saveThemePref(prefs, settingsContext) { putString("custom_on_accent_mode", mode) }
-                                }
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { showButtonTextColorPicker = false }) {
-                            Text("Done", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                )
             }
 
             SettingsToggleRow(
@@ -821,32 +729,54 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
             }
 
             Text(
-                "Button Style",
+                "Background",
                 color = SpotVaultColors.OnSurface,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
             Text(
-                "Shape for action buttons across the app",
+                "The pattern behind every screen in the app",
                 color = SpotVaultColors.Muted,
                 fontSize = 12.sp
             )
-            ButtonStylePicker(
-                selectedStyle = buttonStyle,
-                onStyleSelected = { style ->
-                    buttonStyle = style
-                    ThemeState.buttonStyle = style
-                    WidgetThemeHelper.commitThemeChange(prefs, settingsContext) {
-                        putString("button_style", style)
-                    }
+            BackgroundPatternPicker(
+                selectedPatternId = backgroundPatternId,
+                onPatternSelected = { pattern ->
+                    backgroundPatternId = pattern.id
+                    ThemeState.backgroundPatternId = pattern.id
+                    prefs.edit().putString("background_pattern", pattern.id).apply()
                 },
-                isLocked = { id -> !premiumUnlocked && id != PremiumFreeTier.freeButtonStyleId },
+                isLocked = { id -> !premiumUnlocked && id != PremiumFreeTier.freeBackgroundPatternId },
                 onLockedClick = goToPremium
             )
             if (!premiumUnlocked) {
-                PremiumLockBanner(onUpgradeClick = goToPremium)
+                PremiumLockBanner(onUpgradeClick = goToPremium, modifier = Modifier.padding(top = 4.dp))
             }
 
+            SettingsToggleRow(
+                title = "AMOLED True Black",
+                subtitle = if (premiumUnlocked) "Pure black backgrounds on OLED screens" else "Premium — pure black backgrounds on OLED screens",
+                checked = amoledBlack,
+                onCheckedChange = { checked ->
+                    if (!premiumUnlocked) {
+                        goToPremium()
+                    } else {
+                        amoledBlack = checked
+                        WidgetThemeHelper.commitThemeChange(prefs, settingsContext) {
+                            putBoolean("amoled_black", checked)
+                        }
+                        SpotVaultColors.updateAmoled(checked)
+                    }
+                }
+            )
+        }
+
+        SettingsSectionCard(
+            title = "UI & Navigation Elements",
+            subtitle = "Vault icon, compass, and button shape",
+            padding = 10.dp,
+            contentSpacing = 6.dp
+        ) {
             Text(
                 "Vault Icon",
                 color = SpotVaultColors.OnSurface,
@@ -897,43 +827,75 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                 PremiumLockBanner(onUpgradeClick = goToPremium)
             }
 
-            SettingsToggleRow(
-                title = "AMOLED True Black",
-                subtitle = if (premiumUnlocked) "Pure black backgrounds on OLED screens" else "Premium — pure black backgrounds on OLED screens",
-                checked = amoledBlack,
-                onCheckedChange = { checked ->
-                    if (!premiumUnlocked) {
-                        goToPremium()
-                    } else {
-                        amoledBlack = checked
-                        WidgetThemeHelper.commitThemeChange(prefs, settingsContext) {
-                            putBoolean("amoled_black", checked)
-                        }
-                        SpotVaultColors.updateAmoled(checked)
-                    }
-                }
+            Text(
+                "Button Style",
+                color = SpotVaultColors.OnSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
             )
-
-            SettingsToggleRow(
-                title = "Reduce Animations",
-                subtitle = if (premiumUnlocked) "Minimize motion across the app" else "Premium — minimize motion across the app",
-                checked = reduceAnimations,
-                onCheckedChange = { checked ->
-                    if (!premiumUnlocked) {
-                        goToPremium()
-                    } else {
-                        reduceAnimations = checked
-                        ThemeState.reduceAnimations = checked
-                        prefs.edit().putBoolean("reduce_animations", checked).apply()
+            Text(
+                "Shape for action buttons across the app",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp
+            )
+            ButtonStylePicker(
+                selectedStyle = buttonStyle,
+                onStyleSelected = { style ->
+                    buttonStyle = style
+                    ThemeState.buttonStyle = style
+                    WidgetThemeHelper.commitThemeChange(prefs, settingsContext) {
+                        putString("button_style", style)
                     }
-                }
+                },
+                isLocked = { id -> !premiumUnlocked && id != PremiumFreeTier.freeButtonStyleId },
+                onLockedClick = goToPremium
             )
             if (!premiumUnlocked) {
                 PremiumLockBanner(onUpgradeClick = goToPremium)
             }
         }
 
-        SettingsSectionCard(title = "Text Size", subtitle = "Scales text across the whole app", padding = 10.dp, contentSpacing = 6.dp) {
+        SettingsSectionCard(
+            title = "Typography",
+            subtitle = "Font and text size across the app",
+            padding = 10.dp,
+            contentSpacing = 6.dp
+        ) {
+            Text(
+                "Font",
+                color = SpotVaultColors.OnSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                "Applies everywhere — buttons, headers, and body text",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp
+            )
+            // Every font is free — unlike the other Appearance pickers, there's no lock/upgrade
+            // banner here at all.
+            FontFamilyPicker(
+                selectedFontId = fontFamilyId,
+                onFontSelected = { option ->
+                    fontFamilyId = option.id
+                    ThemeState.fontFamilyId = option.id
+                    prefs.edit().putString("app_font_family", option.id).apply()
+                },
+                isLocked = { false },
+                onLockedClick = goToPremium
+            )
+
+            Text(
+                "Text Size",
+                color = SpotVaultColors.OnSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                "Scales text across the whole app",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp
+            )
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("Compact" to 1.0f, "Default" to 1.15f, "Extra Large" to 1.3f).forEach { (label, scale) ->
                     val selected = kotlin.math.abs(textScale - scale) < 0.01f
@@ -966,61 +928,23 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
             }
         }
 
-        SettingsSectionCard(title = "Font", subtitle = "Applies everywhere — buttons, headers, and body text", padding = 10.dp, contentSpacing = 6.dp) {
-            // Every font is free — unlike the other Appearance pickers, there's no lock/upgrade
-            // banner here at all.
-            FontFamilyPicker(
-                selectedFontId = fontFamilyId,
-                onFontSelected = { option ->
-                    fontFamilyId = option.id
-                    ThemeState.fontFamilyId = option.id
-                    prefs.edit().putString("app_font_family", option.id).apply()
-                },
-                isLocked = { false },
-                onLockedClick = goToPremium
-            )
-        }
-
-        SettingsSectionCard(title = "Background", subtitle = "The pattern behind every screen in the app", padding = 10.dp, contentSpacing = 6.dp) {
-            BackgroundPatternPicker(
-                selectedPatternId = backgroundPatternId,
-                onPatternSelected = { pattern ->
-                    backgroundPatternId = pattern.id
-                    ThemeState.backgroundPatternId = pattern.id
-                    prefs.edit().putString("background_pattern", pattern.id).apply()
-                },
-                isLocked = { id -> !premiumUnlocked && id != PremiumFreeTier.freeBackgroundPatternId },
-                onLockedClick = goToPremium
-            )
-            if (!premiumUnlocked) {
-                PremiumLockBanner(onUpgradeClick = goToPremium, modifier = Modifier.padding(top = 4.dp))
-            }
-        }
-
         SettingsSectionCard(
-            title = "App Icon",
-            subtitle = "Changes your home screen icon — closes the app for a moment to apply",
+            title = "Animations & Effects",
+            subtitle = "Splash intros, Found celebrations, and motion",
             padding = 10.dp,
             contentSpacing = 6.dp
         ) {
-            AppIconPicker(
-                selectedIconId = appIconId,
-                onIconSelected = { icon -> pendingIconChange = icon },
-                isLocked = { id -> !premiumUnlocked && id != PremiumFreeTier.freeAppIconId },
-                onLockedClick = goToPremium,
-                premiumUnlocked = premiumUnlocked
+            Text(
+                "Splash Screen",
+                color = SpotVaultColors.OnSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
             )
-            if (!premiumUnlocked) {
-                PremiumLockBanner(onUpgradeClick = goToPremium, modifier = Modifier.padding(top = 4.dp))
-            }
-        }
-
-        SettingsSectionCard(
-            title = "Splash Screen",
-            subtitle = "The intro animation shown when the app opens",
-            padding = 10.dp,
-            contentSpacing = 6.dp
-        ) {
+            Text(
+                "The intro animation shown when the app opens",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp
+            )
             SplashStylePicker(
                 selectedStyleId = splashStyleId,
                 onStyleSelected = { style ->
@@ -1034,14 +958,18 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
             if (!premiumUnlocked) {
                 PremiumLockBanner(onUpgradeClick = goToPremium, modifier = Modifier.padding(top = 4.dp))
             }
-        }
 
-        SettingsSectionCard(
-            title = "Found Splash Screen",
-            subtitle = "The celebration shown when you mark a spot Found — in-app and from widgets",
-            padding = 10.dp,
-            contentSpacing = 6.dp
-        ) {
+            Text(
+                "Found Splash Screen",
+                color = SpotVaultColors.OnSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                "The celebration shown when you mark a spot Found — in-app and from widgets",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp
+            )
             FoundSplashStylePicker(
                 selectedStyleId = foundSplashStyleId,
                 onStyleSelected = { style ->
@@ -1149,6 +1077,24 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                     PremiumLockBadge(modifier = Modifier.align(Alignment.TopEnd).padding(top = 2.dp))
                 }
             }
+
+            SettingsToggleRow(
+                title = "Reduce Animations",
+                subtitle = if (premiumUnlocked) "Minimize motion across the app" else "Premium — minimize motion across the app",
+                checked = reduceAnimations,
+                onCheckedChange = { checked ->
+                    if (!premiumUnlocked) {
+                        goToPremium()
+                    } else {
+                        reduceAnimations = checked
+                        ThemeState.reduceAnimations = checked
+                        prefs.edit().putBoolean("reduce_animations", checked).apply()
+                    }
+                }
+            )
+            if (!premiumUnlocked) {
+                PremiumLockBanner(onUpgradeClick = goToPremium)
+            }
         }
     }
 
@@ -1164,20 +1110,31 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
             },
             confirmButton = {
                 TextButton(onClick = {
-                    AppIconManager.applyIcon(settingsContext, prefs, icon)
-                    appIconId = icon.id
+                    // applyIcon() verifies the OS actually landed on the state it asked for —
+                    // some OEM PackageManager implementations (Samsung's included) are known to
+                    // silently no-op this without throwing. Every call it makes uses
+                    // DONT_KILL_APP, so the process is still alive right here to check — the
+                    // delayed self-kill below is what actually restarts the app afterward.
+                    val applied = AppIconManager.applyIcon(settingsContext, prefs, icon)
                     pendingIconChange = null
-                    coroutineScope.launch {
-                        // setComponentEnabledSetting() returning doesn't mean the change has
-                        // fully propagated — system_server still has to persist it and notify
-                        // the launcher afterward, with no public API for this process to wait on
-                        // that. 400ms wasn't enough headroom for that follow-up work to finish
-                        // before this process died on at least some devices/launchers (Samsung's
-                        // One UI in particular is known to be slower than stock Android for this
-                        // exact activity-alias pattern) — more headroom here costs nothing since
-                        // the app is about to die either way.
-                        delay(1200)
-                        android.os.Process.killProcess(android.os.Process.myPid())
+                    if (applied) {
+                        appIconId = icon.id
+                        coroutineScope.launch {
+                            // setComponentEnabledSetting() returning doesn't mean the change has
+                            // fully propagated — system_server still has to persist it, with no
+                            // public API for this process to wait on that. 400ms wasn't enough
+                            // headroom for that to finish before this process died on at least
+                            // some devices (Samsung's One UI among them) — more headroom here
+                            // costs nothing since the app is about to die either way.
+                            delay(1200)
+                            android.os.Process.killProcess(android.os.Process.myPid())
+                        }
+                    } else {
+                        android.widget.Toast.makeText(
+                            settingsContext,
+                            "This device blocked the icon switch. If DropPin Vault was sideloaded, check Settings > Apps > DropPin Vault > (⋮) menu for \"Allow restricted settings,\" then try again.",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
                     }
                 }) {
                     Text("Change Icon", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
@@ -1729,31 +1686,17 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QuickPinSettingsContent(prefs: SharedPreferences) {
     var showInstantActionsRow by remember { mutableStateOf(prefs.getBoolean("show_instant_actions_row", true)) }
     var quickPinAutoClose by remember { mutableStateOf(prefs.getBoolean("quick_pin_auto_close", true)) }
     var quickPinAutoPhoto by remember { mutableStateOf(prefs.getBoolean("quick_pin_auto_photo", false)) }
     var quickTrackAutoPhoto by remember { mutableStateOf(prefs.getBoolean("quick_track_auto_photo", false)) }
-    var quickPinNamingFormat by remember { mutableStateOf(prefs.getString("quick_pin_naming_format", "datetime") ?: "datetime") }
-    var namingExpanded by remember { mutableStateOf(false) }
-    // "Category" was retired from these labels — this only ever controlled whether the Quick
-    // Pin's own label (e.g. "Parking", "Restroom") was followed by a date/time, coordinates, or
-    // nothing else in the auto-generated title; it never had anything to do with the old
-    // category system.
-    val namingOptions = listOf(
-        "datetime" to "Label - Date & Time",
-        "coordinates" to "Label - Coordinates",
-        "label_only" to "Label Only"
-    )
-    val currentNamingLabel = namingOptions.firstOrNull { it.first == quickPinNamingFormat }?.second
-        ?: "Label - Date & Time"
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SettingsSectionCard(
             title = "Quick-Pin Behavior",
-            subtitle = "Tactical quick-save sheet and auto-naming"
+            subtitle = "Tactical quick-save sheet"
         ) {
             SettingsToggleRow(
                 title = "Auto-Close After Save",
@@ -1763,46 +1706,6 @@ fun QuickPinSettingsContent(prefs: SharedPreferences) {
                     quickPinAutoClose = it
                     prefs.edit().putBoolean("quick_pin_auto_close", it).apply()
                 }
-            )
-            ExposedDropdownMenuBox(
-                expanded = namingExpanded,
-                onExpandedChange = { namingExpanded = it }
-            ) {
-                OutlinedTextField(
-                    value = currentNamingLabel,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Auto-Pin Naming") },
-                    trailingIcon = {
-                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = namingExpanded)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(type = MenuAnchorType.PrimaryNotEditable, enabled = true)
-                )
-                DropdownMenu(
-                    expanded = namingExpanded,
-                    onDismissRequest = { namingExpanded = false },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    namingOptions.forEach { (value, optionLabel) ->
-                        DropdownMenuItem(
-                            text = { Text(optionLabel) },
-                            onClick = {
-                                quickPinNamingFormat = value
-                                prefs.edit().putString("quick_pin_naming_format", value).apply()
-                                namingExpanded = false
-                            }
-                        )
-                    }
-                }
-            }
-            Text(
-                "Only applies to your custom Quick Pins from the Manage sheet — the plain Quick Pin and Quick Track buttons always use your street address instead.",
-                color = SpotVaultColors.Muted,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-                modifier = Modifier.padding(top = 6.dp)
             )
         }
 
@@ -2043,48 +1946,6 @@ fun TimerSettingsContent(
                     AppSounds.previewVaultSound(settingsContext, id)
                 }
             )
-        }
-    }
-}
-
-/** Auto lets the app keep picking readable text by luminance; White/Black force it — for when
- * a wheel-picked color makes the auto choice look wrong. */
-@Composable
-private fun TextColorModeRow(
-    label: String,
-    mode: String,
-    onModeChange: (String) -> Unit
-) {
-    Column(modifier = Modifier.padding(top = 8.dp)) {
-        Text(label, color = SpotVaultColors.Muted, fontSize = 13.sp)
-        Row(
-            modifier = Modifier
-                .padding(top = 4.dp)
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf("auto" to "Auto", "white" to "White", "black" to "Black").forEach { (value, text) ->
-                val selected = mode == value
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(if (selected) SpotVaultColors.Teal.copy(alpha = 0.16f) else SpotVaultColors.Elevated.copy(alpha = 0.6f))
-                        .border(
-                            width = if (selected) 1.5.dp else 1.dp,
-                            color = if (selected) SpotVaultColors.Teal else SpotVaultColors.Outline.copy(alpha = 0.4f),
-                            shape = RoundedCornerShape(999.dp)
-                        )
-                        .clickable { onModeChange(value) }
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
-                ) {
-                    Text(
-                        text,
-                        fontSize = 12.sp,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (selected) SpotVaultColors.Teal else SpotVaultColors.OnSurface
-                    )
-                }
-            }
         }
     }
 }
@@ -2857,103 +2718,38 @@ fun DataSettingsContent(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun HelpGuideSettingsContent() {
-    data class HelpItem(val icon: androidx.compose.ui.graphics.vector.ImageVector, val question: String, val answer: String)
-
-    val topics = listOf(
-        "Getting Started" to listOf(
-            HelpItem(Icons.Default.CameraAlt, "Snap", "Takes a photo and saves your exact location together — the fastest way to remember a spot you'll want to find again. Reads any visible text in the photo automatically (OCR) so it's searchable later."),
-            HelpItem(Icons.Default.LocationOn, "Pin", "Saves your location without a photo, if you just need the spot marked quickly."),
-            HelpItem(Icons.Default.Inventory2, "The Vault", "Every spot you've saved lives here — searchable, filterable, sortable, and organized by date. Switch between list and grid view from the toolbar."),
-            HelpItem(Icons.Default.FlashOn, "Quick Pin & Quick Track (home screen)", "Two one-tap buttons on the home screen for when you're in a hurry — Quick Pin saves your spot immediately with no dialog, Quick Track does the same but also starts an active tracking timer with a persistent notification. Both also work from the home-screen widget."),
-            HelpItem(Icons.Default.Share, "Share button (Snap/Pin confirmation)", "The small share button next to Pin on the Snap/Pin confirmation screen shares your current location as text — or with the photo attached, if you got there via Snap — without needing to finish saving the pin first."),
-            HelpItem(Icons.Default.Mic, "Voice input", "Tap the microphone icon on any text field — tags, notes, titles, and more — to dictate instead of typing.")
-        ),
-        "Quick Pins" to listOf(
-            HelpItem(Icons.Default.PushPin, "Quick Pin", "One-tap silent save at your current location — no camera, no dialog. Great for marking something fast while you're moving."),
-            HelpItem(Icons.Default.NotificationsActive, "Quick Track", "Same one-tap save, but keeps a persistent notification reminding you to find your way back — tap \"Found\" once you're there, or navigate straight to it with the Navigate or Compass button."),
-            HelpItem(Icons.Default.Edit, "Managing your pins", "Tap \"Manage\" inside the Quick-Pin sheet to add your own custom pins with any emoji, reorder them, or delete ones you don't use."),
-            HelpItem(Icons.Default.FormatSize, "Auto-naming format", "Choose how new pins get titled by default in Quick-Pin Behavior settings — by label and date/time, label and coordinates, or label only.")
-        ),
-        "The Vault" to listOf(
-            HelpItem(Icons.Default.FilterList, "Filtering", "Favorites and your most-used tags show as quick chips right above your spots — tap the filter icon next to them for the full tag cloud with search, or to switch to filtering by vehicle instead."),
-            HelpItem(Icons.Default.GridView, "List vs. Grid view", "Switch between a scrollable list and a two-column photo grid from the toolbar above your spots — pick whichever you scan faster."),
-            HelpItem(Icons.Default.Star, "Favorites", "Swipe or tap the star on any spot to favorite it — favorites are protected from Auto Delete and easy to filter to."),
-            HelpItem(Icons.Default.Map, "Browse by Location", "Tap the map icon above your spots to see every saved pin plotted on a map, grouped by state/region and city — each entry has the same ⋮ menu (edit, share, add photo, edit tags, favorite) as the main Vault list."),
-            HelpItem(Icons.Default.DateRange, "Browse by Calendar", "Tap the calendar icon to jump to any day you've saved spots on and see just that day's results — tap the month/year at the top to jump further back."),
-            HelpItem(Icons.Default.Sell, "Tags", "Assign any number of tags to a spot from its ⋮ menu — type to reuse an existing tag or create a new one. Rename or delete tags globally from Settings → Vault → Manage Tags."),
-            HelpItem(Icons.Default.Edit, "Editing a spot", "Tap Edit from a spot's ⋮ menu or its full-screen photo view to change its title, date, city, state, or notes."),
-            HelpItem(Icons.Default.History, "Recently Deleted", "Deleted spots land here first, not gone for good — restore them or clear them out permanently whenever you're ready."),
-            HelpItem(Icons.Default.AutoDelete, "Auto Delete", "Turn on Auto Delete (in Vault settings, or the pill next to Recently Deleted) to automatically move spots older than a timeframe you pick into Recently Deleted. Favorites and archived spots are never touched."),
-            HelpItem(Icons.Default.Archive, "Archive", "Hide a spot from the main Vault without deleting it — archived spots are kept forever, never shown in Auto Delete, and won't be touched by Clear All Vault Data. Archive a spot from its ⋮ menu, and view or restore archived spots from Settings → Vault → Archived Spots."),
-            HelpItem(Icons.Default.Inventory2, "Vault Snapshot", "A quick stat card at the top of Vault settings showing your total saved spots and current active theme.")
-        ),
-        "Vehicles & Automatic Parking" to listOf(
-            HelpItem(Icons.Default.DirectionsCar, "Vehicles", "Add each of your vehicles with its own name, color, and icon, and link it to that car's Bluetooth so DropPin Vault knows which vehicle just disconnected."),
-            HelpItem(Icons.Default.Bluetooth, "Automatic Parking", "When your phone disconnects from a linked vehicle's Bluetooth, DropPin Vault automatically saves a parking pin and starts active tracking — even if the app isn't open. Turn it on in Automatic Parking settings."),
-            HelpItem(Icons.AutoMirrored.Filled.DirectionsWalk, "Motion & Fitness", "An extra layer on top of Automatic Parking — while connected to a linked car's Bluetooth, DropPin Vault watches for the moment you start walking away and caches a precise fix right then, for a more accurate pin than waiting for Bluetooth to fully disconnect."),
-            HelpItem(Icons.Default.LocationOn, "Quiet Zones", "Mark areas like home or work as Quiet Zones so Automatic Parking skips saving there entirely, or saves silently without a notification."),
-            HelpItem(Icons.Default.Bluetooth, "Home screen toggles", "Two small buttons near the top of the home screen let you flip Automatic Parking and Motion & Fitness on or off at a glance, with a link to their full settings.")
-        ),
-        "Security & Backup" to listOf(
-            HelpItem(Icons.Default.Lock, "App Lock", "Require your fingerprint, face, or device PIN before DropPin Vault opens — turn it on under Security in Backup, Data & Privacy settings."),
-            HelpItem(Icons.Default.Storage, "Manual Backup", "Export your entire vault — every spot, photo, and note — to a single .zip file you control, and import it back on this device or a new one at any time."),
-            HelpItem(Icons.Default.Storage, "Scheduled Local Backup", "Point DropPin Vault at a folder and it'll keep a fresh backup there automatically on a schedule you choose, no manual exports needed."),
-            HelpItem(Icons.Default.CloudDone, "Cloud Sync (Google Drive)", "The frictionless, no-folder-to-pick option — connect once (during onboarding or from Settings → Data → Cloud Sync) and DropPin Vault automatically backs itself up weekly to a hidden folder in your own Google Drive, invisible to every other app. If this phone is ever lost, broken, or replaced, connecting the same account on a new one offers to restore it automatically. Entirely optional, and separate from the Manual Backup and Scheduled Local Backup options above — use any combination, or none."),
-            HelpItem(Icons.Default.FileUpload, "GPX Waypoints", "Import waypoints from a GPX file — exported from Garmin, Gaia, or another GPS tool — into your vault. Coordinates and notes only, no photos."),
-            HelpItem(Icons.Default.Delete, "Clear All Vault Data", "A permanent, type-to-confirm wipe of every saved spot and photo — available in both Vault settings and Backup, Data & Privacy. There's no undo, so export a backup first if you're not sure.")
-        ),
-        "Appearance & Themes" to listOf(
-            HelpItem(Icons.Default.Palette, "Color Theme", "Pick from several preset color palettes, or build your own with the color wheel — everything in the app follows whatever you choose. Two presets are free; the rest, plus the custom color wheel, are Premium."),
-            HelpItem(Icons.Default.Palette, "Material You / Dynamic Color", "Premium — extracts real colors from your phone's current wallpaper (Android 12+) and applies them as your theme automatically, the same way your launcher and other Material You apps do."),
-            HelpItem(Icons.Default.Category, "Button Style", "Change the shape of buttons across the app — soft rounded corners, a full pill/capsule shape, cut corners, and more playful options. Premium beyond the default Classic shape."),
-            HelpItem(Icons.Default.Inventory2, "Vault Icon Style", "Pick which animated vault dial shows on your bottom navigation bar. Premium beyond the default Classic style."),
-            HelpItem(Icons.Default.Explore, "Compass Face Style", "Choose the look of the compass dial used on the Compass navigation screen — classic, arrow, dot, sci-fi, and more. Premium beyond the default Classic face."),
-            HelpItem(Icons.Default.Palette, "AMOLED True Black", "Premium — switches dark backgrounds to pure black, which can save real battery on OLED/AMOLED screens."),
-            HelpItem(Icons.Default.Palette, "Reduce Animations", "Premium — minimizes motion across the app for a calmer feel or better performance on older devices."),
-            HelpItem(Icons.Default.FormatSize, "Text Size", "Scale text across the entire app up or down from Compact to Extra Large."),
-            HelpItem(Icons.Default.FormatSize, "Font", "Switch the typeface used everywhere in the app, all built into Android so nothing needs downloading — every option is free."),
-            HelpItem(Icons.Default.Palette, "Background Patterns", "Premium (beyond the default) — the animated pattern behind every screen: gradient mesh, aurora bands, hex tessellation, light leaks, and more."),
-            HelpItem(Icons.Default.Widgets, "App Icon", "Premium (beyond the default) — pick from preset launcher icons."),
-            HelpItem(Icons.Default.FlashOn, "Splash Screen", "Premium (beyond the default) — signal forge, vault door, radar scan, triangulate, beacon wake, vault bloom, haunted gate, and winter gate intros using your chosen app icon."),
-            HelpItem(Icons.Default.CheckCircle, "Found Splash Screen", "Premium (beyond the default) — fireworks, confetti, victory ripples, star burst, champagne pop, All Hallows' Found, and Yuletide Found celebrations when you mark a spot Found from the app or widgets."),
-            HelpItem(Icons.Default.Edit, "Vault Name", "Rename your vault anything you like — it shows on the home screen, splash screen, and widgets.")
-        ),
-        "Sounds & Alerts" to listOf(
-            HelpItem(Icons.Default.Notifications, "Alert Sound", "The tone played when an active-tracking timer expires — pick any ringtone on your device."),
-            HelpItem(Icons.Default.Notifications, "Vibration & Lock Screen", "Control whether timer alerts vibrate, warn you 10 minutes early, and show full details on your lock screen."),
-            HelpItem(Icons.Default.Notifications, "Haptic Feedback", "Premium (beyond the default pattern) — a physical buzz on taps throughout the app. Choose from several distinct feels, or turn it off entirely."),
-            HelpItem(Icons.Default.Notifications, "Custom Sounds", "Real recorded sound effects (not synthesized) for button clicks and for opening the Vault — pick your favorite from several free options for each.")
-        ),
-        "Location & Precision" to listOf(
-            HelpItem(Icons.Default.LocationOn, "High Accuracy GPS", "Uses more battery in exchange for the tightest possible location fix — on by default."),
-            HelpItem(Icons.Default.Map, "Auto-Resolve Addresses", "Automatically turns your saved coordinates into a readable street address."),
-            HelpItem(Icons.Default.LocationOn, "Distance Units", "Show saved spots' distance from you in miles or kilometers throughout the Vault."),
-            HelpItem(Icons.Default.Share, "Sharing a Spot", "Share any saved spot's location — and optionally its photo — through your phone's normal share sheet to any app.")
-        ),
-        "Compass" to listOf(
-            HelpItem(Icons.Default.Explore, "Navigating back to a spot", "Tap the Compass button on an active pin or any saved spot to open a full-screen compass pointing you straight back to it, with live distance and heading."),
-            HelpItem(Icons.Default.Palette, "Compass Face Style", "Change the dial's look in Appearance & Themes — the style you pick there is exactly what shows up here.")
-        ),
-        "Widgets" to listOf(
-            HelpItem(Icons.Default.Widgets, "Everyday Quick Actions widget", "Free — add it from your home screen's widget picker for one-tap Quick Pin, Quick Share, and Quick Track. After Quick Track, the widget switches to Found and Navigate until you clear tracking."),
-            HelpItem(Icons.Default.Widgets, "Vault Favorites widget", "Premium — a scrollable list of every starred spot. Tap any entry to open it in the Vault. Placing this widget without Premium shows an Unlock Premium card instead."),
-            HelpItem(Icons.Default.Sell, "Tag Filter widget", "Premium — pick one or more tags when you add or reconfigure it; the widget shows every saved spot carrying at least one of them, deduplicated, and stays in sync as you add, remove, or retag spots. Placing this widget without Premium shows an Unlock Premium card instead."),
-            HelpItem(Icons.Default.Star, "Premium Dashboard widget", "Premium — a larger widget with your most recent Vault entries (tap to open), Snap/Pin/Share Photo shortcuts, Bluetooth Auto and Motion toggles, and a tracking mode with photo plus Found, Navigate, and Compass."),
-            HelpItem(Icons.Default.Palette, "Widget theming", "Widgets automatically match your in-app color theme and button shape when \"Sync Widget Colors With Theme\" is on in Widget settings."),
-            HelpItem(Icons.Default.FlashOn, "Quick Settings Tiles", "Add a Quick Pin tile (silently saves your current location in one tap) or a Quick Track tile (toggles active tracking, tap again to mark Found) to your phone's Quick Settings (swipe-down) panel — no need to open the app. See Settings → Widgets for how to add either one.")
-        ),
-        "Premium Unlocks" to listOf(
-            HelpItem(Icons.Default.Star, "What's included", "Extra color themes, button styles, vault icons, compass faces, fonts, background patterns, app icons, splash screens, found splash screens, Material You, AMOLED True Black, Reduce Animations, and the full haptic pattern library."),
-            HelpItem(Icons.Default.Star, "Unlocking everything", "One toggle in Premium Unlocks settings unlocks every premium option across the app at once.")
-        )
-    )
-
+fun HelpGuideSettingsContent(
+    highlightTopic: HelpHighlightTarget? = null,
+    onHighlightConsumed: () -> Unit = {}
+) {
     val expandedSections = remember { mutableStateMapOf<String, Boolean>() }
+    val expandedItems = remember { mutableStateMapOf<String, Boolean>() }
+    // Not Compose state on purpose — these are only ever read imperatively from the
+    // highlight-scroll effect below, never observed during composition, so there's nothing to
+    // gain from making writes to it trigger recomposition.
+    val itemRequesters = remember { mutableMapOf<String, BringIntoViewRequester>() }
+    var pulsingKey by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(highlightTopic) {
+        val target = highlightTopic ?: return@LaunchedEffect
+        val itemKey = "${target.section}::${target.question}"
+        expandedSections[target.section] = true
+        expandedItems[itemKey] = true
+        pulsingKey = itemKey
+        // The target row only composes (and registers its BringIntoViewRequester) once its
+        // section's expand animation above actually runs — without a beat to let that happen,
+        // itemRequesters[itemKey] is still null on the very first frame here.
+        kotlinx.coroutines.delay(120)
+        itemRequesters[itemKey]?.bringIntoView()
+        kotlinx.coroutines.delay(1500)
+        if (pulsingKey == itemKey) pulsingKey = null
+        onHighlightConsumed()
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        topics.forEach { (sectionTitle, items) ->
+        HelpTopics.forEach { (sectionTitle, items) ->
             val sectionExpanded = expandedSections[sectionTitle] ?: false
             SettingsSectionCard(
                 title = sectionTitle,
@@ -2963,13 +2759,24 @@ fun HelpGuideSettingsContent() {
                 onExpandChange = { expandedSections[sectionTitle] = !sectionExpanded }
             ) {
                 items.forEach { item ->
-                    var expanded by remember { mutableStateOf(false) }
+                    val itemKey = "$sectionTitle::${item.question}"
+                    val expanded = expandedItems[itemKey] ?: false
+                    val requester = remember(itemKey) { BringIntoViewRequester() }
+                    itemRequesters[itemKey] = requester
+                    val isPulsing = pulsingKey == itemKey
+                    val highlightAlpha by animateFloatAsState(
+                        targetValue = if (isPulsing) 0.22f else 0f,
+                        animationSpec = tween(if (isPulsing) 200 else 900),
+                        label = "helpItemHighlight"
+                    )
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .bringIntoViewRequester(requester)
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable { expanded = !expanded }
-                            .padding(vertical = 10.dp)
+                            .background(SpotVaultColors.Teal.copy(alpha = highlightAlpha))
+                            .clickable { expandedItems[itemKey] = !expanded }
+                            .padding(vertical = 10.dp, horizontal = 6.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),

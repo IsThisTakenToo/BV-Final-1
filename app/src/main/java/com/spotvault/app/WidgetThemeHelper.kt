@@ -125,21 +125,9 @@ object WidgetThemeHelper {
             surface = colors.surface,
             onSurface = colors.onSurface,
             muted = colors.muted,
-            onPrimary = onPrimaryFor(colors.primary, prefs),
-            onAccent = onAccentFor(colors.accent, prefs)
+            onPrimary = readableOn(colors.primary),
+            onAccent = readableOn(colors.accent)
         )
-    }
-
-    // Button Text Color (Settings > Appearance) applies no matter which color theme is active —
-    // preset or custom — matching SpotVaultColors.OnPrimary/OnTeal in the in-app Compose tree.
-    private fun onPrimaryFor(primary: Int, prefs: SharedPreferences): Int {
-        textModeToArgb(prefs.getString("custom_on_primary_mode", "auto") ?: "auto")?.let { return it }
-        return readableOn(primary)
-    }
-
-    private fun onAccentFor(accent: Int, prefs: SharedPreferences): Int {
-        textModeToArgb(prefs.getString("custom_on_accent_mode", "auto") ?: "auto")?.let { return it }
-        return readableOn(accent)
     }
 
     private fun blendSurface(primary: Int): Int {
@@ -153,12 +141,21 @@ object WidgetThemeHelper {
     fun blendSurfaceForWidget(primary: Int): Int = blendSurface(primary)
     fun readableOnForWidget(color: Int): Int = readableOn(color)
 
+    // Same WCAG contrast-ratio comparison SpotVaultColors.OnPrimary/OnTeal uses in-app (see
+    // relativeLuminance/lightWinsContrast in ThemeColors.kt) — this used to run a completely
+    // different formula (perceptual luma, not WCAG relative luminance) at a different threshold
+    // (0.62, vs a true crossover near 0.18), so a widget button could pick a different text color
+    // than the same theme's in-app button for the exact same background.
+    private val fallbackDarkArgb = 0xFF150030.toInt()
+
     private fun readableOn(color: Int): Int {
-        val r = Color.red(color) / 255f
-        val g = Color.green(color) / 255f
-        val b = Color.blue(color) / 255f
-        val luminance = 0.299f * r + 0.587f * g + 0.114f * b
-        return if (luminance > 0.62f) 0xFF150030.toInt() else Color.WHITE
+        val bgLum = relativeLuminance(Color.red(color) / 255f, Color.green(color) / 255f, Color.blue(color) / 255f)
+        val darkLum = relativeLuminance(
+            Color.red(fallbackDarkArgb) / 255f,
+            Color.green(fallbackDarkArgb) / 255f,
+            Color.blue(fallbackDarkArgb) / 255f
+        )
+        return if (lightWinsContrast(bgLum, 1f, darkLum)) Color.WHITE else fallbackDarkArgb
     }
 
     private fun setBackgroundColor(views: RemoteViews, viewId: Int, color: Int) {

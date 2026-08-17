@@ -78,11 +78,11 @@ import kotlinx.coroutines.delay
 enum class FoundSplashStyle(val id: String, val label: String, val description: String) {
     NONE("none", "None", "Skip the celebration screen — marking Found just closes silently"),
     CLASSIC("classic", "Classic", "The polished card with a teal check — clean and satisfying"),
-    FIREWORKS("fireworks", "Fireworks", "A full night-sky show — rockets, shockwaves, and glittering cascades"),
-    CONFETTI("confetti", "Confetti", "Dual cannons, streamers, and a mid-air confetti explosion"),
+    FIREWORKS("fireworks", "Fireworks", "Nightfall descends, rockets streak upward, margin bursts bloom in color, willow embers cascade, and stardust lingers"),
+    CONFETTI("confetti", "Confetti", "Spotlights ignite, dual cannons salvo, streamers arc overhead, airbursts cascade at the margins, and a golden confetti storm rains down"),
     VICTORY_RIPPLE("victory_ripple", "Victory Ripple", "Sacred geometry, shock rings, and pillar beams of light"),
     STAR_BURST("star_burst", "Star Burst", "Counter-rotating nova rays, comets, and orbiting stars"),
-    CHAMPAGNE_POP("champagne_pop", "Champagne Pop", "A cork pops and golden bubbles rise in a fizzy celebration"),
+    CHAMPAGNE_POP("champagne_pop", "Champagne Pop", "Velvet light falls, the cork launches in a golden burst, fizz erupts at the margins, and bubbles rise in a celebratory toast"),
     HALLOWEEN("halloween", "All Hallows' Found", "A moonlit séance — cobweb arches, spirit rings, and jack-o'-lantern triumph"),
     CHRISTMAS("christmas", "Yuletide Found", "An aurora vigil — North Star pillar, snowflake rings, and gift-box triumph");
 
@@ -115,11 +115,11 @@ fun loadFoundSplashSubtitleFromPrefs(prefs: SharedPreferences): String =
 fun FoundSplashStyle.effectDurationMillis(): Long = when (this) {
     FoundSplashStyle.NONE -> 0L
     FoundSplashStyle.CLASSIC -> 1980L
-    FoundSplashStyle.FIREWORKS -> 2800L
-    FoundSplashStyle.CONFETTI -> 2650L
+    FoundSplashStyle.FIREWORKS -> 3000L
+    FoundSplashStyle.CONFETTI -> 2900L
     FoundSplashStyle.VICTORY_RIPPLE -> 2550L
     FoundSplashStyle.STAR_BURST -> 2750L
-    FoundSplashStyle.CHAMPAGNE_POP -> 2600L
+    FoundSplashStyle.CHAMPAGNE_POP -> 2900L
     FoundSplashStyle.HALLOWEEN -> 3000L
     FoundSplashStyle.CHRISTMAS -> 3000L
 }
@@ -127,11 +127,11 @@ fun FoundSplashStyle.effectDurationMillis(): Long = when (this) {
 private fun FoundSplashStyle.previewProgress(): Float = when (this) {
     FoundSplashStyle.NONE -> 0.65f
     FoundSplashStyle.CLASSIC -> 0.65f
-    FoundSplashStyle.FIREWORKS -> 0.48f
+    FoundSplashStyle.FIREWORKS -> 0.52f
     FoundSplashStyle.CONFETTI -> 0.52f
     FoundSplashStyle.VICTORY_RIPPLE -> 0.44f
     FoundSplashStyle.STAR_BURST -> 0.50f
-    FoundSplashStyle.CHAMPAGNE_POP -> 0.56f
+    FoundSplashStyle.CHAMPAGNE_POP -> 0.54f
     FoundSplashStyle.HALLOWEEN -> 0.52f
     FoundSplashStyle.CHRISTMAS -> 0.52f
 }
@@ -162,11 +162,11 @@ private fun foundCardScale(style: FoundSplashStyle, progress: Float): Float {
     val reveal = when (style) {
         FoundSplashStyle.NONE -> ((progress - 0.05f) / 0.35f).coerceIn(0f, 1f)
         FoundSplashStyle.CLASSIC -> ((progress - 0.05f) / 0.35f).coerceIn(0f, 1f)
-        FoundSplashStyle.FIREWORKS -> ((progress - 0.22f) / 0.34f).coerceIn(0f, 1f)
-        FoundSplashStyle.CONFETTI -> ((progress - 0.16f) / 0.32f).coerceIn(0f, 1f)
+        FoundSplashStyle.FIREWORKS -> ((progress - 0.36f) / 0.34f).coerceIn(0f, 1f)
+        FoundSplashStyle.CONFETTI -> ((progress - 0.36f) / 0.34f).coerceIn(0f, 1f)
         FoundSplashStyle.VICTORY_RIPPLE -> ((progress - 0.26f) / 0.36f).coerceIn(0f, 1f)
         FoundSplashStyle.STAR_BURST -> ((progress - 0.20f) / 0.34f).coerceIn(0f, 1f)
-        FoundSplashStyle.CHAMPAGNE_POP -> ((progress - 0.24f) / 0.34f).coerceIn(0f, 1f)
+        FoundSplashStyle.CHAMPAGNE_POP -> ((progress - 0.36f) / 0.34f).coerceIn(0f, 1f)
         FoundSplashStyle.HALLOWEEN -> ((progress - 0.36f) / 0.34f).coerceIn(0f, 1f)
         FoundSplashStyle.CHRISTMAS -> ((progress - 0.36f) / 0.34f).coerceIn(0f, 1f)
     }
@@ -179,11 +179,11 @@ private fun foundCardAlpha(style: FoundSplashStyle, progress: Float): Float {
     val start = when (style) {
         FoundSplashStyle.NONE -> 0.04f
         FoundSplashStyle.CLASSIC -> 0.04f
-        FoundSplashStyle.FIREWORKS -> 0.20f
-        FoundSplashStyle.CONFETTI -> 0.14f
+        FoundSplashStyle.FIREWORKS -> 0.34f
+        FoundSplashStyle.CONFETTI -> 0.34f
         FoundSplashStyle.VICTORY_RIPPLE -> 0.24f
         FoundSplashStyle.STAR_BURST -> 0.18f
-        FoundSplashStyle.CHAMPAGNE_POP -> 0.22f
+        FoundSplashStyle.CHAMPAGNE_POP -> 0.34f
         FoundSplashStyle.HALLOWEEN -> 0.34f
         FoundSplashStyle.CHRISTMAS -> 0.34f
     }
@@ -420,323 +420,833 @@ fun FoundSplashOverlay(
 @Composable
 private fun FireworksFoundEffect(progress: () -> Float, modifier: Modifier = Modifier) {
     val colors = LocalSpotVaultColors.current
+    val palette = listOf(
+        Color(0xFFFFD54F),
+        colors.Teal,
+        Color(0xFFFF6B9D),
+        colors.PrimaryBright,
+        Color(0xFF81D4FA),
+        Color(0xFFFFAB40),
+        Color.White,
+        Color(0xFFCE93D8)
+    )
     Canvas(modifier = modifier.fillMaxSize()) {
-        // Shadows the outer lambda param with the actual Float value, read fresh on every draw
-        // call rather than once per recomposition — see FoundSplashOverlay's comment for why.
-        // Everything below is otherwise unchanged from before this fix.
         val progress = progress()
         val w = size.width
         val h = size.height
         val minDim = size.minDimension
+        val center = Offset(w / 2f, h / 2f)
+        val nightPhase = smoothStep((progress / 0.16f).coerceIn(0f, 1f))
+        val rocketPhase = smoothStep(((progress - 0.08f) / 0.28f).coerceIn(0f, 1f))
+        val burstPhase = smoothStep(((progress - 0.24f) / 0.42f).coerceIn(0f, 1f))
+        val willowPhase = smoothStep(((progress - 0.38f) / 0.38f).coerceIn(0f, 1f))
+        val stardustPhase = smoothStep(((progress - 0.58f) / 0.38f).coerceIn(0f, 1f))
+        val skyFlicker = 0.82f + 0.18f * sin(progress * PI.toFloat() * 5.5f)
 
-        // Night-sky wash
+        // Act I — nightfall sky
         drawRect(
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    Color(0xFF0A0E1A).copy(alpha = 0.55f),
-                    Color(0xFF141028).copy(alpha = 0.35f),
+                    Color(0xFF060812).copy(alpha = 0.75f * nightPhase),
+                    Color(0xFF0A0E1A).copy(alpha = 0.55f * nightPhase),
+                    Color(0xFF141028).copy(alpha = 0.28f * nightPhase),
                     Color.Transparent
                 ),
                 startY = 0f,
-                endY = h * 0.75f
+                endY = h * 0.82f
             )
         )
-
-        // Distant twinkle stars
-        for (s in 0 until 24) {
-            val sx = (s * 73.7f) % w
-            val sy = (s * 41.3f) % (h * 0.45f)
-            val twinkle = (sin(progress * PI.toFloat() * 4f + s * 1.7f) * 0.5f + 0.5f)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    Color(0xFF1A1028).copy(alpha = 0.12f * nightPhase),
+                    Color(0xFF0A0610).copy(alpha = 0.20f * nightPhase)
+                ),
+                startY = h * 0.72f,
+                endY = h
+            )
+        )
+        for (s in 0 until 28) {
+            val sx = (s * 73.7f + 11f) % w
+            val sy = (s * 41.3f + 7f) % (h * 0.42f)
+            val twinkle = sin(progress * PI.toFloat() * (3.5f + s * 0.15f) + s * 1.7f) * 0.5f + 0.5f
             drawCircle(
-                color = Color.White.copy(alpha = 0.15f + twinkle * 0.35f),
-                radius = 1.2f + (s % 3) * 0.6f,
+                color = Color.White.copy(alpha = nightPhase * (0.12f + twinkle * 0.38f)),
+                radius = 1f + (s % 3) * 0.6f,
                 center = Offset(sx, sy)
             )
         }
-
-        val palette = listOf(
-            Color(0xFFFFD54F),
-            colors.Teal,
-            Color(0xFFFF6B9D),
-            colors.PrimaryBright,
-            Color(0xFF81D4FA),
-            Color(0xFFFFAB40),
-            Color.White
-        )
-
-        // Ascending rocket trails before bursts
-        val rockets = listOf(
-            Triple(0.18f, 0.08f, 0.04f),
-            Triple(0.52f, 0.06f, 0.10f),
-            Triple(0.82f, 0.09f, 0.16f)
-        )
-        rockets.forEach { (nx, peak, launchAt) ->
-            val local = ((progress - launchAt) / 0.14f).coerceIn(0f, 1f)
-            if (local <= 0f || local >= 1f) return@forEach
-            val x = w * nx
-            val y = h * (0.92f - local * peak)
-            drawLine(
-                brush = Brush.verticalGradient(
-                    colors = listOf(Color.White.copy(alpha = 0.9f), Color.Transparent),
-                    startY = y,
-                    endY = y + minDim * 0.08f
+        if (nightPhase > 0.3f) {
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        colors.Teal.copy(alpha = nightPhase * 0.06f * skyFlicker),
+                        colors.PrimaryBright.copy(alpha = nightPhase * 0.05f * skyFlicker),
+                        Color.Transparent
+                    ),
+                    startX = 0f,
+                    endX = w
                 ),
-                start = Offset(x, y),
-                end = Offset(x, y + minDim * 0.08f),
-                strokeWidth = 2.5f,
-                cap = StrokeCap.Round
+                topLeft = Offset(0f, h * 0.04f),
+                size = Size(w, minDim * 0.08f)
             )
-            drawCircle(color = Color.White, radius = 3f, center = Offset(x, y))
         }
 
-        // Main firework bursts — staggered, multi-layer
-        val bursts = listOf(
-            Triple(0.20f, 0.26f, 0.18f),
-            Triple(0.78f, 0.24f, 0.24f),
-            Triple(0.50f, 0.16f, 0.30f),
-            Triple(0.32f, 0.50f, 0.36f),
-            Triple(0.68f, 0.46f, 0.42f),
-            Triple(0.44f, 0.34f, 0.48f),
-            Triple(0.58f, 0.58f, 0.54f),
-            Triple(0.26f, 0.38f, 0.60f)
+        // Act II — ascending rockets (launch from bottom margins toward burst sites)
+        val rocketFlights = listOf(
+            Triple(0.14f, 0.14f, 0.04f),
+            Triple(0.86f, 0.12f, 0.08f),
+            Triple(0.22f, 0.20f, 0.12f),
+            Triple(0.78f, 0.18f, 0.16f),
+            Triple(0.10f, 0.40f, 0.20f),
+            Triple(0.90f, 0.38f, 0.24f),
+            Triple(0.50f, 0.10f, 0.10f),
+            Triple(0.18f, 0.62f, 0.28f),
+            Triple(0.82f, 0.58f, 0.32f)
         )
-        bursts.forEachIndexed { index, (nx, ny, delay) ->
-            val local = ((progress - delay) / 0.38f).coerceIn(0f, 1f)
+        if (rocketPhase > 0f) {
+            rocketFlights.forEachIndexed { index, (targetX, targetY, launchAt) ->
+                val local = smoothStep(((rocketPhase - launchAt) / 0.22f).coerceIn(0f, 1f))
+                if (local <= 0f || local >= 0.98f) return@forEachIndexed
+                drawFoundFireworkRocket(
+                    start = Offset(w * targetX, h * 0.96f),
+                    end = Offset(w * targetX, h * targetY),
+                    progress = local,
+                    minDim = minDim,
+                    tint = palette[index % palette.size],
+                    flicker = skyFlicker
+                )
+            }
+        }
+
+        // Act III — margin sky bursts (kept off center copy)
+        val burstSites = listOf(
+            Offset(w * 0.14f, h * 0.14f) to 0.04f,
+            Offset(w * 0.86f, h * 0.12f) to 0.10f,
+            Offset(w * 0.22f, h * 0.20f) to 0.16f,
+            Offset(w * 0.78f, h * 0.18f) to 0.22f,
+            Offset(w * 0.10f, h * 0.40f) to 0.28f,
+            Offset(w * 0.90f, h * 0.38f) to 0.34f,
+            Offset(w * 0.50f, h * 0.10f) to 0.14f,
+            Offset(w * 0.18f, h * 0.62f) to 0.40f,
+            Offset(w * 0.82f, h * 0.58f) to 0.46f
+        )
+        burstSites.forEachIndexed { index, (site, delay) ->
+            val local = smoothStep(((burstPhase - delay) / 0.38f).coerceIn(0f, 1f))
             if (local <= 0f) return@forEachIndexed
-            val center = Offset(w * nx, h * ny)
-            val tint = palette[index % palette.size]
-            val fade = (1f - local * 0.92f).coerceIn(0f, 1f)
-            val radius = minDim * 0.26f * smoothStep(local)
-
-            // Expanding shock ring
-            drawCircle(
-                color = tint.copy(alpha = fade * 0.55f),
-                radius = radius * 1.05f,
-                center = center,
-                style = Stroke(width = 2.5f - local * 1.5f)
+            drawFoundFireworkBurst(
+                center = site,
+                phase = local,
+                minDim = minDim,
+                tint = palette[index % palette.size],
+                index = index,
+                style = index % 3,
+                flicker = skyFlicker
             )
+        }
 
-            // Hot core flash
+        // Act IV — willow embers & crackle pops
+        if (willowPhase > 0f) {
+            burstSites.forEachIndexed { index, (site, delay) ->
+                val local = smoothStep(((willowPhase - delay * 0.6f) / 0.72f).coerceIn(0f, 1f))
+                if (local <= 0f) return@forEachIndexed
+                drawFoundFireworkWillow(
+                    origin = site,
+                    phase = local,
+                    minDim = minDim,
+                    tint = palette[(index + 2) % palette.size],
+                    index = index
+                )
+                if (index % 2 == 0 && local > 0.35f) {
+                    val crackle = smoothStep(((local - 0.35f) / 0.55f).coerceIn(0f, 1f))
+                    drawFoundFireworkCrackle(
+                        center = site + Offset(minDim * 0.04f * (index % 3 - 1), minDim * 0.03f),
+                        phase = crackle,
+                        minDim = minDim * 0.55f,
+                        tint = palette[(index + 4) % palette.size],
+                        seed = index
+                    )
+                }
+            }
+        }
+
+        // Act V — stardust afterglow
+        if (stardustPhase > 0f) {
+            for (g in 0 until 32) {
+                val gx = (g * 97f + stardustPhase * 45f) % w
+                val gy = h * (0.08f + (g * 0.033f) % 0.62f) + stardustPhase * 14f
+                val ga = stardustPhase * (1f - g * 0.012f).coerceAtLeast(0.25f) * (0.28f + (g % 5) * 0.10f)
+                drawCircle(
+                    color = Color.White.copy(alpha = ga * skyFlicker),
+                    radius = 1.2f + (g % 3) * 0.7f,
+                    center = Offset(gx, gy)
+                )
+            }
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = fade * 0.95f),
-                        tint.copy(alpha = fade * 0.7f),
+                        colors.PrimaryBright.copy(alpha = stardustPhase * 0.06f * skyFlicker),
+                        colors.Teal.copy(alpha = stardustPhase * 0.04f),
                         Color.Transparent
                     ),
                     center = center,
-                    radius = radius * 0.35f
+                    radius = minDim * 0.40f
                 ),
-                radius = radius * 0.35f,
+                radius = minDim * 0.40f,
                 center = center
             )
-
-            // Radiating streaks
-            val streakCount = 36
-            for (ray in 0 until streakCount) {
-                val angle = (ray * (360f / streakCount) + index * 11f) * PI.toFloat() / 180f
-                val len = radius * (0.65f + (ray % 3) * 0.12f)
-                val tail = center + Offset(cos(angle), sin(angle)) * len
-                drawLine(
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = fade * 0.85f),
-                            tint.copy(alpha = fade * 0.55f),
-                            Color.Transparent
-                        ),
-                        start = center,
-                        end = tail
-                    ),
-                    start = center,
-                    end = tail,
-                    strokeWidth = if (ray % 3 == 0) 2.8f else 1.6f,
-                    cap = StrokeCap.Round
-                )
-            }
-
-            // Gravity-falling embers
-            for (spark in 0 until 14) {
-                val baseA = (spark * (360f / 14f) + index * 25f) * PI.toFloat() / 180f
-                val dist = radius * (0.45f + (spark % 4) * 0.12f)
-                val fall = local * local * minDim * 0.12f
-                val sparkPos = center + Offset(cos(baseA), sin(baseA)) * dist + Offset(0f, fall)
-                drawCircle(
+            for (wisp in 0 until 6) {
+                val wx = w * (0.15f + wisp * 0.14f)
+                val wy = h * (0.72f + sin(progress * PI.toFloat() * 2f + wisp) * 0.02f)
+                drawOval(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = fade * 0.9f),
-                            tint.copy(alpha = fade * 0.5f),
+                            Color(0xFF3A3A48).copy(alpha = stardustPhase * 0.12f),
                             Color.Transparent
                         ),
-                        center = sparkPos,
-                        radius = 4f
+                        center = Offset(wx, wy),
+                        radius = minDim * 0.06f
                     ),
-                    radius = 4f - spark * 0.15f,
-                    center = sparkPos
-                )
-            }
-        }
-
-        // Lingering glitter drift
-        if (progress > 0.35f) {
-            val drift = ((progress - 0.35f) / 0.65f).coerceIn(0f, 1f)
-            for (g in 0 until 20) {
-                val gx = (g * 97f + drift * 40f) % w
-                val gy = h * (0.15f + (g * 0.037f) % 0.55f) + drift * 18f
-                val ga = (1f - drift * 0.7f) * (0.3f + (g % 5) * 0.12f)
-                drawCircle(
-                    color = Color.White.copy(alpha = ga),
-                    radius = 1.5f + (g % 3),
-                    center = Offset(gx, gy)
+                    topLeft = Offset(wx - minDim * 0.08f, wy - minDim * 0.025f),
+                    size = Size(minDim * 0.16f, minDim * 0.05f)
                 )
             }
         }
     }
 }
 
+private fun DrawScope.drawFoundFireworkRocket(
+    start: Offset,
+    end: Offset,
+    progress: Float,
+    minDim: Float,
+    tint: Color,
+    flicker: Float
+) {
+    val pos = start + (end - start) * progress
+    drawLine(
+        brush = Brush.linearGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.90f * flicker),
+                tint.copy(alpha = 0.55f),
+                Color.Transparent
+            ),
+            start = pos,
+            end = pos + Offset(0f, minDim * 0.07f)
+        ),
+        start = pos,
+        end = pos + Offset(0f, minDim * 0.07f),
+        strokeWidth = 2.8f,
+        cap = StrokeCap.Round
+    )
+    for (trail in 0 until 4) {
+        val t = progress - trail * 0.06f
+        if (t <= 0f) continue
+        val trailPos = start + (end - start) * t
+        drawCircle(
+            color = tint.copy(alpha = (1f - trail * 0.2f) * 0.45f),
+            radius = 2f - trail * 0.3f,
+            center = trailPos
+        )
+    }
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(Color.White, tint.copy(alpha = 0.85f), Color.Transparent),
+            center = pos,
+            radius = 5f
+        ),
+        radius = 5f,
+        center = pos
+    )
+}
+
+private fun DrawScope.drawFoundFireworkBurst(
+    center: Offset,
+    phase: Float,
+    minDim: Float,
+    tint: Color,
+    index: Int,
+    style: Int,
+    flicker: Float
+) {
+    val fade = (1f - phase * 0.88f).coerceIn(0f, 1f)
+    val radius = minDim * (0.22f + (index % 3) * 0.04f) * smoothStep(phase)
+
+    val flash = ((phase - 0.02f) / 0.12f).coerceIn(0f, 1f)
+    if (flash > 0f) {
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = (1f - flash) * 0.60f),
+                    tint.copy(alpha = (1f - flash) * 0.35f),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = radius * 0.55f
+            ),
+            radius = radius * 0.55f,
+            center = center
+        )
+    }
+
+    for (ring in 0 until 3) {
+        val ringDelay = ring * 0.12f
+        val ringLocal = smoothStep(((phase - ringDelay) / 0.72f).coerceIn(0f, 1f))
+        if (ringLocal <= 0f) continue
+        drawCircle(
+            brush = Brush.sweepGradient(
+                colors = listOf(
+                    tint.copy(alpha = fade * 0.65f * flicker),
+                    Color.White.copy(alpha = fade * 0.55f),
+                    tint.copy(alpha = fade * 0.45f),
+                    tint.copy(alpha = fade * 0.65f * flicker)
+                ),
+                center = center
+            ),
+            radius = radius * (0.85f + ring * 0.12f) * ringLocal,
+            center = center,
+            style = Stroke(width = (3.5f - ring * 0.8f).coerceAtLeast(1.2f))
+        )
+    }
+
+    val streakCount = when (style) {
+        0 -> 40
+        1 -> 24
+        else -> 32
+    }
+    for (ray in 0 until streakCount) {
+        val angle = (ray * (360f / streakCount) + index * 13f + phase * 25f) * PI.toFloat() / 180f
+        val len = radius * when (style) {
+            0 -> 0.70f + (ray % 3) * 0.10f
+            1 -> 0.55f + (ray % 2) * 0.18f
+            else -> 0.62f + sin(ray * 1.7f) * 0.08f
+        }
+        val tail = center + Offset(cos(angle), sin(angle)) * len
+        drawLine(
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = fade * 0.90f),
+                    tint.copy(alpha = fade * 0.60f),
+                    Color.Transparent
+                ),
+                start = center,
+                end = tail
+            ),
+            start = center,
+            end = tail,
+            strokeWidth = if (ray % 3 == 0) 3f else 1.6f,
+            cap = StrokeCap.Round
+        )
+    }
+
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = fade * 0.95f * flicker),
+                tint.copy(alpha = fade * 0.75f),
+                Color.Transparent
+            ),
+            center = center,
+            radius = radius * 0.28f
+        ),
+        radius = radius * 0.28f,
+        center = center
+    )
+}
+
+private fun DrawScope.drawFoundFireworkWillow(
+    origin: Offset,
+    phase: Float,
+    minDim: Float,
+    tint: Color,
+    index: Int
+) {
+    for (strand in 0 until 10) {
+        val baseAngle = (strand * (360f / 10f) + index * 20f) * PI.toFloat() / 180f
+        val path = Path()
+        var started = false
+        for (step in 0..14) {
+            val t = step / 14f * phase
+            val dist = minDim * 0.18f * t
+            val droop = t * t * minDim * 0.14f
+            val point = origin + Offset(cos(baseAngle) * dist, sin(baseAngle) * dist * 0.35f + droop)
+            if (!started) {
+                path.moveTo(point.x, point.y)
+                started = true
+            } else {
+                path.lineTo(point.x, point.y)
+            }
+        }
+        if (started) {
+            drawPath(
+                path,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        tint.copy(alpha = (1f - phase * 0.5f) * 0.65f),
+                        tint.copy(alpha = (1f - phase) * 0.25f)
+                    ),
+                    start = origin,
+                    end = origin + Offset(0f, minDim * 0.18f)
+                ),
+                style = Stroke(width = 1.8f, cap = StrokeCap.Round)
+            )
+        }
+        val tipT = phase
+        val tipDist = minDim * 0.18f * tipT
+        val tipDroop = tipT * tipT * minDim * 0.14f
+        val tip = origin + Offset(cos(baseAngle) * tipDist, sin(baseAngle) * tipDist * 0.35f + tipDroop)
+        drawCircle(
+            color = Color.White.copy(alpha = (1f - phase * 0.6f) * 0.70f),
+            radius = 2.2f,
+            center = tip
+        )
+    }
+}
+
+private fun DrawScope.drawFoundFireworkCrackle(
+    center: Offset,
+    phase: Float,
+    minDim: Float,
+    tint: Color,
+    seed: Int
+) {
+    for (spark in 0 until 12) {
+        val angle = (spark * 30f + seed * 17f) * PI.toFloat() / 180f
+        val dist = minDim * 0.12f * phase
+        val pos = center + Offset(cos(angle), sin(angle)) * dist
+        drawCircle(
+            color = tint.copy(alpha = (1f - phase) * 0.85f),
+            radius = 2f + (spark % 2),
+            center = pos
+        )
+    }
+}
+
 @Composable
 private fun ConfettiFoundEffect(progress: () -> Float, modifier: Modifier = Modifier) {
     val colors = LocalSpotVaultColors.current
+    val confettiPalette = listOf(
+        colors.Teal,
+        colors.PrimaryBright,
+        Color(0xFFFFD54F),
+        Color(0xFFFF6B9D),
+        Color(0xFF81C784),
+        Color(0xFFCE93D8),
+        Color.White,
+        Color(0xFFFFAB40),
+        Color(0xFF4DD0E1)
+    )
     Canvas(modifier = modifier.fillMaxSize()) {
         val progress = progress()
         val w = size.width
         val h = size.height
         val minDim = size.minDimension
-        val confettiColors = listOf(
-            colors.Teal,
-            colors.PrimaryBright,
-            Color(0xFFFFD54F),
-            Color(0xFFFF6B9D),
-            Color(0xFF81C784),
-            Color(0xFFCE93D8),
-            Color.White,
-            Color(0xFFFFAB40)
+        val center = Offset(w / 2f, h / 2f)
+        val spotPhase = smoothStep((progress / 0.16f).coerceIn(0f, 1f))
+        val cannonPhase = smoothStep(((progress - 0.08f) / 0.26f).coerceIn(0f, 1f))
+        val streamerPhase = smoothStep(((progress - 0.18f) / 0.32f).coerceIn(0f, 1f))
+        val burstPhase = smoothStep(((progress - 0.32f) / 0.38f).coerceIn(0f, 1f))
+        val rainPhase = smoothStep(((progress - 0.22f) / 0.72f).coerceIn(0f, 1f))
+        val glowPhase = smoothStep(((progress - 0.58f) / 0.38f).coerceIn(0f, 1f))
+        val partyFlicker = 0.78f + 0.22f * sin(progress * PI.toFloat() * 7f)
+
+        // Act I — arena spotlight & party wash
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFFFF8E1).copy(alpha = 0.14f * spotPhase),
+                    Color(0xFFFFD54F).copy(alpha = 0.08f * spotPhase),
+                    Color.Transparent
+                ),
+                center = Offset(w / 2f, h * 0.08f),
+                radius = minDim * 0.85f
+            ),
+            topLeft = Offset(w / 2f - minDim * 0.85f, 0f),
+            size = Size(minDim * 1.7f, h * 0.55f)
         )
-
-        // Side cannons — angled bursts from bottom corners
-        listOf(0.08f to -1f, 0.92f to 1f).forEach { (startXRatio, side) ->
-            val cannonAt = 0.06f
-            val local = ((progress - cannonAt) / 0.28f).coerceIn(0f, 1f)
-            if (local <= 0f) return@forEach
-            for (c in 0 until 18) {
-                val seed = c + (if (side < 0) 0 else 50)
-                val speed = 0.55f + (c % 5) * 0.08f
-                val angle = (-75f + c * 7f * side) * PI.toFloat() / 180f
-                val dist = minDim * local * speed
-                val origin = Offset(w * startXRatio, h * 0.92f)
-                val pos = origin + Offset(cos(angle) * dist, sin(angle) * dist)
-                val alpha = (1f - local * 0.5f).coerceIn(0.25f, 1f)
-                val tint = confettiColors[(c + 2) % confettiColors.size]
-                val rot = seed * 31f + local * 520f
-
-                rotate(rot, pivot = pos) {
-                    when (c % 4) {
-                        0 -> drawRect(
-                            color = tint.copy(alpha = alpha),
-                            topLeft = Offset(pos.x - 4f, pos.y - 7f),
-                            size = Size(8f, 14f)
-                        )
-                        1 -> drawCircle(color = tint.copy(alpha = alpha), radius = 5f, center = pos)
-                        2 -> {
-                            val streamerLen = 22f + (c % 3) * 8f
-                            drawLine(
-                                brush = Brush.linearGradient(
-                                    listOf(tint.copy(alpha = alpha), tint.copy(alpha = alpha * 0.2f))
-                                ),
-                                start = pos,
-                                end = pos + Offset(side * streamerLen * 0.3f, streamerLen),
-                                strokeWidth = 3f,
-                                cap = StrokeCap.Round
-                            )
-                        }
-                        else -> {
-                            val tri = Path().apply {
-                                moveTo(pos.x, pos.y - 8f)
-                                lineTo(pos.x + 7f, pos.y + 6f)
-                                lineTo(pos.x - 7f, pos.y + 6f)
-                                close()
-                            }
-                            drawPath(tri, color = tint.copy(alpha = alpha))
-                        }
-                    }
-                }
-            }
-        }
-
-        // Mid-air center explosion
-        val burstAt = 0.22f
-        val burstLocal = ((progress - burstAt) / 0.35f).coerceIn(0f, 1f)
-        if (burstLocal > 0f) {
-            val burstCenter = Offset(w / 2f, h * 0.38f)
-            val burstR = minDim * 0.32f * smoothStep(burstLocal)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    Color(0xFF1A1020).copy(alpha = 0.10f * spotPhase),
+                    Color(0xFF120818).copy(alpha = 0.18f * spotPhase)
+                ),
+                startY = h * 0.72f,
+                endY = h
+            )
+        )
+        for (light in 0 until 4) {
+            val sweep = sin(progress * PI.toFloat() * (1.6f + light * 0.3f) + light * 1.4f) * 0.5f + 0.5f
+            val lx = w * (0.12f + light * 0.24f)
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = (1f - burstLocal) * 0.35f),
-                        colors.Teal.copy(alpha = (1f - burstLocal) * 0.2f),
+                        confettiPalette[light % confettiPalette.size].copy(alpha = sweep * 0.10f * spotPhase),
                         Color.Transparent
                     ),
-                    center = burstCenter,
-                    radius = burstR
+                    center = Offset(lx, h * 0.06f),
+                    radius = minDim * 0.18f
                 ),
-                radius = burstR,
-                center = burstCenter
+                radius = minDim * 0.18f,
+                center = Offset(lx, h * 0.06f)
             )
-            for (p in 0 until 28) {
-                val a = (p * 12.857f + burstLocal * 60f) * PI.toFloat() / 180f
-                val dist = burstR * (0.4f + (p % 5) * 0.14f)
-                val pos = burstCenter + Offset(cos(a), sin(a)) * dist
-                val alpha = (1f - burstLocal * 0.65f).coerceIn(0.2f, 1f)
-                rotate(p * 40f + burstLocal * 200f, pivot = pos) {
-                    drawRect(
-                        color = confettiColors[p % confettiColors.size].copy(alpha = alpha),
-                        topLeft = Offset(pos.x - 3.5f, pos.y - 6f),
-                        size = Size(7f, 12f)
+        }
+
+        // Act II — dual corner cannons
+        if (cannonPhase > 0f) {
+            listOf(0.07f to -1f, 0.93f to 1f).forEach { (xRatio, side) ->
+                drawFoundConfettiCannon(
+                    origin = Offset(w * xRatio, h * 0.94f),
+                    side = side,
+                    phase = cannonPhase,
+                    minDim = minDim,
+                    accent = colors.PrimaryBright,
+                    flicker = partyFlicker
+                )
+            }
+            listOf(0.07f to -1f, 0.93f to 1f).forEach { (xRatio, side) ->
+                val volley = smoothStep(((cannonPhase - 0.12f) / 0.78f).coerceIn(0f, 1f))
+                if (volley <= 0f) return@forEach
+                for (piece in 0 until 14) {
+                    val seed = piece + if (side < 0) 0 else 40
+                    val angle = (-68f + piece * 9f * side) * PI.toFloat() / 180f
+                    val dist = minDim * volley * (0.42f + (piece % 4) * 0.10f)
+                    val origin = Offset(w * xRatio, h * 0.90f)
+                    val pos = origin + Offset(cos(angle) * dist, sin(angle) * dist)
+                    drawFoundConfettiPiece(
+                        pos = pos,
+                        rotation = seed * 37f + volley * 480f,
+                        shape = piece % 5,
+                        tint = confettiPalette[(piece + 1) % confettiPalette.size],
+                        alpha = (1f - volley * 0.45f).coerceIn(0.3f, 1f) * partyFlicker,
+                        scale = 0.9f + (piece % 3) * 0.15f
                     )
                 }
             }
         }
 
-        // Continuous celebratory rain
-        for (i in 0 until 64) {
-            val seed = i * 13.7f
-            val delay = (i % 12) * 0.018f
-            val local = ((progress - delay) / 0.88f).coerceIn(0f, 1f)
-            if (local <= 0f) continue
-            val fall = local * local
-            val sway = sin(local * PI.toFloat() * 4f + seed) * minDim * 0.04f
-            val x = (seed * 47f % w) + sway
-            val y = -minDim * 0.05f + fall * h * 1.05f
-            val rotation = seed * 2.3f + local * 680f
-            val alpha = (1f - local * 0.4f).coerceIn(0.15f, 1f)
-            val tint = confettiColors[i % confettiColors.size]
-            val shape = i % 5
-
-            rotate(rotation, pivot = Offset(x, y)) {
-                when (shape) {
-                    0 -> drawRect(
-                        color = tint.copy(alpha = alpha),
-                        topLeft = Offset(x - 3f, y - 5f),
-                        size = Size(6f + (i % 3), 10f + (i % 4))
-                    )
-                    1 -> drawCircle(color = tint.copy(alpha = alpha), radius = 4f + (i % 3), center = Offset(x, y))
-                    2 -> drawLine(
-                        color = tint.copy(alpha = alpha),
-                        start = Offset(x, y),
-                        end = Offset(x + sin(seed) * 8f, y + 24f),
-                        strokeWidth = 2.5f,
-                        cap = StrokeCap.Round
-                    )
-                    3 -> drawPath(
-                        drawFivePointStar(Offset(x, y), 6f + (i % 3), 2.8f),
-                        color = tint.copy(alpha = alpha)
-                    )
-                    else -> drawRect(
-                        brush = Brush.linearGradient(listOf(Color.White.copy(alpha = alpha), tint.copy(alpha = alpha * 0.7f))),
-                        topLeft = Offset(x - 4f, y - 4f),
-                        size = Size(8f, 8f)
+        // Act III — overhead streamer cathedral (high, away from copy)
+        if (streamerPhase > 0f) {
+            listOf(-1f, 1f).forEach { side ->
+                drawFoundConfettiStreamerArc(
+                    start = Offset(w * (0.5f + side * 0.46f), h * 0.94f),
+                    apex = Offset(w * (0.5f + side * 0.08f), h * 0.10f),
+                    end = Offset(w * (0.5f - side * 0.38f), h * 0.18f),
+                    phase = streamerPhase,
+                    tint = confettiPalette[if (side < 0) 2 else 6],
+                    side = side
+                )
+            }
+            for (ribbon in 0 until 6) {
+                val delay = ribbon * 0.08f
+                val local = smoothStep(((streamerPhase - delay) / 0.72f).coerceIn(0f, 1f))
+                if (local <= 0f) continue
+                val side = if (ribbon % 2 == 0) -1f else 1f
+                val path = Path()
+                var started = false
+                for (step in 0..24) {
+                    val t = step / 24f * local
+                    val x = w * (0.5f + side * (0.42f - t * 0.34f))
+                    val y = h * (0.88f - t * 0.72f) + sin(t * PI.toFloat() * 3f + ribbon) * minDim * 0.04f
+                    val point = Offset(x, y)
+                    if (!started) {
+                        path.moveTo(point.x, point.y)
+                        started = true
+                    } else {
+                        path.lineTo(point.x, point.y)
+                    }
+                }
+                if (started) {
+                    drawPath(
+                        path,
+                        brush = Brush.linearGradient(
+                            colors = listOf(
+                                confettiPalette[ribbon % confettiPalette.size].copy(alpha = local * 0.85f),
+                                Color.White.copy(alpha = local * 0.55f),
+                                confettiPalette[(ribbon + 3) % confettiPalette.size].copy(alpha = local * 0.35f)
+                            ),
+                            start = Offset(w * 0.5f, h * 0.88f),
+                            end = Offset(w * (0.5f + side * 0.08f), h * 0.12f)
+                        ),
+                        style = Stroke(width = 4.5f - ribbon * 0.3f, cap = StrokeCap.Round)
                     )
                 }
             }
+        }
+
+        // Act IV — margin airbursts (kept off center copy)
+        val burstSites = listOf(
+            Offset(w * 0.50f, h * 0.14f) to 1.0f,
+            Offset(w * 0.16f, h * 0.12f) to 0.82f,
+            Offset(w * 0.84f, h * 0.12f) to 0.82f,
+            Offset(w * 0.10f, h * 0.78f) to 0.70f,
+            Offset(w * 0.90f, h * 0.78f) to 0.70f
+        )
+        burstSites.forEachIndexed { index, (site, scale) ->
+            val delay = index * 0.07f
+            val local = smoothStep(((burstPhase - delay) / 0.72f).coerceIn(0f, 1f))
+            if (local <= 0f) return@forEachIndexed
+            drawFoundConfettiBurst(
+                center = site,
+                phase = local,
+                minDim = minDim * scale,
+                palette = confettiPalette,
+                index = index,
+                flicker = partyFlicker
+            )
+        }
+
+        // Act V — layered confetti rain (foreground, mid, background)
+        if (rainPhase > 0f) {
+            for (layer in 0 until 3) {
+                val layerScale = 0.65f + layer * 0.22f
+                val layerAlpha = 0.45f + layer * 0.22f
+                val count = if (layer == 2) 48 else if (layer == 1) 36 else 28
+                for (i in 0 until count) {
+                    val seed = i + layer * 100
+                    val delay = (i % 10) * 0.022f + layer * 0.05f
+                    val local = ((rainPhase - delay) / 0.88f).coerceIn(0f, 1f)
+                    if (local <= 0f) continue
+                    val fall = local * local
+                    val sway = sin(local * PI.toFloat() * (3.5f + layer) + seed) * minDim * (0.03f + layer * 0.015f)
+                    val x = ((seed * 47.3f + progress * (40f + layer * 15f)) % w) + sway
+                    val y = -minDim * 0.08f + fall * h * 1.12f
+                    val rotation = seed * 2.7f + local * (520f + layer * 120f)
+                    val alpha = (1f - local * 0.35f).coerceIn(0.18f, 1f) * layerAlpha * partyFlicker
+                    drawFoundConfettiPiece(
+                        pos = Offset(x, y),
+                        rotation = rotation,
+                        shape = (seed + layer) % 5,
+                        tint = confettiPalette[(seed + layer) % confettiPalette.size],
+                        alpha = alpha,
+                        scale = layerScale
+                    )
+                }
+            }
+        }
+
+        // Golden afterglow glitter
+        if (glowPhase > 0f) {
+            for (g in 0 until 24) {
+                val gx = (g * 83.7f + glowPhase * 30f) % w
+                val gy = h * (0.08f + (g * 0.041f) % 0.82f)
+                val twinkle = sin(progress * PI.toFloat() * (5f + g * 0.2f) + g) * 0.5f + 0.5f
+                drawCircle(
+                    color = Color.White.copy(alpha = glowPhase * twinkle * 0.45f),
+                    radius = 1.2f + (g % 3) * 0.7f,
+                    center = Offset(gx, gy)
+                )
+            }
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFFFFD54F).copy(alpha = glowPhase * 0.08f * partyFlicker),
+                        Color.Transparent
+                    ),
+                    center = center,
+                    radius = minDim * 0.42f
+                ),
+                radius = minDim * 0.42f,
+                center = center
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawFoundConfettiCannon(
+    origin: Offset,
+    side: Float,
+    phase: Float,
+    minDim: Float,
+    accent: Color,
+    flicker: Float
+) {
+    val barrelLen = minDim * 0.10f * phase
+    val angle = (-55f * side) * PI.toFloat() / 180f
+    val muzzle = origin + Offset(cos(angle) * barrelLen, sin(angle) * barrelLen)
+    drawLine(
+        color = Color(0xFF3A3A42).copy(alpha = 0.85f * phase),
+        start = origin,
+        end = muzzle,
+        strokeWidth = minDim * 0.035f,
+        cap = StrokeCap.Round
+    )
+    drawCircle(
+        color = Color(0xFF5A5A62).copy(alpha = 0.75f * phase),
+        radius = minDim * 0.028f,
+        center = origin
+    )
+    if (phase > 0.15f) {
+        val flash = ((phase - 0.15f) / 0.25f).coerceIn(0f, 1f)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = (1f - flash) * 0.70f * flicker),
+                    accent.copy(alpha = (1f - flash) * 0.45f),
+                    Color.Transparent
+                ),
+                center = muzzle,
+                radius = minDim * 0.08f
+            ),
+            radius = minDim * 0.08f,
+            center = muzzle
+        )
+    }
+    if (phase > 0.08f) {
+        val smoke = smoothStep(((phase - 0.08f) / 0.55f).coerceIn(0f, 1f))
+        drawOval(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = smoke * 0.18f),
+                    Color.Transparent
+                ),
+                center = origin + Offset(0f, -minDim * 0.02f),
+                radius = minDim * 0.06f
+            ),
+            topLeft = Offset(origin.x - minDim * 0.08f, origin.y - minDim * 0.05f),
+            size = Size(minDim * 0.16f, minDim * 0.05f)
+        )
+    }
+}
+
+private fun DrawScope.drawFoundConfettiStreamerArc(
+    start: Offset,
+    apex: Offset,
+    end: Offset,
+    phase: Float,
+    tint: Color,
+    side: Float
+) {
+    val path = Path()
+    var started = false
+    for (step in 0..28) {
+        val t = step / 28f * phase
+        val u = 1f - t
+        val point = start * (u * u) + apex * (2f * u * t) + end * (t * t)
+        if (!started) {
+            path.moveTo(point.x, point.y)
+            started = true
+        } else {
+            path.lineTo(point.x, point.y)
+        }
+    }
+    if (!started) return
+    drawPath(
+        path,
+        color = tint.copy(alpha = phase * 0.22f),
+        style = Stroke(width = 8f, cap = StrokeCap.Round)
+    )
+    drawPath(
+        path,
+        brush = Brush.linearGradient(
+            colors = listOf(
+                Color.White.copy(alpha = phase * 0.75f),
+                tint.copy(alpha = phase * 0.85f),
+                tint.copy(alpha = phase * 0.45f)
+            ),
+            start = start,
+            end = end
+        ),
+        style = Stroke(width = 3.5f, cap = StrokeCap.Round)
+    )
+    if (phase > 0.55f) {
+        val tip = start * 0.2025f + apex * 0.495f + end * 0.3025f
+        drawCircle(
+            color = Color.White.copy(alpha = (phase - 0.55f) / 0.45f * 0.65f),
+            radius = 4f,
+            center = tip
+        )
+    }
+}
+
+private fun DrawScope.drawFoundConfettiBurst(
+    center: Offset,
+    phase: Float,
+    minDim: Float,
+    palette: List<Color>,
+    index: Int,
+    flicker: Float
+) {
+    val radius = minDim * 0.28f * smoothStep(phase)
+    val fade = (1f - phase * 0.75f).coerceIn(0f, 1f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = fade * 0.55f * flicker),
+                palette[index % palette.size].copy(alpha = fade * 0.35f),
+                Color.Transparent
+            ),
+            center = center,
+            radius = radius * 0.45f
+        ),
+        radius = radius * 0.45f,
+        center = center
+    )
+    drawCircle(
+        color = palette[(index + 2) % palette.size].copy(alpha = fade * 0.55f),
+        radius = radius,
+        center = center,
+        style = Stroke(width = (3.5f - phase * 2f).coerceAtLeast(1.2f))
+    )
+    for (p in 0 until 22) {
+        val angle = (p * 16.36f + index * 22f + phase * 80f) * PI.toFloat() / 180f
+        val dist = radius * (0.35f + (p % 4) * 0.14f)
+        val pos = center + Offset(cos(angle), sin(angle)) * dist
+        drawFoundConfettiPiece(
+            pos = pos,
+            rotation = p * 44f + phase * 260f,
+            shape = (p + index) % 5,
+            tint = palette[(p + index) % palette.size],
+            alpha = fade * flicker,
+            scale = 0.85f + (p % 3) * 0.12f
+        )
+    }
+}
+
+private fun DrawScope.drawFoundConfettiPiece(
+    pos: Offset,
+    rotation: Float,
+    shape: Int,
+    tint: Color,
+    alpha: Float,
+    scale: Float
+) {
+    rotate(rotation, pivot = pos) {
+        when (shape % 5) {
+            0 -> drawRect(
+                color = tint.copy(alpha = alpha),
+                topLeft = Offset(pos.x - 4f * scale, pos.y - 7f * scale),
+                size = Size(8f * scale, 14f * scale)
+            )
+            1 -> drawCircle(
+                color = tint.copy(alpha = alpha),
+                radius = 5f * scale,
+                center = pos
+            )
+            2 -> drawLine(
+                brush = Brush.linearGradient(
+                    colors = listOf(tint.copy(alpha = alpha), tint.copy(alpha = alpha * 0.25f))
+                ),
+                start = pos,
+                end = pos + Offset(0f, 26f * scale),
+                strokeWidth = 3f * scale,
+                cap = StrokeCap.Round
+            )
+            3 -> drawPath(
+                drawFivePointStar(pos, (6f + scale * 2f), 2.8f * scale),
+                color = tint.copy(alpha = alpha)
+            )
+            else -> drawPath(
+                Path().apply {
+                    moveTo(pos.x, pos.y - 8f * scale)
+                    lineTo(pos.x + 7f * scale, pos.y + 6f * scale)
+                    lineTo(pos.x - 7f * scale, pos.y + 6f * scale)
+                    close()
+                },
+                color = tint.copy(alpha = alpha)
+            )
         }
     }
 }
@@ -1009,150 +1519,444 @@ private fun StarBurstFoundEffect(progress: () -> Float, modifier: Modifier = Mod
 @Composable
 private fun ChampagnePopFoundEffect(progress: () -> Float, modifier: Modifier = Modifier) {
     val colors = LocalSpotVaultColors.current
+    val gold = Color(0xFFFFD54F)
+    val amber = Color(0xFFFFAB40)
+    val deepGold = Color(0xFFFF8F00)
     Canvas(modifier = modifier.fillMaxSize()) {
         val progress = progress()
         val w = size.width
         val h = size.height
         val minDim = size.minDimension
-        val center = Offset(w / 2f, h * 0.46f)
+        val center = Offset(w / 2f, h / 2f)
+        val bottleNeck = Offset(w / 2f, h * 0.88f)
+        val velvetPhase = smoothStep((progress / 0.16f).coerceIn(0f, 1f))
+        val bottlePhase = smoothStep(((progress - 0.06f) / 0.22f).coerceIn(0f, 1f))
+        val popPhase = smoothStep(((progress - 0.20f) / 0.22f).coerceIn(0f, 1f))
+        val fizzPhase = smoothStep(((progress - 0.32f) / 0.38f).coerceIn(0f, 1f))
+        val toastPhase = smoothStep(((progress - 0.52f) / 0.42f).coerceIn(0f, 1f))
+        val bubblePhase = smoothStep(((progress - 0.18f) / 0.78f).coerceIn(0f, 1f))
+        val fizzFlicker = 0.80f + 0.20f * sin(progress * PI.toFloat() * 6.5f)
 
-        // Warm golden atmosphere rising from bottom
-        val wash = smoothStep((progress / 0.9f).coerceIn(0f, 1f))
+        // Act I — velvet atmosphere & spotlight
         drawRect(
             brush = Brush.verticalGradient(
                 colors = listOf(
+                    Color(0xFF120818).copy(alpha = 0.18f * velvetPhase),
                     Color.Transparent,
-                    Color(0xFFFFD54F).copy(alpha = 0.06f * wash),
-                    Color(0xFFFFAB40).copy(alpha = 0.14f * wash),
-                    Color(0xFFFF8F00).copy(alpha = 0.08f * wash)
+                    gold.copy(alpha = 0.06f * velvetPhase),
+                    amber.copy(alpha = 0.14f * velvetPhase),
+                    deepGold.copy(alpha = 0.10f * velvetPhase)
                 ),
-                startY = h * 0.3f,
+                startY = 0f,
                 endY = h
             )
         )
-
-        // Spotlight cone from above
-        val spotAlpha = sin(progress * PI.toFloat() * 2f) * 0.12f + 0.18f
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = spotAlpha),
-                    Color(0xFFFFECB3).copy(alpha = spotAlpha * 0.5f),
+                    Color.White.copy(alpha = 0.16f * velvetPhase * fizzFlicker),
+                    gold.copy(alpha = 0.08f * velvetPhase),
                     Color.Transparent
                 ),
-                center = Offset(center.x, h * 0.12f),
-                radius = minDim * 0.55f
+                center = Offset(w / 2f, h * 0.10f),
+                radius = minDim * 0.62f
             ),
-            radius = minDim * 0.55f,
-            center = Offset(center.x, h * 0.12f)
+            radius = minDim * 0.62f,
+            center = Offset(w / 2f, h * 0.10f)
         )
-
-        // Cork pop burst at start
-        val popLocal = (progress / 0.16f).coerceIn(0f, 1f)
-        if (popLocal > 0f && popLocal < 1f) {
-            val popCenter = Offset(w / 2f, h * 0.88f)
-            val popFade = 1f - popLocal
-            for (chunk in 0 until 16) {
-                val a = (chunk * 22.5f + popLocal * 40f) * PI.toFloat() / 180f
-                val dist = minDim * 0.08f * smoothStep(popLocal)
-                val pos = popCenter + Offset(cos(a), sin(a)) * dist + Offset(0f, -dist * 1.2f)
-                drawCircle(
-                    color = Color(0xFF8D6E63).copy(alpha = popFade * 0.85f),
-                    radius = 3f + (chunk % 3),
-                    center = pos
-                )
-            }
+        for (dust in 0 until 14) {
+            val dx = (dust * 73.1f + progress * 18f) % w
+            val dy = h * (0.06f + (dust * 0.055f) % 0.35f)
+            val twinkle = sin(progress * PI.toFloat() * 3f + dust) * 0.5f + 0.5f
             drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = popFade * 0.7f),
-                        Color(0xFFFFD54F).copy(alpha = popFade * 0.5f),
-                        Color.Transparent
-                    ),
-                    center = popCenter,
-                    radius = minDim * 0.1f * popLocal
-                ),
-                radius = minDim * 0.1f * popLocal,
-                center = popCenter
+                color = Color.White.copy(alpha = velvetPhase * twinkle * 0.30f),
+                radius = 1f + (dust % 2) * 0.5f,
+                center = Offset(dx, dy)
             )
         }
 
-        // Rising champagne bubbles
-        for (b in 0 until 72) {
-            val seed = b * 19.3f
-            val delay = (b % 14) * 0.012f
-            val local = ((progress - delay) / 0.92f).coerceIn(0f, 1f)
-            if (local <= 0f) continue
-            val rise = local * local
-            val wobble = sin(local * PI.toFloat() * 5f + seed) * minDim * 0.035f
-            val x = (w * 0.5f + (seed * 13f % (w * 0.55f)) - w * 0.275f) + wobble
-            val y = h * 0.92f - rise * h * 0.88f
-            val bubbleR = 3f + (b % 6) * 1.8f
-            val alpha = (1f - local * 0.35f).coerceIn(0.2f, 0.95f)
-            val gold = Color(0xFFFFD54F)
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = alpha * 0.95f),
-                        gold.copy(alpha = alpha * 0.55f),
-                        gold.copy(alpha = alpha * 0.15f),
-                        Color.Transparent
-                    ),
-                    center = Offset(x - bubbleR * 0.25f, y - bubbleR * 0.25f),
-                    radius = bubbleR
-                ),
-                radius = bubbleR,
-                center = Offset(x, y)
+        // Act II — bottle at bottom (hero prop, below copy)
+        if (bottlePhase > 0f) {
+            drawFoundChampagneBottle(
+                base = Offset(w / 2f, h * 0.97f),
+                minDim = minDim,
+                phase = bottlePhase,
+                gold = gold,
+                accent = colors.Teal
             )
-            drawCircle(
-                color = Color.White.copy(alpha = alpha * 0.75f),
-                radius = bubbleR * 0.22f,
-                center = Offset(x - bubbleR * 0.35f, y - bubbleR * 0.35f)
-            )
+        }
 
-            // Pop sparkle when bubble reaches upper third
-            if (local in 0.55f..0.75f) {
-                val spark = sin(((local - 0.55f) / 0.2f) * PI.toFloat())
-                for (s in 0 until 4) {
-                    val sa = (s * 90f + seed) * PI.toFloat() / 180f
-                    drawCircle(
-                        color = Color.White.copy(alpha = spark * 0.7f),
-                        radius = 1.5f,
-                        center = Offset(x, y) + Offset(cos(sa), sin(sa)) * bubbleR * 1.8f
+        // Act III — cork pop & launch (arc to upper margin, not over copy)
+        if (popPhase > 0f) {
+            drawFoundChampagnePopBurst(
+                origin = bottleNeck,
+                phase = popPhase,
+                minDim = minDim,
+                gold = gold,
+                accent = colors.PrimaryBright,
+                flicker = fizzFlicker
+            )
+            val corkT = smoothStep(((popPhase - 0.08f) / 0.88f).coerceIn(0f, 1f))
+            if (corkT > 0f) {
+                val corkX = w * (0.50f - corkT * 0.28f)
+                val corkY = h * (0.86f - corkT * 0.72f) - sin(corkT * PI.toFloat()) * minDim * 0.08f
+                drawFoundChampagneCork(
+                    pos = Offset(corkX, corkY),
+                    rotation = corkT * 420f,
+                    scale = 1f - corkT * 0.15f,
+                    alpha = (1f - corkT * 0.35f).coerceIn(0.4f, 1f)
+                )
+            }
+        }
+
+        // Act IV — fizz eruption at margins
+        if (fizzPhase > 0f) {
+            listOf(-1f, 1f).forEach { side ->
+                drawFoundChampagneFizzSpray(
+                    origin = bottleNeck + Offset(side * minDim * 0.06f, 0f),
+                    side = side,
+                    phase = fizzPhase,
+                    minDim = minDim,
+                    h = h,
+                    gold = gold,
+                    accent = colors.Teal,
+                    flicker = fizzFlicker
+                )
+            }
+            for (ring in 0 until 4) {
+                val delay = ring * 0.10f
+                val local = smoothStep(((fizzPhase - delay) / 0.72f).coerceIn(0f, 1f))
+                if (local <= 0f) continue
+                drawCircle(
+                    color = gold.copy(alpha = (1f - local) * 0.45f * fizzFlicker),
+                    radius = minDim * (0.12f + local * (0.28f + ring * 0.06f)),
+                    center = bottleNeck,
+                    style = Stroke(width = (3.5f - ring * 0.6f).coerceAtLeast(1.2f))
+                )
+            }
+        }
+
+        // Act V — rising bubble columns (kept in side lanes away from center copy)
+        if (bubblePhase > 0f) {
+            for (lane in 0 until 4) {
+                val laneX = w * (0.14f + lane * 0.24f)
+                val count = if (lane == 1 || lane == 2) 22 else 16
+                for (b in 0 until count) {
+                    val seed = b + lane * 50
+                    val delay = (b % 9) * 0.018f + lane * 0.04f
+                    val local = ((bubblePhase - delay) / 0.88f).coerceIn(0f, 1f)
+                    if (local <= 0f) continue
+                    val rise = local * local
+                    val wobble = sin(local * PI.toFloat() * (4.5f + lane) + seed) * minDim * 0.04f
+                    val x = laneX + wobble + sin(seed.toFloat()) * minDim * 0.02f
+                    val y = h * 0.94f - rise * h * 0.82f
+                    val bubbleR = (3.5f + (b % 5) * 1.6f) * (0.85f + lane * 0.05f)
+                    val alpha = (1f - local * 0.30f).coerceIn(0.22f, 0.95f) * fizzFlicker
+                    drawFoundChampagneBubble(
+                        center = Offset(x, y),
+                        radius = bubbleR,
+                        alpha = alpha,
+                        gold = gold
                     )
+                    if (local in 0.58f..0.74f && b % 3 == 0) {
+                        val spark = sin(((local - 0.58f) / 0.16f) * PI.toFloat())
+                        for (s in 0 until 4) {
+                            val sa = (s * 90f + seed) * PI.toFloat() / 180f
+                            drawCircle(
+                                color = Color.White.copy(alpha = spark * 0.75f),
+                                radius = 1.4f,
+                                center = Offset(x, y) + Offset(cos(sa), sin(sa)) * bubbleR * 1.7f
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // Fizz micro-particles
-        if (progress > 0.1f) {
-            val fizz = ((progress - 0.1f) / 0.9f).coerceIn(0f, 1f)
-            for (f in 0 until 30) {
-                val fx = (f * 61f + fizz * 25f) % w
-                val fy = h * (0.55f + (f * 0.019f) % 0.38f) - fizz * 20f
-                val fa = (1f - fizz * 0.6f) * 0.5f
+        // Toast afterglow — side flutes & micro-fizz
+        if (toastPhase > 0f) {
+            listOf(0.12f, 0.88f).forEach { xRatio ->
+                drawFoundChampagneFlute(
+                    base = Offset(w * xRatio, h * 0.96f),
+                    minDim = minDim,
+                    phase = toastPhase,
+                    gold = gold
+                )
+            }
+            for (f in 0 until 36) {
+                val fx = (f * 59.3f + toastPhase * 22f) % w
+                val fy = h * (0.20f + (f * 0.022f) % 0.65f)
+                val fa = toastPhase * (1f - f * 0.015f).coerceAtLeast(0.2f) * 0.45f
                 drawCircle(
-                    color = Color.White.copy(alpha = fa),
+                    color = Color.White.copy(alpha = fa * fizzFlicker),
                     radius = 1f + (f % 2),
                     center = Offset(fx, fy)
                 )
             }
-        }
-
-        // Golden ring ripple at pop moment
-        if (progress in 0.08f..0.45f) {
-            val ringLocal = ((progress - 0.08f) / 0.37f).coerceIn(0f, 1f)
-            val ringR = minDim * 0.35f * ringLocal
-            val ringAlpha = (1f - ringLocal) * 0.5f
             drawCircle(
-                color = Color(0xFFFFD54F).copy(alpha = ringAlpha),
-                radius = ringR,
-                center = center,
-                style = Stroke(width = 3f)
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        gold.copy(alpha = toastPhase * 0.10f * fizzFlicker),
+                        Color.Transparent
+                    ),
+                    center = center,
+                    radius = minDim * 0.38f
+                ),
+                radius = minDim * 0.38f,
+                center = center
             )
         }
     }
+}
+
+private fun DrawScope.drawFoundChampagneBottle(
+    base: Offset,
+    minDim: Float,
+    phase: Float,
+    gold: Color,
+    accent: Color
+) {
+    val bodyW = minDim * 0.11f * phase
+    val bodyH = minDim * 0.22f * phase
+    val neckW = minDim * 0.035f * phase
+    val neckH = minDim * 0.07f * phase
+    val bodyTop = base.y - bodyH
+    val neckBottom = bodyTop
+    val neckTop = neckBottom - neckH
+
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF2E7D32).copy(alpha = 0.95f * phase),
+                Color(0xFF1B5E20).copy(alpha = 0.98f * phase)
+            ),
+            startY = bodyTop,
+            endY = base.y
+        ),
+        topLeft = Offset(base.x - bodyW / 2f, bodyTop),
+        size = Size(bodyW, bodyH),
+        cornerRadius = CornerRadius(bodyW * 0.18f)
+    )
+    drawRoundRect(
+        color = Color(0xFF1B5E20).copy(alpha = 0.95f * phase),
+        topLeft = Offset(base.x - neckW / 2f, neckTop),
+        size = Size(neckW, neckH),
+        cornerRadius = CornerRadius(neckW * 0.2f)
+    )
+    drawRect(
+        brush = Brush.horizontalGradient(
+            colors = listOf(
+                gold.copy(alpha = 0.75f * phase),
+                Color.White.copy(alpha = 0.55f * phase),
+                gold.copy(alpha = 0.75f * phase)
+            ),
+            startX = base.x - bodyW * 0.35f,
+            endX = base.x + bodyW * 0.35f
+        ),
+        topLeft = Offset(base.x - bodyW * 0.35f, bodyTop + bodyH * 0.38f),
+        size = Size(bodyW * 0.70f, bodyH * 0.14f)
+    )
+    drawCircle(
+        color = accent.copy(alpha = 0.35f * phase),
+        radius = minDim * 0.012f,
+        center = Offset(base.x - bodyW * 0.25f, bodyTop + bodyH * 0.22f)
+    )
+    drawCircle(
+        color = Color.White.copy(alpha = 0.25f * phase),
+        radius = minDim * 0.010f,
+        center = Offset(base.x + bodyW * 0.20f, bodyTop + bodyH * 0.55f)
+    )
+}
+
+private fun DrawScope.drawFoundChampagneCork(
+    pos: Offset,
+    rotation: Float,
+    scale: Float,
+    alpha: Float
+) {
+    rotate(rotation, pivot = pos) {
+        drawRoundRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFFBCAAA4).copy(alpha = alpha),
+                    Color(0xFF8D6E63).copy(alpha = alpha)
+                )
+            ),
+            topLeft = Offset(pos.x - 5f * scale, pos.y - 10f * scale),
+            size = Size(10f * scale, 18f * scale),
+            cornerRadius = CornerRadius(3f * scale)
+        )
+    }
+}
+
+private fun DrawScope.drawFoundChampagnePopBurst(
+    origin: Offset,
+    phase: Float,
+    minDim: Float,
+    gold: Color,
+    accent: Color,
+    flicker: Float
+) {
+    val flash = ((phase - 0.02f) / 0.14f).coerceIn(0f, 1f)
+    if (flash > 0f) {
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = (1f - flash) * 0.65f),
+                    gold.copy(alpha = (1f - flash) * 0.40f),
+                    Color.Transparent
+                ),
+                center = origin,
+                radius = minDim * 0.14f
+            ),
+            radius = minDim * 0.14f,
+            center = origin
+        )
+    }
+    for (chunk in 0 until 18) {
+        val local = smoothStep(((phase - 0.04f - chunk * 0.015f) / 0.55f).coerceIn(0f, 1f))
+        if (local <= 0f) continue
+        val angle = (chunk * 20f + phase * 35f) * PI.toFloat() / 180f
+        val dist = minDim * 0.10f * local
+        val pos = origin + Offset(cos(angle) * dist, sin(angle) * dist - dist * 1.3f)
+        drawCircle(
+            color = Color(0xFF8D6E63).copy(alpha = (1f - local) * 0.85f),
+            radius = 2.5f + (chunk % 3),
+            center = pos
+        )
+    }
+    drawOval(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = phase * 0.25f * flicker),
+                accent.copy(alpha = phase * 0.12f),
+                Color.Transparent
+            ),
+            center = origin - Offset(0f, minDim * 0.02f),
+            radius = minDim * 0.08f
+        ),
+        topLeft = Offset(origin.x - minDim * 0.10f, origin.y - minDim * 0.06f),
+        size = Size(minDim * 0.20f, minDim * 0.08f)
+    )
+}
+
+private fun DrawScope.drawFoundChampagneFizzSpray(
+    origin: Offset,
+    side: Float,
+    phase: Float,
+    minDim: Float,
+    h: Float,
+    gold: Color,
+    accent: Color,
+    flicker: Float
+) {
+    for (jet in 0 until 12) {
+        val delay = jet * 0.05f
+        val local = smoothStep(((phase - delay) / 0.75f).coerceIn(0f, 1f))
+        if (local <= 0f) continue
+        val angle = (-75f + jet * 11f * side) * PI.toFloat() / 180f
+        val dist = minDim * local * (0.35f + (jet % 3) * 0.10f)
+        val pos = origin + Offset(cos(angle) * dist, sin(angle) * dist)
+        drawFoundChampagneBubble(
+            center = pos,
+            radius = 3f + (jet % 4) * 1.2f,
+            alpha = (1f - local * 0.4f) * flicker,
+            gold = gold
+        )
+    }
+    val sprayPath = Path()
+    var started = false
+    for (step in 0..16) {
+        val t = step / 16f * phase
+        val x = origin.x + side * minDim * t * 0.32f
+        val y = origin.y - minDim * t * 0.55f + sin(t * PI.toFloat() * 2f) * minDim * 0.03f
+        val point = Offset(x, y)
+        if (!started) {
+            sprayPath.moveTo(point.x, point.y)
+            started = true
+        } else {
+            sprayPath.lineTo(point.x, point.y)
+        }
+    }
+    if (started) {
+        drawPath(
+            sprayPath,
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = phase * 0.55f * flicker),
+                    gold.copy(alpha = phase * 0.35f),
+                    accent.copy(alpha = phase * 0.15f)
+                ),
+                start = origin,
+                end = origin + Offset(side * minDim * 0.28f, -minDim * 0.45f)
+            ),
+            style = Stroke(width = 2.5f, cap = StrokeCap.Round)
+        )
+    }
+}
+
+private fun DrawScope.drawFoundChampagneBubble(
+    center: Offset,
+    radius: Float,
+    alpha: Float,
+    gold: Color
+) {
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = alpha * 0.95f),
+                gold.copy(alpha = alpha * 0.55f),
+                gold.copy(alpha = alpha * 0.12f),
+                Color.Transparent
+            ),
+            center = center - Offset(radius * 0.25f, radius * 0.25f),
+            radius = radius
+        ),
+        radius = radius,
+        center = center
+    )
+    drawCircle(
+        color = Color.White.copy(alpha = alpha * 0.80f),
+        radius = radius * 0.22f,
+        center = center - Offset(radius * 0.35f, radius * 0.35f)
+    )
+}
+
+private fun DrawScope.drawFoundChampagneFlute(
+    base: Offset,
+    minDim: Float,
+    phase: Float,
+    gold: Color
+) {
+    val stemH = minDim * 0.08f * phase
+    val bowlH = minDim * 0.07f * phase
+    val bowlW = minDim * 0.045f * phase
+    drawLine(
+        color = Color.White.copy(alpha = 0.55f * phase),
+        start = base,
+        end = base - Offset(0f, stemH),
+        strokeWidth = 2f,
+        cap = StrokeCap.Round
+    )
+    drawLine(
+        color = Color.White.copy(alpha = 0.65f * phase),
+        start = base - Offset(0f, stemH),
+        end = base - Offset(0f, stemH + bowlH),
+        strokeWidth = bowlW,
+        cap = StrokeCap.Round
+    )
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                gold.copy(alpha = 0.45f * phase),
+                Color.Transparent
+            ),
+            center = base - Offset(0f, stemH + bowlH * 0.5f),
+            radius = bowlW * 0.8f
+        ),
+        radius = bowlW * 0.8f,
+        center = base - Offset(0f, stemH + bowlH * 0.5f)
+    )
 }
 
 private fun DrawScope.drawFoundHalloweenCobweb(origin: Offset, span: Float, alpha: Float, mirror: Boolean) {

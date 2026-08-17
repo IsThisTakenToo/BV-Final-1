@@ -280,7 +280,8 @@ fun VehicleEditScreen(
     vehicleId: Int?,
     vehicleDao: VehicleDao,
     locationDao: LocationDao,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onSaved: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE) }
@@ -550,6 +551,7 @@ fun VehicleEditScreen(
                         )
                     )
                     if (isDefault) vehicleDao.setDefault(savedId)
+                    onSaved(savedId)
                     onBack()
                 }
             },

@@ -70,6 +70,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.work.WorkManager
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
 
 @Composable
@@ -79,6 +82,7 @@ fun AutomaticParkingSettingsContent(
     onNavigateToVehicles: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val vehicleDao = remember { AppDatabase.getDatabase(context).vehicleDao() }
     val linkedVehicles by vehicleDao.observeActive().collectAsState(initial = emptyList())
 
@@ -410,12 +414,32 @@ fun AutomaticParkingSettingsContent(
                     text = "Test Auto-Park Now",
                     icon = Icons.Default.Bluetooth,
                     onClick = {
-                        enqueueAutoParkWorkForVehicle(context, vehiclesWithBluetooth.first().id)
+                        val vehicleId = vehiclesWithBluetooth.first().id
+                        enqueueAutoParkWorkForVehicle(context, vehicleId)
                         android.widget.Toast.makeText(
                             context,
-                            "Test queued — check your Vault in a few seconds",
+                            "Testing…",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
+                        // The old version of this button just fired the job and hoped — if the
+                        // save was silently skipped (a Quiet Zone, a missing permission, Auto-Park
+                        // toggled off mid-flight) there was no way to tell "it worked" from "it did
+                        // nothing" apart from digging through the Vault yourself. Watching this
+                        // exact job's WorkInfo and reading back what AutoParkWorker actually did
+                        // turns that guesswork into a real answer.
+                        coroutineScope.launch {
+                            val outcome = WorkManager.getInstance(context)
+                                .getWorkInfosForUniqueWorkFlow(autoParkManualTestWorkName(vehicleId))
+                                .mapNotNull { infos -> infos.firstOrNull { it.state.isFinished } }
+                                .first()
+                                .outputData
+                                .getString(AUTO_PARK_OUTCOME_KEY)
+                            android.widget.Toast.makeText(
+                                context,
+                                autoParkTestOutcomeMessage(outcome),
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                 )
                 Text(
@@ -823,6 +847,20 @@ fun PermissionStatusRow(title: String, granted: Boolean, explanation: String) {
         }
         Text(explanation, color = SpotVaultColors.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, start = 26.dp))
     }
+}
+
+/** Human-readable version of [AutoParkWorker]'s [AUTO_PARK_OUTCOME_KEY] output, for the "Test
+ * Auto-Park Now" button's result toast. */
+private fun autoParkTestOutcomeMessage(outcome: String?): String = when (outcome) {
+    AUTO_PARK_OUTCOME_SAVED -> "Test saved — check your Vault!"
+    AUTO_PARK_OUTCOME_QUIET_ZONE_SKIP -> "Test skipped — your current location is inside a Quiet Zone that suppresses saves here."
+    AUTO_PARK_OUTCOME_NO_BACKGROUND_LOCATION -> "Test failed — background location permission isn't granted (see Step 2 below)."
+    AUTO_PARK_OUTCOME_NO_VEHICLE -> "Test failed — couldn't find a linked vehicle."
+    AUTO_PARK_OUTCOME_VEHICLE_ARCHIVED -> "Test skipped — that vehicle is archived."
+    AUTO_PARK_OUTCOME_DISABLED -> "Test skipped — Automatic Parking is turned off."
+    AUTO_PARK_OUTCOME_STILL_CONNECTED -> "Test skipped — that vehicle's Bluetooth is still connected."
+    AUTO_PARK_OUTCOME_FAILED -> "Test ran but the save failed — try again."
+    else -> "Test finished, but the result was unclear — check your Vault."
 }
 
 /** Every action button on this screen used to be a bare Material OutlinedButton, whose default

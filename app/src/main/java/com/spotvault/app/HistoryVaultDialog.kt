@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -2066,7 +2067,7 @@ fun VaultTagManagerDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    "Tags replace the old category list — assign them from any spot's ⋮ menu, or filter the Vault by tag from the filter icon.",
+                    "Assign tags from any spot's ⋮ menu, or filter the Vault by tag from the filter icon.",
                     color = SpotVaultColors.Muted,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(bottom = 4.dp)
@@ -5171,6 +5172,26 @@ private sealed class LocationBrowserLevel {
     data class Entries(val state: String, val city: String) : LocationBrowserLevel()
 }
 
+/** Encodes the drill-down depth as a 0/1/2-element list so it can ride out the composable being
+ * disposed and rebuilt (e.g. tapping a spot pushes SPOT_DETAIL, which tears this down; without
+ * this, back would always land back on the top-level States list instead of where you were). */
+private val LocationBrowserLevelSaver = listSaver<LocationBrowserLevel, String>(
+    save = { level ->
+        when (level) {
+            is LocationBrowserLevel.States -> emptyList()
+            is LocationBrowserLevel.Cities -> listOf(level.state)
+            is LocationBrowserLevel.Entries -> listOf(level.state, level.city)
+        }
+    },
+    restore = { saved ->
+        when (saved.size) {
+            0 -> LocationBrowserLevel.States
+            1 -> LocationBrowserLevel.Cities(saved[0])
+            else -> LocationBrowserLevel.Entries(saved[0], saved[1])
+        }
+    }
+)
+
 /** State list -> city list -> per-city entry list, all in the same adaptive window used
  * elsewhere in the Vault. Tapping a row drills in; the header back arrow (or system back)
  * steps back up one level instead of closing outright. */
@@ -5184,7 +5205,7 @@ fun VaultLocationBrowserDialog(
     onShareRequest: (ShareSpotPayload) -> Unit,
     coroutineScope: CoroutineScope
 ) {
-    var level by remember { mutableStateOf<LocationBrowserLevel>(LocationBrowserLevel.States) }
+    var level by rememberSaveable(stateSaver = LocationBrowserLevelSaver) { mutableStateOf<LocationBrowserLevel>(LocationBrowserLevel.States) }
     var selectedItems by remember { mutableStateOf(setOf<Int>()) }
     var selectionModeActive by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }

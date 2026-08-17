@@ -4,8 +4,8 @@ import android.content.SharedPreferences
 
 const val SMART_DEDUPLICATION_ENABLED_PREF = "smart_deduplication_enabled"
 const val DEDUPLICATION_WINDOW_HOURS_PREF = "deduplication_window_hours"
-const val DEFAULT_SMART_DEDUPLICATION_ENABLED = false
-const val DEFAULT_DEDUPLICATION_WINDOW_HOURS = 36
+const val DEFAULT_SMART_DEDUPLICATION_ENABLED = true
+const val DEFAULT_DEDUPLICATION_WINDOW_HOURS = 24
 const val MIN_DEDUPLICATION_WINDOW_HOURS = 6
 const val MAX_DEDUPLICATION_WINDOW_HOURS = 72
 

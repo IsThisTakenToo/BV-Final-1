@@ -131,22 +131,30 @@ object SpotVaultColors {
     val Muted: Color @androidx.compose.runtime.Composable get() = LocalSpotVaultColors.current.Muted
     val Outline: Color @androidx.compose.runtime.Composable get() = LocalSpotVaultColors.current.Outline
     val Danger: Color @androidx.compose.runtime.Composable get() = LocalSpotVaultColors.current.Danger
-    /** Text/icon color for content sitting on a Primary-colored background — auto-contrasts by
-     * luminance, unless overridden (Settings > Appearance > Button Text Color), for when
-     * auto-contrast doesn't match what someone actually wants. Applies no matter which color
-     * theme is active — preset or custom — not just when a custom theme is selected. */
+    /** Text/icon color for content sitting on a Primary-colored background — picks whichever of
+     * white or the theme's near-black [Ink] has the actually-higher WCAG contrast ratio against
+     * Primary's real color, not a fixed luminance cutoff (see [lightWinsContrast]'s doc for why
+     * that matters). Applies no matter which color theme is active — preset or custom. */
     val OnPrimary: Color @androidx.compose.runtime.Composable get() {
-        val override = ThemeState.customOnPrimaryArgb
-        if (override != null) return Color(override)
-        return if (LocalSpotVaultColors.current.Primary.luminance() > 0.4f) LocalSpotVaultColors.current.Ink else androidx.compose.ui.graphics.Color.White
+        val primary = LocalSpotVaultColors.current.Primary
+        val ink = LocalSpotVaultColors.current.Ink
+        return if (lightWinsContrast(primary.luminance(), 1f, ink.luminance())) {
+            androidx.compose.ui.graphics.Color.White
+        } else {
+            ink
+        }
     }
     /** Guaranteed-readable text/icon color for content sitting on a Teal-colored background —
      * unlike the per-theme fixed [Ink], this checks Teal's actual brightness so a dark accent
-     * color never pairs with dark text, unless overridden (see [OnPrimary]). */
+     * color never pairs with dark text. Same contrast-ratio logic as [OnPrimary]. */
     val OnTeal: Color @androidx.compose.runtime.Composable get() {
-        val override = ThemeState.customOnAccentArgb
-        if (override != null) return Color(override)
-        return if (LocalSpotVaultColors.current.Teal.luminance() > 0.4f) LocalSpotVaultColors.current.Ink else androidx.compose.ui.graphics.Color.White
+        val teal = LocalSpotVaultColors.current.Teal
+        val ink = LocalSpotVaultColors.current.Ink
+        return if (lightWinsContrast(teal.luminance(), 1f, ink.luminance())) {
+            androidx.compose.ui.graphics.Color.White
+        } else {
+            ink
+        }
     }
 }
 

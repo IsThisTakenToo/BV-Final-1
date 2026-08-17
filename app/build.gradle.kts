@@ -15,7 +15,12 @@ android {
 
   defaultConfig {
     applicationId = "com.droppinvault.app.abceef"
-    minSdk = 24
+    // Was 24 (Android 7.0, 2016) — 8 of the 9 launcher icon designs only ever shipped as
+    // adaptive-icon XML (mipmap-anydpi-v26), no legacy PNG fallback, which needs 26. Raising the
+    // floor to match what's actually there is simpler than generating and maintaining 40+ PNGs
+    // across 5 density buckets for icons nobody on API 24/25 could ever correctly see anyway —
+    // and Android 7.x's real-world install share is negligible at this point.
+    minSdk = 26
     targetSdk = 36
     versionCode = 27
     versionName = "1.0.26"

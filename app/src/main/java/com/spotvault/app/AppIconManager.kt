@@ -66,10 +66,63 @@ object AppIconManager {
         }
     }
 
-    /** Enables the chosen icon's alias and disables every other one. This changes what's
-     * registered as the launcher entry point, which is disruptive enough that Android
-     * typically ends the running process once it's applied — expected, not a bug. */
-    fun applyIcon(context: Context, prefs: SharedPreferences, icon: AppIcon) {
+    /** Cleans up any icon alias left stuck enabled from a switch that didn't fully land (rare with
+     * the current all-DONT_KILL_APP sequence in [applyIcon], but cheap insurance — e.g. leftover
+     * residue from testing an earlier, more aggressive version of this code). Safe to call on
+     * every launch: a no-op when things are already clean (the common case), DONT_KILL_APP
+     * throughout so it can never itself cause the process to restart mid-use. */
+    suspend fun reconcileIconState(context: Context, prefs: SharedPreferences) {
+        val pm = context.packageManager
+        val classNamespace = MainActivity::class.java.name.substringBeforeLast('.')
+        fun component(candidate: AppIcon) =
+            ComponentName(context.packageName, "$classNamespace.${candidate.aliasSuffix}")
+
+        val expected = AppIcon.fromId(prefs.getString(PREF_KEY, AppIcon.DEFAULT.id))
+
+        fun isEnabled(candidate: AppIcon): Boolean {
+            val state = pm.getComponentEnabledSetting(component(candidate))
+            return state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED ||
+                (state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && candidate == AppIcon.DEFAULT)
+        }
+
+        val strays = AppIcon.entries.filter { it != expected && isEnabled(it) }
+        if (strays.isEmpty() && isEnabled(expected)) return
+
+        android.util.Log.w(
+            "AppIconManager",
+            "Reconciling icon state: expected=${expected.id}, found ${strays.size} stray alias(es) enabled"
+        )
+        if (!isEnabled(expected)) {
+            runCatching {
+                pm.setComponentEnabledSetting(component(expected), PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)
+            }.onFailure { android.util.Log.e("AppIconManager", "Reconcile: failed to enable ${expected.id}", it) }
+        }
+        strays.forEach { candidate ->
+            runCatching {
+                pm.setComponentEnabledSetting(component(candidate), PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+            }.onFailure { android.util.Log.e("AppIconManager", "Reconcile: failed to disable stray ${candidate.id}", it) }
+        }
+    }
+
+    /** Enables the chosen icon's alias and disables every other one. Every call uses
+     * DONT_KILL_APP — the caller does its own delayed self-kill afterward (see the Settings
+     * confirm handler) to actually restart the process; this never lets Android kill it as a
+     * side effect of a flag change.
+     *
+     * A later version of this deliberately dropped DONT_KILL_APP on the final disable call, on
+     * the theory that an OS-triggered kill (rather than a manual self-kill) was needed to refresh
+     * the launcher's resolution cache. Comparing against a known-working backup of this file and
+     * reproducing the failure live (with Logcat access to a real device) disproved that: the
+     * OS-triggered-kill version left PackageManagerService's own state 100% correct — confirmed
+     * directly against its own log, not just this app's readback — while still producing
+     * endlessly accumulating duplicate icons in the launcher, reproduced on both Samsung's One UI
+     * and Nova Launcher. The enable/disable flags were never the bug. Something about how Android
+     * tears down the process specifically via that "drop DONT_KILL_APP" pathway is what launchers
+     * mishandle, and this plain DONT_KILL_APP-everywhere version doesn't have that problem.
+     *
+     * Returns false if verification finds a mismatch, or if any call threw outright — some OEM
+     * PackageManager implementations are known to silently no-op this instead of throwing. */
+    fun applyIcon(context: Context, prefs: SharedPreferences, icon: AppIcon): Boolean {
         val pm = context.packageManager
         // The manifest's ".IconDefault"-style relative alias names resolve against the
         // Gradle `namespace` (where MainActivity is actually compiled), not `applicationId`
@@ -80,54 +133,44 @@ object AppIconManager {
         fun component(candidate: AppIcon) =
             ComponentName(context.packageName, "$classNamespace.${candidate.aliasSuffix}")
 
-        // Enable the target alias FIRST, before disabling any of the others — this method's own
-        // doc note above says Android typically kills the process as soon as a component's
-        // enabled state changes, which can happen after any single call in this sequence, not
-        // just the last one. Disabling the old aliases before the new one is enabled means a
-        // kill partway through could leave every alias disabled at once — no launcher entry
-        // point at all, the app gone from the home screen/app drawer until reinstalled. With the
-        // target enabled first, the worst a partial run leaves behind is two icons briefly
-        // enabled at once, not zero.
+        // Enable the target alias FIRST, before disabling any of the others — with DONT_KILL_APP
+        // throughout, nothing here should trigger a kill on its own, but if the OS ever did kill
+        // mid-sequence anyway, the worst this ordering leaves behind is two icons briefly enabled
+        // at once, never zero (no launcher entry point at all until reinstalled).
+        var succeeded = true
         runCatching {
             pm.setComponentEnabledSetting(component(icon), PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)
         }.onFailure {
+            succeeded = false
             android.util.Log.e("AppIconManager", "Failed to enable alias for ${icon.id}", it)
-            // The pref write below happens unconditionally regardless of whether this actually
-            // succeeded, so without a visible signal here the Settings picker would show the new
-            // icon as selected while the real home-screen icon silently never changed — with no
-            // way to tell why short of reading Logcat.
-            android.widget.Toast.makeText(
-                context,
-                "Couldn't switch the app icon on this device. Try restarting your phone and picking it again.",
-                android.widget.Toast.LENGTH_LONG
-            ).show()
         }
         AppIcon.entries.filter { it != icon }.forEach { candidate ->
             runCatching {
                 pm.setComponentEnabledSetting(component(candidate), PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
             }.onFailure {
+                succeeded = false
                 android.util.Log.e("AppIconManager", "Failed to disable alias for ${candidate.id}", it)
             }
         }
+        prefs.edit().putString(PREF_KEY, icon.id).apply()
 
         // Not throwing doesn't guarantee the change actually took effect — some OEM PackageManager
         // implementations are known to silently no-op a component-state change under certain
         // restrictions instead of throwing. Reading every alias's actual resulting state right
-        // back is the only way to tell "it worked" from "it silently didn't" — logged for every
-        // alias so a mismatch (the target not landing on ENABLED, or more than one alias ending up
-        // enabled at once) is visible in Logcat even though this doesn't change the actual result.
+        // back is the only way to tell "it worked" from "it silently didn't."
         AppIcon.entries.forEach { candidate ->
             val state = pm.getComponentEnabledSetting(component(candidate))
             val effectivelyEnabled = state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED ||
                 (state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && candidate == AppIcon.DEFAULT)
             val expectedEnabled = candidate == icon
             if (effectivelyEnabled != expectedEnabled) {
+                succeeded = false
                 android.util.Log.e(
                     "AppIconManager",
                     "Mismatch for ${candidate.id}: expected enabled=$expectedEnabled, actual state=$state (effectivelyEnabled=$effectivelyEnabled)"
                 )
             }
         }
-        prefs.edit().putString(PREF_KEY, icon.id).apply()
+        return succeeded
     }
 }
