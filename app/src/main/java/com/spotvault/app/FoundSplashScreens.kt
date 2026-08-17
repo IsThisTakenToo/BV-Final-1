@@ -79,10 +79,10 @@ enum class FoundSplashStyle(val id: String, val label: String, val description: 
     NONE("none", "None", "Skip the celebration screen — marking Found just closes silently"),
     CLASSIC("classic", "Classic", "The polished card with a teal check — clean and satisfying"),
     FIREWORKS("fireworks", "Fireworks", "Nightfall descends, rockets streak upward, margin bursts bloom in color, willow embers cascade, and stardust lingers"),
-    CONFETTI("confetti", "Confetti", "Spotlights ignite, dual cannons salvo, streamers arc overhead, airbursts cascade at the margins, and a golden confetti storm rains down"),
+    CONFETTI("confetti", "Confetti", "A golden halo frames the card — twin cannons salvo, ring bursts pop around the edges, and confetti fountains arc through the celebration dome"),
     VICTORY_RIPPLE("victory_ripple", "Victory Ripple", "Sacred geometry, shock rings, and pillar beams of light"),
     STAR_BURST("star_burst", "Star Burst", "Counter-rotating nova rays, comets, and orbiting stars"),
-    CHAMPAGNE_POP("champagne_pop", "Champagne Pop", "Velvet light falls, the cork launches in a golden burst, fizz erupts at the margins, and bubbles rise in a celebratory toast"),
+    CHAMPAGNE_POP("champagne_pop", "Champagne Pop", "A golden halo glows as the cork pops from a mini bottle below — fizz mist and bubbles spiral up around the card in a tight celebratory toast"),
     HALLOWEEN("halloween", "All Hallows' Found", "A moonlit séance — cobweb arches, spirit rings, and jack-o'-lantern triumph"),
     CHRISTMAS("christmas", "Yuletide Found", "An aurora vigil — North Star pillar, snowflake rings, and gift-box triumph");
 
@@ -841,215 +841,195 @@ private fun ConfettiFoundEffect(progress: () -> Float, modifier: Modifier = Modi
     Canvas(modifier = modifier.fillMaxSize()) {
         val progress = progress()
         val w = size.width
-        val h = size.height
         val minDim = size.minDimension
-        val center = Offset(w / 2f, h / 2f)
-        val spotPhase = smoothStep((progress / 0.16f).coerceIn(0f, 1f))
-        val cannonPhase = smoothStep(((progress - 0.08f) / 0.26f).coerceIn(0f, 1f))
-        val streamerPhase = smoothStep(((progress - 0.18f) / 0.32f).coerceIn(0f, 1f))
-        val burstPhase = smoothStep(((progress - 0.32f) / 0.38f).coerceIn(0f, 1f))
-        val rainPhase = smoothStep(((progress - 0.22f) / 0.72f).coerceIn(0f, 1f))
-        val glowPhase = smoothStep(((progress - 0.58f) / 0.38f).coerceIn(0f, 1f))
+        val haloCenter = Offset(w / 2f, size.height / 2f - minDim * 0.04f)
+        val haloR = minDim * 0.34f
+        val haloScale = haloR / minDim
+        val spotPhase = smoothStep((progress / 0.14f).coerceIn(0f, 1f))
+        val cannonPhase = smoothStep(((progress - 0.06f) / 0.22f).coerceIn(0f, 1f))
+        val burstPhase = smoothStep(((progress - 0.22f) / 0.32f).coerceIn(0f, 1f))
+        val fountainPhase = smoothStep(((progress - 0.18f) / 0.58f).coerceIn(0f, 1f))
+        val ringPhase = smoothStep(((progress - 0.38f) / 0.48f).coerceIn(0f, 1f))
         val partyFlicker = 0.78f + 0.22f * sin(progress * PI.toFloat() * 7f)
 
-        // Act I — arena spotlight & party wash
-        drawRect(
+        // Act I — localized golden halo spotlight on the card
+        drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    Color(0xFFFFF8E1).copy(alpha = 0.14f * spotPhase),
-                    Color(0xFFFFD54F).copy(alpha = 0.08f * spotPhase),
+                    Color(0xFFFFF8E1).copy(alpha = 0.22f * spotPhase),
+                    Color(0xFFFFD54F).copy(alpha = 0.12f * spotPhase),
+                    colors.PrimaryBright.copy(alpha = 0.05f * spotPhase),
                     Color.Transparent
                 ),
-                center = Offset(w / 2f, h * 0.08f),
-                radius = minDim * 0.85f
+                center = haloCenter,
+                radius = haloR * 1.08f
             ),
-            topLeft = Offset(w / 2f - minDim * 0.85f, 0f),
-            size = Size(minDim * 1.7f, h * 0.55f)
+            radius = haloR * 1.08f,
+            center = haloCenter
         )
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(
-                    Color.Transparent,
-                    Color(0xFF1A1020).copy(alpha = 0.10f * spotPhase),
-                    Color(0xFF120818).copy(alpha = 0.18f * spotPhase)
-                ),
-                startY = h * 0.72f,
-                endY = h
-            )
-        )
-        for (light in 0 until 4) {
-            val sweep = sin(progress * PI.toFloat() * (1.6f + light * 0.3f) + light * 1.4f) * 0.5f + 0.5f
-            val lx = w * (0.12f + light * 0.24f)
+        for (light in 0 until 3) {
+            val sweep = sin(progress * PI.toFloat() * (2.2f + light * 0.4f) + light * 1.8f) * 0.5f + 0.5f
+            val angle = (-110f + light * 110f) * PI.toFloat() / 180f
+            val lx = haloCenter.x + cos(angle) * haloR * 0.92f
+            val ly = haloCenter.y + sin(angle) * haloR * 0.55f
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        confettiPalette[light % confettiPalette.size].copy(alpha = sweep * 0.10f * spotPhase),
+                        confettiPalette[light + 2].copy(alpha = sweep * 0.14f * spotPhase),
                         Color.Transparent
                     ),
-                    center = Offset(lx, h * 0.06f),
-                    radius = minDim * 0.18f
+                    center = Offset(lx, ly),
+                    radius = haloR * 0.22f
                 ),
-                radius = minDim * 0.18f,
-                center = Offset(lx, h * 0.06f)
+                radius = haloR * 0.22f,
+                center = Offset(lx, ly)
             )
         }
 
-        // Act II — dual corner cannons
+        // Act II — twin frame cannons at the halo base (not screen corners)
         if (cannonPhase > 0f) {
-            listOf(0.07f to -1f, 0.93f to 1f).forEach { (xRatio, side) ->
+            val cannonY = haloCenter.y + haloR * 0.72f
+            listOf(-1f, 1f).forEach { side ->
+                val origin = Offset(haloCenter.x + side * haloR * 0.58f, cannonY)
                 drawFoundConfettiCannon(
-                    origin = Offset(w * xRatio, h * 0.94f),
+                    origin = origin,
                     side = side,
                     phase = cannonPhase,
-                    minDim = minDim,
+                    minDim = minDim * 0.55f,
                     accent = colors.PrimaryBright,
                     flicker = partyFlicker
                 )
-            }
-            listOf(0.07f to -1f, 0.93f to 1f).forEach { (xRatio, side) ->
-                val volley = smoothStep(((cannonPhase - 0.12f) / 0.78f).coerceIn(0f, 1f))
+                val volley = smoothStep(((cannonPhase - 0.10f) / 0.75f).coerceIn(0f, 1f))
                 if (volley <= 0f) return@forEach
-                for (piece in 0 until 14) {
-                    val seed = piece + if (side < 0) 0 else 40
-                    val angle = (-68f + piece * 9f * side) * PI.toFloat() / 180f
-                    val dist = minDim * volley * (0.42f + (piece % 4) * 0.10f)
-                    val origin = Offset(w * xRatio, h * 0.90f)
+                for (piece in 0 until 10) {
+                    val seed = piece + if (side < 0) 0 else 30
+                    val angle = (-118f + piece * 11f * side) * PI.toFloat() / 180f
+                    val dist = haloR * volley * (0.55f + (piece % 3) * 0.12f)
                     val pos = origin + Offset(cos(angle) * dist, sin(angle) * dist)
+                    if ((pos - haloCenter).getDistance() > haloR * 1.05f) continue
                     drawFoundConfettiPiece(
                         pos = pos,
-                        rotation = seed * 37f + volley * 480f,
+                        rotation = seed * 37f + volley * 520f,
                         shape = piece % 5,
                         tint = confettiPalette[(piece + 1) % confettiPalette.size],
-                        alpha = (1f - volley * 0.45f).coerceIn(0.3f, 1f) * partyFlicker,
-                        scale = 0.9f + (piece % 3) * 0.15f
+                        alpha = (1f - volley * 0.40f).coerceIn(0.35f, 1f) * partyFlicker,
+                        scale = 0.85f + (piece % 3) * 0.12f
                     )
                 }
             }
         }
 
-        // Act III — overhead streamer cathedral (high, away from copy)
-        if (streamerPhase > 0f) {
-            listOf(-1f, 1f).forEach { side ->
-                drawFoundConfettiStreamerArc(
-                    start = Offset(w * (0.5f + side * 0.46f), h * 0.94f),
-                    apex = Offset(w * (0.5f + side * 0.08f), h * 0.10f),
-                    end = Offset(w * (0.5f - side * 0.38f), h * 0.18f),
-                    phase = streamerPhase,
-                    tint = confettiPalette[if (side < 0) 2 else 6],
-                    side = side
+        // Act III — ring bursts around the halo perimeter (top + sides)
+        if (burstPhase > 0f) {
+            val burstAngles = listOf(-90f, -148f, -32f, -118f, -62f)
+            burstAngles.forEachIndexed { index, deg ->
+                val delay = index * 0.06f
+                val local = smoothStep(((burstPhase - delay) / 0.68f).coerceIn(0f, 1f))
+                if (local <= 0f) return@forEachIndexed
+                val rad = deg * PI.toFloat() / 180f
+                val site = haloCenter + Offset(cos(rad) * haloR * 0.88f, sin(rad) * haloR * 0.72f)
+                drawFoundConfettiBurst(
+                    center = site,
+                    phase = local,
+                    minDim = minDim * haloScale * (0.72f + (index % 2) * 0.08f),
+                    palette = confettiPalette,
+                    index = index,
+                    flicker = partyFlicker
                 )
             }
-            for (ribbon in 0 until 6) {
-                val delay = ribbon * 0.08f
-                val local = smoothStep(((streamerPhase - delay) / 0.72f).coerceIn(0f, 1f))
-                if (local <= 0f) continue
-                val side = if (ribbon % 2 == 0) -1f else 1f
-                val path = Path()
-                var started = false
-                for (step in 0..24) {
-                    val t = step / 24f * local
-                    val x = w * (0.5f + side * (0.42f - t * 0.34f))
-                    val y = h * (0.88f - t * 0.72f) + sin(t * PI.toFloat() * 3f + ribbon) * minDim * 0.04f
-                    val point = Offset(x, y)
-                    if (!started) {
-                        path.moveTo(point.x, point.y)
-                        started = true
-                    } else {
-                        path.lineTo(point.x, point.y)
-                    }
-                }
-                if (started) {
-                    drawPath(
-                        path,
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                confettiPalette[ribbon % confettiPalette.size].copy(alpha = local * 0.85f),
-                                Color.White.copy(alpha = local * 0.55f),
-                                confettiPalette[(ribbon + 3) % confettiPalette.size].copy(alpha = local * 0.35f)
-                            ),
-                            start = Offset(w * 0.5f, h * 0.88f),
-                            end = Offset(w * (0.5f + side * 0.08f), h * 0.12f)
-                        ),
-                        style = Stroke(width = 4.5f - ribbon * 0.3f, cap = StrokeCap.Round)
-                    )
-                }
+            // Short celebratory streamers linking burst points
+            listOf(-148f to -32f, -118f to -62f).forEachIndexed { idx, (fromDeg, toDeg) ->
+                val local = smoothStep(((burstPhase - 0.08f - idx * 0.05f) / 0.62f).coerceIn(0f, 1f))
+                if (local <= 0f) return@forEachIndexed
+                val fromRad = fromDeg * PI.toFloat() / 180f
+                val toRad = toDeg * PI.toFloat() / 180f
+                drawFoundConfettiStreamerArc(
+                    start = haloCenter + Offset(cos(fromRad) * haloR * 0.75f, sin(fromRad) * haloR * 0.60f),
+                    apex = haloCenter + Offset(0f, -haloR * 0.95f),
+                    end = haloCenter + Offset(cos(toRad) * haloR * 0.75f, sin(toRad) * haloR * 0.60f),
+                    phase = local,
+                    tint = confettiPalette[idx + 4],
+                    side = if (idx == 0) -1f else 1f
+                )
             }
         }
 
-        // Act IV — margin airbursts (kept off center copy)
-        val burstSites = listOf(
-            Offset(w * 0.50f, h * 0.14f) to 1.0f,
-            Offset(w * 0.16f, h * 0.12f) to 0.82f,
-            Offset(w * 0.84f, h * 0.12f) to 0.82f,
-            Offset(w * 0.10f, h * 0.78f) to 0.70f,
-            Offset(w * 0.90f, h * 0.78f) to 0.70f
-        )
-        burstSites.forEachIndexed { index, (site, scale) ->
-            val delay = index * 0.07f
-            val local = smoothStep(((burstPhase - delay) / 0.72f).coerceIn(0f, 1f))
-            if (local <= 0f) return@forEachIndexed
-            drawFoundConfettiBurst(
-                center = site,
-                phase = local,
-                minDim = minDim * scale,
-                palette = confettiPalette,
-                index = index,
-                flicker = partyFlicker
+        // Act IV — confetti fountain arcs within the celebration dome
+        if (fountainPhase > 0f) {
+            val launchPoints = listOf(
+                Offset(haloCenter.x - haloR * 0.45f, haloCenter.y + haloR * 0.65f),
+                Offset(haloCenter.x + haloR * 0.45f, haloCenter.y + haloR * 0.65f),
+                Offset(haloCenter.x, haloCenter.y + haloR * 0.78f)
             )
-        }
-
-        // Act V — layered confetti rain (foreground, mid, background)
-        if (rainPhase > 0f) {
-            for (layer in 0 until 3) {
-                val layerScale = 0.65f + layer * 0.22f
-                val layerAlpha = 0.45f + layer * 0.22f
-                val count = if (layer == 2) 48 else if (layer == 1) 36 else 28
-                for (i in 0 until count) {
-                    val seed = i + layer * 100
-                    val delay = (i % 10) * 0.022f + layer * 0.05f
-                    val local = ((rainPhase - delay) / 0.88f).coerceIn(0f, 1f)
+            for (layer in 0 until 2) {
+                for (i in 0 until 18) {
+                    val seed = i + layer * 40
+                    val launch = launchPoints[seed % launchPoints.size]
+                    val delay = (i % 7) * 0.028f + layer * 0.06f
+                    val local = ((fountainPhase - delay) / 0.82f).coerceIn(0f, 1f)
                     if (local <= 0f) continue
-                    val fall = local * local
-                    val sway = sin(local * PI.toFloat() * (3.5f + layer) + seed) * minDim * (0.03f + layer * 0.015f)
-                    val x = ((seed * 47.3f + progress * (40f + layer * 15f)) % w) + sway
-                    val y = -minDim * 0.08f + fall * h * 1.12f
-                    val rotation = seed * 2.7f + local * (520f + layer * 120f)
-                    val alpha = (1f - local * 0.35f).coerceIn(0.18f, 1f) * layerAlpha * partyFlicker
+                    val aim = (-155f + (seed % 11) * 14f) * PI.toFloat() / 180f
+                    val speed = haloR * (0.72f + (seed % 4) * 0.10f)
+                    val t = local
+                    val pos = launch + Offset(
+                        cos(aim) * speed * t,
+                        sin(aim) * speed * t + t * t * haloR * 0.55f
+                    )
+                    if ((pos - haloCenter).getDistance() > haloR * 1.02f) continue
                     drawFoundConfettiPiece(
-                        pos = Offset(x, y),
-                        rotation = rotation,
+                        pos = pos,
+                        rotation = seed * 3.1f + local * (480f + layer * 90f),
                         shape = (seed + layer) % 5,
                         tint = confettiPalette[(seed + layer) % confettiPalette.size],
-                        alpha = alpha,
-                        scale = layerScale
+                        alpha = (1f - local * 0.42f).coerceIn(0.25f, 1f) * partyFlicker,
+                        scale = 0.75f + layer * 0.12f + (seed % 3) * 0.08f
                     )
                 }
             }
         }
 
-        // Golden afterglow glitter
-        if (glowPhase > 0f) {
-            for (g in 0 until 24) {
-                val gx = (g * 83.7f + glowPhase * 30f) % w
-                val gy = h * (0.08f + (g * 0.041f) % 0.82f)
-                val twinkle = sin(progress * PI.toFloat() * (5f + g * 0.2f) + g) * 0.5f + 0.5f
+        // Act V — spinning shimmer ring + halo glitter
+        if (ringPhase > 0f) {
+            rotate(progress * 42f, pivot = haloCenter) {
                 drawCircle(
-                    color = Color.White.copy(alpha = glowPhase * twinkle * 0.45f),
-                    radius = 1.2f + (g % 3) * 0.7f,
+                    brush = Brush.sweepGradient(
+                        colors = listOf(
+                            Color(0xFFFFD54F).copy(alpha = ringPhase * 0.55f * partyFlicker),
+                            Color.White.copy(alpha = ringPhase * 0.70f),
+                            colors.Teal.copy(alpha = ringPhase * 0.45f),
+                            Color(0xFFFF6B9D).copy(alpha = ringPhase * 0.50f),
+                            Color(0xFFFFD54F).copy(alpha = ringPhase * 0.55f * partyFlicker)
+                        ),
+                        center = haloCenter
+                    ),
+                    radius = haloR * (0.82f + sin(progress * PI.toFloat() * 2f) * 0.04f),
+                    center = haloCenter,
+                    style = Stroke(width = 3.5f)
+                )
+            }
+            for (g in 0 until 16) {
+                val angle = (g * 22.5f + progress * 65f) * PI.toFloat() / 180f
+                val dist = haloR * (0.35f + (g % 4) * 0.14f)
+                val gx = haloCenter.x + cos(angle) * dist
+                val gy = haloCenter.y + sin(angle) * dist * 0.85f
+                val twinkle = sin(progress * PI.toFloat() * (6f + g * 0.25f) + g) * 0.5f + 0.5f
+                drawCircle(
+                    color = Color.White.copy(alpha = ringPhase * twinkle * 0.55f),
+                    radius = 1.4f + (g % 3) * 0.6f,
                     center = Offset(gx, gy)
                 )
             }
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color(0xFFFFD54F).copy(alpha = glowPhase * 0.08f * partyFlicker),
+                        Color(0xFFFFD54F).copy(alpha = ringPhase * 0.12f * partyFlicker),
                         Color.Transparent
                     ),
-                    center = center,
-                    radius = minDim * 0.42f
+                    center = haloCenter,
+                    radius = haloR * 0.55f
                 ),
-                radius = minDim * 0.42f,
-                center = center
+                radius = haloR * 0.55f,
+                center = haloCenter
             )
         }
     }
@@ -1521,189 +1501,196 @@ private fun ChampagnePopFoundEffect(progress: () -> Float, modifier: Modifier = 
     val colors = LocalSpotVaultColors.current
     val gold = Color(0xFFFFD54F)
     val amber = Color(0xFFFFAB40)
-    val deepGold = Color(0xFFFF8F00)
     Canvas(modifier = modifier.fillMaxSize()) {
         val progress = progress()
         val w = size.width
-        val h = size.height
         val minDim = size.minDimension
-        val center = Offset(w / 2f, h / 2f)
-        val bottleNeck = Offset(w / 2f, h * 0.88f)
-        val velvetPhase = smoothStep((progress / 0.16f).coerceIn(0f, 1f))
-        val bottlePhase = smoothStep(((progress - 0.06f) / 0.22f).coerceIn(0f, 1f))
-        val popPhase = smoothStep(((progress - 0.20f) / 0.22f).coerceIn(0f, 1f))
-        val fizzPhase = smoothStep(((progress - 0.32f) / 0.38f).coerceIn(0f, 1f))
-        val toastPhase = smoothStep(((progress - 0.52f) / 0.42f).coerceIn(0f, 1f))
-        val bubblePhase = smoothStep(((progress - 0.18f) / 0.78f).coerceIn(0f, 1f))
+        val haloCenter = Offset(w / 2f, size.height / 2f - minDim * 0.04f)
+        val haloR = minDim * 0.34f
+        val bottleBase = Offset(haloCenter.x, haloCenter.y + haloR * 0.82f)
+        val bottleNeck = bottleBase - Offset(0f, minDim * 0.14f)
+        val glowPhase = smoothStep((progress / 0.14f).coerceIn(0f, 1f))
+        val bottlePhase = smoothStep(((progress - 0.05f) / 0.20f).coerceIn(0f, 1f))
+        val popPhase = smoothStep(((progress - 0.18f) / 0.20f).coerceIn(0f, 1f))
+        val fizzPhase = smoothStep(((progress - 0.30f) / 0.34f).coerceIn(0f, 1f))
+        val bubblePhase = smoothStep(((progress - 0.22f) / 0.68f).coerceIn(0f, 1f))
+        val toastPhase = smoothStep(((progress - 0.50f) / 0.42f).coerceIn(0f, 1f))
         val fizzFlicker = 0.80f + 0.20f * sin(progress * PI.toFloat() * 6.5f)
 
-        // Act I — velvet atmosphere & spotlight
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFF120818).copy(alpha = 0.18f * velvetPhase),
-                    Color.Transparent,
-                    gold.copy(alpha = 0.06f * velvetPhase),
-                    amber.copy(alpha = 0.14f * velvetPhase),
-                    deepGold.copy(alpha = 0.10f * velvetPhase)
-                ),
-                startY = 0f,
-                endY = h
-            )
-        )
+        // Act I — localized golden halo around the card
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.16f * velvetPhase * fizzFlicker),
-                    gold.copy(alpha = 0.08f * velvetPhase),
+                    Color.White.copy(alpha = 0.14f * glowPhase * fizzFlicker),
+                    gold.copy(alpha = 0.16f * glowPhase),
+                    amber.copy(alpha = 0.08f * glowPhase),
                     Color.Transparent
                 ),
-                center = Offset(w / 2f, h * 0.10f),
-                radius = minDim * 0.62f
+                center = haloCenter,
+                radius = haloR * 1.05f
             ),
-            radius = minDim * 0.62f,
-            center = Offset(w / 2f, h * 0.10f)
+            radius = haloR * 1.05f,
+            center = haloCenter
         )
-        for (dust in 0 until 14) {
-            val dx = (dust * 73.1f + progress * 18f) % w
-            val dy = h * (0.06f + (dust * 0.055f) % 0.35f)
-            val twinkle = sin(progress * PI.toFloat() * 3f + dust) * 0.5f + 0.5f
+        for (dust in 0 until 8) {
+            val angle = (dust * 45f + progress * 35f) * PI.toFloat() / 180f
+            val dist = haloR * (0.28f + (dust % 3) * 0.18f)
+            val dx = haloCenter.x + cos(angle) * dist
+            val dy = haloCenter.y + sin(angle) * dist * 0.75f
+            val twinkle = sin(progress * PI.toFloat() * 3.5f + dust) * 0.5f + 0.5f
             drawCircle(
-                color = Color.White.copy(alpha = velvetPhase * twinkle * 0.30f),
-                radius = 1f + (dust % 2) * 0.5f,
+                color = Color.White.copy(alpha = glowPhase * twinkle * 0.38f),
+                radius = 1.2f + (dust % 2) * 0.5f,
                 center = Offset(dx, dy)
             )
         }
 
-        // Act II — bottle at bottom (hero prop, below copy)
+        // Act II — mini bottle tucked below the card within the halo
         if (bottlePhase > 0f) {
             drawFoundChampagneBottle(
-                base = Offset(w / 2f, h * 0.97f),
-                minDim = minDim,
+                base = bottleBase,
+                minDim = minDim * 0.62f,
                 phase = bottlePhase,
                 gold = gold,
                 accent = colors.Teal
             )
         }
 
-        // Act III — cork pop & launch (arc to upper margin, not over copy)
+        // Act III — cork pop with burst confined to the halo
         if (popPhase > 0f) {
             drawFoundChampagnePopBurst(
                 origin = bottleNeck,
                 phase = popPhase,
-                minDim = minDim,
+                minDim = minDim * 0.55f,
                 gold = gold,
                 accent = colors.PrimaryBright,
                 flicker = fizzFlicker
             )
-            val corkT = smoothStep(((popPhase - 0.08f) / 0.88f).coerceIn(0f, 1f))
+            val corkT = smoothStep(((popPhase - 0.06f) / 0.82f).coerceIn(0f, 1f))
             if (corkT > 0f) {
-                val corkX = w * (0.50f - corkT * 0.28f)
-                val corkY = h * (0.86f - corkT * 0.72f) - sin(corkT * PI.toFloat()) * minDim * 0.08f
-                drawFoundChampagneCork(
-                    pos = Offset(corkX, corkY),
-                    rotation = corkT * 420f,
-                    scale = 1f - corkT * 0.15f,
-                    alpha = (1f - corkT * 0.35f).coerceIn(0.4f, 1f)
-                )
+                val corkX = bottleNeck.x - corkT * haloR * 0.22f
+                val corkY = bottleNeck.y - corkT * haloR * 0.95f - sin(corkT * PI.toFloat()) * haloR * 0.12f
+                val corkPos = Offset(corkX, corkY)
+                if ((corkPos - haloCenter).getDistance() <= haloR * 1.05f) {
+                    drawFoundChampagneCork(
+                        pos = corkPos,
+                        rotation = corkT * 480f,
+                        scale = 1f - corkT * 0.12f,
+                        alpha = (1f - corkT * 0.40f).coerceIn(0.35f, 1f)
+                    )
+                }
             }
         }
 
-        // Act IV — fizz eruption at margins
+        // Act IV — fizz mist dome from the bottle neck
         if (fizzPhase > 0f) {
             listOf(-1f, 1f).forEach { side ->
                 drawFoundChampagneFizzSpray(
-                    origin = bottleNeck + Offset(side * minDim * 0.06f, 0f),
+                    origin = bottleNeck + Offset(side * minDim * 0.025f, 0f),
                     side = side,
                     phase = fizzPhase,
-                    minDim = minDim,
-                    h = h,
+                    minDim = minDim * 0.48f,
+                    h = haloR * 2f,
                     gold = gold,
                     accent = colors.Teal,
                     flicker = fizzFlicker
                 )
             }
-            for (ring in 0 until 4) {
-                val delay = ring * 0.10f
-                val local = smoothStep(((fizzPhase - delay) / 0.72f).coerceIn(0f, 1f))
+            for (ring in 0 until 3) {
+                val delay = ring * 0.09f
+                val local = smoothStep(((fizzPhase - delay) / 0.68f).coerceIn(0f, 1f))
                 if (local <= 0f) continue
                 drawCircle(
-                    color = gold.copy(alpha = (1f - local) * 0.45f * fizzFlicker),
-                    radius = minDim * (0.12f + local * (0.28f + ring * 0.06f)),
+                    color = gold.copy(alpha = (1f - local) * 0.50f * fizzFlicker),
+                    radius = haloR * (0.08f + local * (0.22f + ring * 0.05f)),
                     center = bottleNeck,
-                    style = Stroke(width = (3.5f - ring * 0.6f).coerceAtLeast(1.2f))
+                    style = Stroke(width = (3f - ring * 0.5f).coerceAtLeast(1.2f))
                 )
             }
+            // Mist dome cap above the bottle
+            drawOval(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = fizzPhase * 0.22f * fizzFlicker),
+                        gold.copy(alpha = fizzPhase * 0.12f),
+                        Color.Transparent
+                    ),
+                    center = bottleNeck - Offset(0f, haloR * 0.18f),
+                    radius = haloR * 0.28f
+                ),
+                topLeft = Offset(bottleNeck.x - haloR * 0.32f, bottleNeck.y - haloR * 0.48f),
+                size = Size(haloR * 0.64f, haloR * 0.36f)
+            )
         }
 
-        // Act V — rising bubble columns (kept in side lanes away from center copy)
+        // Act V — bubble helix rising within the halo column
         if (bubblePhase > 0f) {
-            for (lane in 0 until 4) {
-                val laneX = w * (0.14f + lane * 0.24f)
-                val count = if (lane == 1 || lane == 2) 22 else 16
-                for (b in 0 until count) {
-                    val seed = b + lane * 50
-                    val delay = (b % 9) * 0.018f + lane * 0.04f
-                    val local = ((bubblePhase - delay) / 0.88f).coerceIn(0f, 1f)
-                    if (local <= 0f) continue
-                    val rise = local * local
-                    val wobble = sin(local * PI.toFloat() * (4.5f + lane) + seed) * minDim * 0.04f
-                    val x = laneX + wobble + sin(seed.toFloat()) * minDim * 0.02f
-                    val y = h * 0.94f - rise * h * 0.82f
-                    val bubbleR = (3.5f + (b % 5) * 1.6f) * (0.85f + lane * 0.05f)
-                    val alpha = (1f - local * 0.30f).coerceIn(0.22f, 0.95f) * fizzFlicker
-                    drawFoundChampagneBubble(
-                        center = Offset(x, y),
-                        radius = bubbleR,
-                        alpha = alpha,
-                        gold = gold
-                    )
-                    if (local in 0.58f..0.74f && b % 3 == 0) {
-                        val spark = sin(((local - 0.58f) / 0.16f) * PI.toFloat())
-                        for (s in 0 until 4) {
-                            val sa = (s * 90f + seed) * PI.toFloat() / 180f
-                            drawCircle(
-                                color = Color.White.copy(alpha = spark * 0.75f),
-                                radius = 1.4f,
-                                center = Offset(x, y) + Offset(cos(sa), sin(sa)) * bubbleR * 1.7f
-                            )
-                        }
+            for (b in 0 until 26) {
+                val seed = b
+                val delay = (b % 8) * 0.022f
+                val local = ((bubblePhase - delay) / 0.85f).coerceIn(0f, 1f)
+                if (local <= 0f) continue
+                val rise = local * local
+                val helixAngle = (seed * 24f + progress * 90f) * PI.toFloat() / 180f
+                val helixR = haloR * 0.22f * (0.6f + sin(seed.toFloat()) * 0.2f)
+                val x = haloCenter.x + cos(helixAngle) * helixR
+                val y = bottleBase.y - rise * haloR * 1.35f
+                if ((Offset(x, y) - haloCenter).getDistance() > haloR * 1.02f) continue
+                val bubbleR = (3f + (b % 5) * 1.4f)
+                val alpha = (1f - local * 0.32f).coerceIn(0.25f, 0.92f) * fizzFlicker
+                drawFoundChampagneBubble(
+                    center = Offset(x, y),
+                    radius = bubbleR,
+                    alpha = alpha,
+                    gold = gold
+                )
+                if (local in 0.55f..0.72f && b % 4 == 0) {
+                    val spark = sin(((local - 0.55f) / 0.17f) * PI.toFloat())
+                    for (s in 0 until 4) {
+                        val sa = (s * 90f + seed) * PI.toFloat() / 180f
+                        drawCircle(
+                            color = Color.White.copy(alpha = spark * 0.70f),
+                            radius = 1.3f,
+                            center = Offset(x, y) + Offset(cos(sa), sin(sa)) * bubbleR * 1.6f
+                        )
                     }
                 }
             }
         }
 
-        // Toast afterglow — side flutes & micro-fizz
+        // Toast — flutes at halo sides + localized sparkle
         if (toastPhase > 0f) {
-            listOf(0.12f, 0.88f).forEach { xRatio ->
+            listOf(-1f, 1f).forEach { side ->
                 drawFoundChampagneFlute(
-                    base = Offset(w * xRatio, h * 0.96f),
-                    minDim = minDim,
+                    base = Offset(haloCenter.x + side * haloR * 0.72f, haloCenter.y + haloR * 0.78f),
+                    minDim = minDim * 0.48f,
                     phase = toastPhase,
                     gold = gold
                 )
             }
-            for (f in 0 until 36) {
-                val fx = (f * 59.3f + toastPhase * 22f) % w
-                val fy = h * (0.20f + (f * 0.022f) % 0.65f)
-                val fa = toastPhase * (1f - f * 0.015f).coerceAtLeast(0.2f) * 0.45f
+            for (f in 0 until 12) {
+                val angle = (f * 30f + toastPhase * 40f) * PI.toFloat() / 180f
+                val dist = haloR * (0.40f + (f % 3) * 0.12f)
+                val fx = haloCenter.x + cos(angle) * dist
+                val fy = haloCenter.y + sin(angle) * dist * 0.70f - haloR * 0.15f
+                val fa = toastPhase * (1f - f * 0.04f).coerceAtLeast(0.35f) * 0.50f
                 drawCircle(
                     color = Color.White.copy(alpha = fa * fizzFlicker),
-                    radius = 1f + (f % 2),
+                    radius = 1.2f + (f % 2),
                     center = Offset(fx, fy)
                 )
             }
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        gold.copy(alpha = toastPhase * 0.10f * fizzFlicker),
+                        gold.copy(alpha = toastPhase * 0.14f * fizzFlicker),
                         Color.Transparent
                     ),
-                    center = center,
-                    radius = minDim * 0.38f
+                    center = haloCenter,
+                    radius = haloR * 0.48f
                 ),
-                radius = minDim * 0.38f,
-                center = center
+                radius = haloR * 0.48f,
+                center = haloCenter
             )
         }
     }

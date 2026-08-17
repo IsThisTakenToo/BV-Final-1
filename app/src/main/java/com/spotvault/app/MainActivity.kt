@@ -3208,52 +3208,18 @@ private fun SaveScreenTagField(
     val coroutineScope = rememberCoroutineScope()
     var showPicker by remember { mutableStateOf(false) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Button comes before the chip cloud (not after) so this column's top edge — the part
-        // that lines up against the Vehicles column next to it — never moves. Chips spill
-        // downward below it instead of pushing the button down as they accumulate, which used
-        // to leave the two columns' tops lopsided as soon as any tag was added.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-                .clickable { showPicker = true }
-                .padding(horizontal = 12.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.Sell, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(15.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Add Tag", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.OnSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-        }
-        if (selectedTags.isNotEmpty()) {
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                selectedTags.forEach { tag ->
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(SpotVaultColors.Teal.copy(alpha = 0.18f))
-                            .border(1.dp, SpotVaultColors.Teal.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(tag, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.Teal)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Remove $tag",
-                            tint = SpotVaultColors.Teal,
-                            modifier = Modifier
-                                .size(14.dp)
-                                .clickable { onSelectedTagsChange(selectedTags.filterNot { it == tag }) }
-                        )
-                    }
-                }
-            }
-        }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+            .clickable { showPicker = true }
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Sell, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(15.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Add Tag", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.OnSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 
     if (showPicker) {
@@ -3265,6 +3231,46 @@ private fun SaveScreenTagField(
             coroutineScope = coroutineScope,
             onDismiss = { showPicker = false }
         )
+    }
+}
+
+/** Selected-tag chips, laid out separately from [SaveScreenTagField] and given the full card
+ * width (not confined to the Tags column next to Vehicles) so several short tags wrap 3-4 to a
+ * row instead of one per row — the half-width column was cramped enough that almost any tag
+ * forced a new line, making the card balloon in height after just a few tags. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun SaveScreenSelectedTagsRow(
+    selectedTags: List<String>,
+    onSelectedTagsChange: (List<String>) -> Unit
+) {
+    if (selectedTags.isEmpty()) return
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        selectedTags.forEach { tag ->
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SpotVaultColors.Teal.copy(alpha = 0.18f))
+                    .border(1.dp, SpotVaultColors.Teal.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(tag, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.Teal)
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Remove $tag",
+                    tint = SpotVaultColors.Teal,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clickable { onSelectedTagsChange(selectedTags.filterNot { it == tag }) }
+                )
+            }
+        }
     }
 }
 
@@ -4247,6 +4253,11 @@ fun TimerSelectionDialog(
                                         }
                                     }
                                 }
+
+                                SaveScreenSelectedTagsRow(
+                                    selectedTags = selectedTags,
+                                    onSelectedTagsChange = { selectedTags = it }
+                                )
 
                                 // Centered across the full card width, not tucked inside the
                                 // Vehicles column — left-aligned within that column put it flush
