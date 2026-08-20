@@ -962,11 +962,16 @@ private fun AddQuietZoneDialog(
             ) {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { if (it.length <= MAX_AUTO_PARK_QUIET_ZONE_NAME_CHARS) name = it },
                     label = { Text("Zone name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = { VoiceMicButton(onResult = { name = it }, prompt = "Speak zone name…") }
+                    trailingIcon = {
+                        VoiceMicButton(
+                            onResult = { name = it.take(MAX_AUTO_PARK_QUIET_ZONE_NAME_CHARS) },
+                            prompt = "Speak zone name…"
+                        )
+                    }
                 )
 
                 var locatingNow by remember { mutableStateOf(false) }

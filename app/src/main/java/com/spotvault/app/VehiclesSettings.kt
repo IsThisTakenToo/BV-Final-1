@@ -131,8 +131,17 @@ private fun VehicleListScreen(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
             } else {
-                visible.forEach { vehicle ->
+                val vehiclesToShow = visible.take(60)
+                vehiclesToShow.forEach { vehicle ->
                     VehicleListRow(vehicle = vehicle, onClick = { onEdit(vehicle.id) })
+                }
+                if (visible.size > 60) {
+                    Text(
+                        "Showing 60 of ${visible.size} vehicles — archive unused ones to keep this list short.",
+                        color = SpotVaultColors.Muted,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
             }
             SpotVaultButton(
@@ -684,7 +693,8 @@ fun VehicleBluetoothDevicePicker(
             fontSize = 13.sp
         )
     } else {
-        bondedDevices.forEach { (mac, name) ->
+        val devicesToShow = bondedDevices.take(50)
+        devicesToShow.forEach { (mac, name) ->
             val selected = mac.equals(selectedMac, ignoreCase = true)
             Row(
                 modifier = Modifier
@@ -711,6 +721,13 @@ fun VehicleBluetoothDevicePicker(
                     Icon(Icons.Default.Check, contentDescription = "Selected", tint = SpotVaultColors.Teal)
                 }
             }
+        }
+        if (bondedDevices.size > 50) {
+            Text(
+                "Showing 50 of ${bondedDevices.size} paired devices — unpair unused ones in Android Settings.",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp
+            )
         }
     }
     SpotVaultButton(

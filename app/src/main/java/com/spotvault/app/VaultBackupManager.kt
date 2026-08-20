@@ -989,11 +989,19 @@ object VaultBackupManager {
                     "int" -> editor.putInt(key, raw.getInt("v"))
                     "long" -> editor.putLong(key, raw.getLong("v"))
                     "float" -> editor.putFloat(key, raw.getDouble("v").toFloat())
-                    "string" -> editor.putString(key, raw.getString("v"))
+                    "string" -> {
+                        val value = raw.getString("v")
+                        // Match serializeAllPrefs — skip runaway strings that would bloat prefs.
+                        if (value.length <= 16_384) editor.putString(key, value)
+                    }
                     "set" -> {
                         val arr = raw.getJSONArray("v")
                         val set = mutableSetOf<String>()
-                        for (i in 0 until arr.length()) set.add(arr.getString(i))
+                        val maxItems = minOf(arr.length(), 500)
+                        for (i in 0 until maxItems) {
+                            val s = arr.getString(i)
+                            if (s.length <= 512) set.add(s)
+                        }
                         editor.putStringSet(key, set)
                     }
                 }

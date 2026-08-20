@@ -168,7 +168,7 @@ fun VaultCompactNotesFieldWithExpand(
                                     current + spoken
                                 } else {
                                     "$current $spoken"
-                                }
+                                }.take(NOTEPAD_MAX_CHARS)
                                 onValueChange(TextFieldValue(combined, TextRange(combined.length)))
                             },
                             prompt = "Dictate $label…"

@@ -1023,7 +1023,7 @@ fun SpotEditDialog(
                     SpotEditSectionLabel("Notes")
                     OutlinedTextField(
                         value = notes,
-                        onValueChange = { notes = it },
+                        onValueChange = { notes = it.take(NOTEPAD_MAX_CHARS) },
                         placeholder = { Text("Add notes…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
@@ -1033,7 +1033,10 @@ fun SpotEditDialog(
                         trailingIcon = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 VoiceMicButton(
-                                    onResult = { spoken -> notes = spoken },
+                                    onResult = { spoken ->
+                                        notes = (notes + if (notes.isBlank()) spoken else " $spoken")
+                                            .take(NOTEPAD_MAX_CHARS)
+                                    },
                                     prompt = "Dictate notes…"
                                 )
                                 IconButton(onClick = { showNotepad = true }) {
@@ -1056,7 +1059,7 @@ fun SpotEditDialog(
                     onSave(
                         title.trim() + titleSuffix,
                         timestamp,
-                        notes.trim(),
+                        notes.trim().take(NOTEPAD_MAX_CHARS),
                         city.trim(),
                         state.trim(),
                         vehicleId
@@ -1080,7 +1083,7 @@ fun SpotEditDialog(
         NotepadEditorDialog(
             initialNotes = notes,
             onDismiss = { showNotepad = false },
-            onSave = { notes = it },
+            onSave = { notes = it.take(NOTEPAD_MAX_CHARS) },
             fieldLabel = "Notes",
             contextAddress = currentTitle
         )
@@ -1275,8 +1278,16 @@ private fun SpotEditTagPickerSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    filteredTags.forEach { tag ->
+                    val tagsToShow = filteredTags.take(TAG_CLOUD_CHIP_CAP)
+                    tagsToShow.forEach { tag ->
                         SpotEditTagChip(tag = tag, selected = currentTagIds.contains(tag.id), onClick = { toggleTag(tag) })
+                    }
+                    if (filteredTags.size > TAG_CLOUD_CHIP_CAP) {
+                        Text(
+                            "Showing $TAG_CLOUD_CHIP_CAP of ${filteredTags.size} — refine search",
+                            color = SpotVaultColors.Muted,
+                            fontSize = 11.sp
+                        )
                     }
                 }
                 else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1791,8 +1802,16 @@ private fun VaultTagFilterSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        filteredTags.forEach { tag ->
+                        val tagsToShow = filteredTags.take(TAG_CLOUD_CHIP_CAP)
+                        tagsToShow.forEach { tag ->
                             VaultFilterTagChip(tag = tag, selectedTag = selectedTag, onSelectedTagChange = onSelectedTagChange, onDismiss = onDismiss)
+                        }
+                        if (filteredTags.size > TAG_CLOUD_CHIP_CAP) {
+                            Text(
+                                "Showing $TAG_CLOUD_CHIP_CAP of ${filteredTags.size} — refine search",
+                                color = SpotVaultColors.Muted,
+                                fontSize = 11.sp
+                            )
                         }
                     }
                     else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -5467,7 +5486,7 @@ private fun AddFavoriteSpotDialog(
                 SpotEditSectionLabel("Title")
                 OutlinedTextField(
                     value = title,
-                    onValueChange = { title = it },
+                    onValueChange = { if (it.length <= 120) title = it },
                     placeholder = { Text("Mom's House, Cabin…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
                     singleLine = true,
                     enabled = !formLocked,
@@ -5475,7 +5494,7 @@ private fun AddFavoriteSpotDialog(
                     shape = RoundedCornerShape(12.dp),
                     colors = spotEditFieldColors(),
                     trailingIcon = {
-                        VoiceMicButton(onResult = { spoken -> title = spoken }, prompt = "Dictate spot title…")
+                        VoiceMicButton(onResult = { spoken -> title = spoken.take(120) }, prompt = "Dictate spot title…")
                     }
                 )
             }
@@ -5483,7 +5502,11 @@ private fun AddFavoriteSpotDialog(
                 SpotEditSectionLabel("Address to Search")
                 OutlinedTextField(
                     value = addressText,
-                    onValueChange = { addressText = it; errorMessage = null; resolvedCoordinates = null; resolvedCity = ""; resolvedState = "" },
+                    onValueChange = {
+                        if (it.length <= 400) {
+                            addressText = it; errorMessage = null; resolvedCoordinates = null; resolvedCity = ""; resolvedState = ""
+                        }
+                    },
                     placeholder = { Text("123 Main St, City, State", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
                     singleLine = true,
                     isError = errorMessage != null,
@@ -5493,7 +5516,10 @@ private fun AddFavoriteSpotDialog(
                     colors = spotEditFieldColors(),
                     trailingIcon = {
                         VoiceMicButton(
-                            onResult = { spoken -> addressText = spoken; errorMessage = null; resolvedCoordinates = null; resolvedCity = ""; resolvedState = "" },
+                            onResult = { spoken ->
+                                addressText = spoken.take(400)
+                                errorMessage = null; resolvedCoordinates = null; resolvedCity = ""; resolvedState = ""
+                            },
                             prompt = "Dictate address…"
                         )
                     }
@@ -5662,7 +5688,7 @@ private fun AddFavoriteSpotDialog(
                 SpotEditSectionLabel("Notes")
                 OutlinedTextField(
                     value = notes,
-                    onValueChange = { notes = it },
+                    onValueChange = { notes = it.take(NOTEPAD_MAX_CHARS) },
                     placeholder = { Text("Add notes…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
                     minLines = 2,
                     maxLines = 2,
@@ -5671,7 +5697,13 @@ private fun AddFavoriteSpotDialog(
                     shape = RoundedCornerShape(12.dp),
                     colors = spotEditFieldColors(),
                     trailingIcon = {
-                        VoiceMicButton(onResult = { spoken -> notes = spoken }, prompt = "Dictate notes…")
+                        VoiceMicButton(
+                            onResult = { spoken ->
+                                notes = (notes + if (notes.isBlank()) spoken else " $spoken")
+                                    .take(NOTEPAD_MAX_CHARS)
+                            },
+                            prompt = "Dictate notes…"
+                        )
                     }
                 )
             }
@@ -5702,8 +5734,8 @@ private fun AddFavoriteSpotDialog(
                             errorMessage = "Find the address above (or Search in Maps) before saving."
                             return@SpotVaultButton
                         }
-                        val trimmedTitle = title.trim()
-                        val trimmedNotes = notes.trim()
+                        val trimmedTitle = title.trim().take(120)
+                        val trimmedNotes = notes.trim().take(NOTEPAD_MAX_CHARS)
                         val resolvedAddress = resolvedAddressLabel.ifBlank { addressText.trim() }
                         isSaving = true
                         errorMessage = null

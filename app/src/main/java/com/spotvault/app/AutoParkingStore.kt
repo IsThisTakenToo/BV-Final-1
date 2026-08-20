@@ -32,6 +32,7 @@ const val MAX_BT_DISCONNECT_CONFIRM_SECONDS = 30
 
 /** Soft ceiling so Quiet Zone JSON in prefs cannot grow without bound over years of use. */
 const val MAX_AUTO_PARK_QUIET_ZONES = 40
+const val MAX_AUTO_PARK_QUIET_ZONE_NAME_CHARS = 64
 
 fun loadBtDisconnectConfirmSeconds(prefs: SharedPreferences): Int =
     prefs.getInt(BT_DISCONNECT_CONFIRM_SECONDS_PREF, DEFAULT_BT_DISCONNECT_CONFIRM_SECONDS)
@@ -137,18 +138,20 @@ fun loadAutoParkQuietZones(prefs: SharedPreferences): List<AutoParkQuietZone> {
 
 private fun parseQuietZonesJson(raw: String): List<AutoParkQuietZone>? {
     return try {
+        // Cap raw blob so a corrupt/malicious prefs value can't explode into a giant JSONArray.
+        if (raw.length > 256 * 1024) return null
         val arr = JSONArray(raw)
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             AutoParkQuietZone(
                 id = o.optString("id", UUID.randomUUID().toString()),
-                name = o.getString("name"),
+                name = o.getString("name").take(MAX_AUTO_PARK_QUIET_ZONE_NAME_CHARS),
                 lat = o.getDouble("lat"),
                 lng = o.getDouble("lng"),
                 radiusMeters = o.optDouble("radiusMeters", 150.0),
                 mode = AutoParkQuietZoneMode.fromPref(o.optString("mode"))
             )
-        }
+        }.take(MAX_AUTO_PARK_QUIET_ZONES)
     } catch (_: Exception) {
         null
     }
@@ -161,7 +164,7 @@ fun saveAutoParkQuietZones(prefs: SharedPreferences, zones: List<AutoParkQuietZo
         arr.put(
             JSONObject().apply {
                 put("id", zone.id)
-                put("name", zone.name)
+                put("name", zone.name.take(MAX_AUTO_PARK_QUIET_ZONE_NAME_CHARS))
                 put("lat", zone.lat)
                 put("lng", zone.lng)
                 put("radiusMeters", zone.radiusMeters)

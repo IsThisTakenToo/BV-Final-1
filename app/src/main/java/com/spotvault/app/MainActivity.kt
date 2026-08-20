@@ -603,7 +603,12 @@ class MainActivity : FragmentActivity() {
             if (saveResult is QuietSaveResult.Saved && photoPath.isNotEmpty()) {
                 val spot = dao.getSpotById(saveResult.spotId)
                 if (spot != null) {
-                    dao.updateSpot(spot.copy(imagePath = photoPath, locationDetails = details))
+                    dao.updateSpot(
+                        spot.copy(
+                            imagePath = photoPath,
+                            locationDetails = details.take(NOTEPAD_MAX_CHARS)
+                        )
+                    )
                 }
             }
             saveResult
@@ -2047,10 +2052,12 @@ class MainActivity : FragmentActivity() {
                                 .replace(Regex("[^A-Za-z0-9\\-\\s]"), " ")
                                 .replace(Regex("\\s+"), " ")
                                 .trim()
+                                .take(NOTEPAD_MAX_CHARS)
                             prominentText = prominentText
                                 .replace(Regex("[^A-Za-z0-9\\-\\s]"), " ")
                                 .replace(Regex("\\s+"), " ")
                                 .trim()
+                                .take(200)
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -3640,8 +3647,16 @@ fun SaveScreenTagPickerSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    filteredTags.forEach { tag ->
+                    val tagsToShow = filteredTags.take(TAG_CLOUD_CHIP_CAP)
+                    tagsToShow.forEach { tag ->
                         SaveScreenPickerTagChip(tag = tag, selectedTags = selectedTags, onToggle = ::toggleTag)
+                    }
+                    if (filteredTags.size > TAG_CLOUD_CHIP_CAP) {
+                        Text(
+                            "Showing $TAG_CLOUD_CHIP_CAP of ${filteredTags.size} — refine search",
+                            color = SpotVaultColors.Muted,
+                            fontSize = 11.sp
+                        )
                     }
                 }
                 else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
