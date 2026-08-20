@@ -352,7 +352,8 @@ private fun HexTessellationBackground(modifier: Modifier = Modifier, previewBoos
     val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
     Box(
         modifier = modifier.fillMaxSize().drawWithCache {
-            val spacing = (if (previewBoost) 22.dp else 34.dp).toPx()
+            val ramScale = if (ThemeState.lowRamDevice) 1.7f else 1f
+            val spacing = (if (previewBoost) 22.dp else 34.dp).toPx() * ramScale
             val hexR = spacing * 0.52f
             val hexH = hexR * 1.732f
             val center = Offset(size.width * 0.5f, size.height * 0.46f)
@@ -656,7 +657,8 @@ private fun ScanSweepBackground(modifier: Modifier = Modifier, previewBoost: Boo
         modifier = modifier.fillMaxSize().drawWithCache {
             val w = size.width
             val h = size.height
-            val spacing = (if (previewBoost) 24.dp else 40.dp).toPx()
+            val ramScale = if (ThemeState.lowRamDevice) 1.7f else 1f
+            val spacing = (if (previewBoost) 24.dp else 40.dp).toPx() * ramScale
             onDrawBehind {
                 drawPatternBase(baseFill, themeColors, previewBoost)
 
@@ -735,7 +737,8 @@ private fun PinFieldBackground(modifier: Modifier = Modifier, previewBoost: Bool
     val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
     Box(
         modifier = modifier.fillMaxSize().drawWithCache {
-            val spacing = (if (previewBoost) 52.dp else 72.dp).toPx()
+            val ramScale = if (ThemeState.lowRamDevice) 1.7f else 1f
+            val spacing = (if (previewBoost) 52.dp else 72.dp).toPx() * ramScale
             val center = Offset(size.width * 0.5f, size.height * 0.45f)
             onDrawBehind {
                 // Random(42) created here, inside onDrawBehind, not hoisted up next to `spacing`

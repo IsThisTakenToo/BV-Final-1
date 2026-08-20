@@ -166,6 +166,7 @@ import java.util.Date
 import java.util.Locale
 
 private val VAULT_SECTION_ORDER = listOf("Today", "Yesterday", "This Week", "This Month")
+private const val TAG_CLOUD_CHIP_CAP = 80
 
 fun calendarDayStart(timeMillis: Long): Long {
     val cal = Calendar.getInstance().apply { timeInMillis = timeMillis }
@@ -1313,12 +1314,23 @@ private fun SpotEditTagPickerSheet(
                                 )
                             }
                             FlowRow(
+                                modifier = Modifier
+                                    .heightIn(max = 220.dp)
+                                    .verticalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                remainingTagsAlpha.forEach { tag ->
+                                // Cap eager chip count — search still finds the rest.
+                                remainingTagsAlpha.take(TAG_CLOUD_CHIP_CAP).forEach { tag ->
                                     SpotEditTagChip(tag = tag, selected = currentTagIds.contains(tag.id), onClick = { toggleTag(tag) })
                                 }
+                            }
+                            if (remainingTagsAlpha.size > TAG_CLOUD_CHIP_CAP) {
+                                Text(
+                                    "Showing ${TAG_CLOUD_CHIP_CAP} of ${remainingTagsAlpha.size} — search to find more",
+                                    color = SpotVaultColors.Muted,
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                     }
@@ -1818,12 +1830,22 @@ private fun VaultTagFilterSheet(
                                     )
                                 }
                                 FlowRow(
+                                    modifier = Modifier
+                                        .heightIn(max = 220.dp)
+                                        .verticalScroll(rememberScrollState()),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    remainingTagsAlpha.forEach { tag ->
+                                    remainingTagsAlpha.take(TAG_CLOUD_CHIP_CAP).forEach { tag ->
                                         VaultFilterTagChip(tag = tag, selectedTag = selectedTag, onSelectedTagChange = onSelectedTagChange, onDismiss = onDismiss)
                                     }
+                                }
+                                if (remainingTagsAlpha.size > TAG_CLOUD_CHIP_CAP) {
+                                    Text(
+                                        "Showing ${TAG_CLOUD_CHIP_CAP} of ${remainingTagsAlpha.size} — search to find more",
+                                        color = SpotVaultColors.Muted,
+                                        fontSize = 12.sp
+                                    )
                                 }
                             }
                         }
@@ -4725,13 +4747,34 @@ fun VaultCalendarDayResultsDialog(
  * this is the manual "Delete Forever" equivalent of that automatic purge and needs to leave the
  * same result on disk, not just in the database. */
 private suspend fun permanentlyDeleteSpotAndPhotos(dao: LocationDao, spotPhotoDao: SpotPhotoDao, spot: LocationSpot) {
-    if (spot.imagePath.isNotEmpty()) {
-        runCatching { File(spot.imagePath).delete() }
+    permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, listOf(spot))
+}
+
+/** Path-first bulk wipe — same disk cleanup as one-by-one, without N photo-table round trips. */
+private suspend fun permanentlyDeleteSpotsAndPhotos(
+    dao: LocationDao,
+    spotPhotoDao: SpotPhotoDao,
+    spots: List<LocationSpot>
+) {
+    if (spots.isEmpty()) return
+    spots.forEach { spot ->
+        if (spot.imagePath.isNotEmpty()) {
+            runCatching { File(spot.imagePath).delete() }
+        }
     }
-    spotPhotoDao.getForSpot(spot.id).forEach { extra ->
-        runCatching { File(extra.path).delete() }
+    spots.map { it.id }.chunked(500).forEach { chunk ->
+        spotPhotoDao.getPathsForSpots(chunk).forEach { path ->
+            runCatching { File(path).delete() }
+        }
     }
-    dao.deleteSpot(spot)
+    dao.deleteSpots(spots)
+}
+
+private suspend fun loadTagsBySpotIds(tagDao: TagDao, spotIds: List<Int>): Map<Int, List<TagEntity>> {
+    if (spotIds.isEmpty()) return emptyMap()
+    return spotIds.chunked(500)
+        .flatMap { chunk -> tagDao.getTagAssignmentsForSpots(chunk) }
+        .toTagsBySpotId()
 }
 
 @Composable
@@ -4753,9 +4796,7 @@ fun RecentlyDeletedDialog(
     suspend fun refreshDeleted() {
         val spots = withContext(Dispatchers.IO) { dao.getRecentlyDeleted() }
         val tags = withContext(Dispatchers.IO) {
-            spots.associate { spot ->
-                spot.id to tagDao.getTagsForSpot(spot.id)
-            }
+            loadTagsBySpotIds(tagDao, spots.map { it.id })
         }
         deletedSpots = spots
         // One batch of one-shot queries when the dialog opens/refreshes — not a live Flow per
@@ -4818,7 +4859,7 @@ fun RecentlyDeletedDialog(
                     onClick = {
                         val toDelete = deletedSpots
                         coroutineScope.launch(Dispatchers.IO) {
-                            toDelete.forEach { spot -> permanentlyDeleteSpotAndPhotos(dao, spotPhotoDao, spot) }
+                            permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, toDelete)
                             tagDao.recomputeAllUsageCounts()
                             refreshDeleted()
                         }
@@ -5785,9 +5826,7 @@ fun ArchivedSpotsDialog(
     suspend fun refreshArchived() {
         val spots = withContext(Dispatchers.IO) { dao.getArchivedSpots() }
         val tags = withContext(Dispatchers.IO) {
-            spots.associate { spot ->
-                spot.id to tagDao.getTagsForSpot(spot.id)
-            }
+            loadTagsBySpotIds(tagDao, spots.map { it.id })
         }
         archivedSpots = spots
         tagsBySpotId = tags
@@ -5848,7 +5887,7 @@ fun ArchivedSpotsDialog(
                     onClick = {
                         val toDelete = archivedSpots
                         coroutineScope.launch(Dispatchers.IO) {
-                            toDelete.forEach { spot -> permanentlyDeleteSpotAndPhotos(dao, spotPhotoDao, spot) }
+                            permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, toDelete)
                             tagDao.recomputeAllUsageCounts()
                             refreshArchived()
                         }

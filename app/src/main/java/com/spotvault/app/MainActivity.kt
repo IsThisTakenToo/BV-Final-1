@@ -279,6 +279,7 @@ private const val KEY_SHOW_TIMER_DIALOG = "show_timer_dialog"
 private const val KEY_PENDING_GALLERY_SPOT_ID = "pending_gallery_spot_id"
 private const val KEY_PENDING_CAMERA_SPOT_ID = "pending_camera_spot_id"
 private const val KEY_PENDING_CAMERA_PHOTO_PATH = "pending_camera_photo_path"
+private const val TAG_CLOUD_CHIP_CAP = 80
 
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 class MainActivity : FragmentActivity() {
@@ -2209,7 +2210,7 @@ fun compressCapturedPhoto(
         if (srcW <= 0 || srcH <= 0) return false
 
         var sample = 1
-        while (srcW / sample > maxDimension * 2 || srcH / sample > maxDimension * 2) {
+        while (srcW / sample > maxDimension || srcH / sample > maxDimension) {
             sample *= 2
         }
         val decoded = BitmapFactory.decodeFile(
@@ -2525,7 +2526,12 @@ fun FullScreenImageViewer(
                                 .clickable { showPhotoExpanded = true }
                         ) {
                             AsyncImage(
-                                model = java.io.File(selectedImagePath),
+                                model = coil.request.ImageRequest.Builder(context)
+                                    .data(java.io.File(selectedImagePath))
+                                    // Hero is 180dp — decode near display size, not full JPEG pixels.
+                                    .size(540, 540)
+                                    .crossfade(true)
+                                    .build(),
                                 contentDescription = "Spot Image — tap to enlarge",
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
@@ -2637,10 +2643,15 @@ fun FullScreenImageViewer(
 
                         if (displayNote.isNotBlank()) {
                             Text(
-                                text = displayNote,
+                                // Layout cost for a 50k notepad on detail is brutal; full edit is
+                                // via Edit / Notepad elsewhere. Preview keeps the screen readable.
+                                text = if (displayNote.length <= 400) displayNote
+                                else displayNote.take(400).trimEnd() + "…",
                                 fontSize = 14.sp,
                                 color = SpotVaultColors.OnSurface.copy(alpha = 0.9f),
                                 lineHeight = 22.sp,
+                                maxLines = 12,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         } else if (spotItem != null) {
@@ -2896,7 +2907,11 @@ fun FullScreenImageViewer(
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = java.io.File(selectedImagePath),
+                    model = coil.request.ImageRequest.Builder(context)
+                        .data(java.io.File(selectedImagePath))
+                        .size(1440, 1440)
+                        .crossfade(true)
+                        .build(),
                     contentDescription = "Enlarged spot photo",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit
@@ -3664,12 +3679,22 @@ fun SaveScreenTagPickerSheet(
                                 )
                             }
                             androidx.compose.foundation.layout.FlowRow(
+                                modifier = Modifier
+                                    .heightIn(max = 220.dp)
+                                    .verticalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                remainingTagsAlpha.forEach { tag ->
+                                remainingTagsAlpha.take(TAG_CLOUD_CHIP_CAP).forEach { tag ->
                                     SaveScreenPickerTagChip(tag = tag, selectedTags = selectedTags, onToggle = ::toggleTag)
                                 }
+                            }
+                            if (remainingTagsAlpha.size > TAG_CLOUD_CHIP_CAP) {
+                                Text(
+                                    "Showing $TAG_CLOUD_CHIP_CAP of ${remainingTagsAlpha.size} — search to find more",
+                                    color = SpotVaultColors.Muted,
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                     }
@@ -4790,7 +4815,11 @@ fun TimerSelectionDialog(
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = java.io.File(photoPath),
+                    model = coil.request.ImageRequest.Builder(LocalContext.current)
+                        .data(java.io.File(photoPath))
+                        .size(1440, 1440)
+                        .crossfade(true)
+                        .build(),
                     contentDescription = "Enlarged captured photo",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit

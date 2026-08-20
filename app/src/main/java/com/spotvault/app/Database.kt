@@ -449,6 +449,7 @@ interface LocationDao {
     suspend fun insertSpotAndGetId(spot: LocationSpot): Long
 
     @Query("SELECT * FROM location_history ORDER BY timestamp DESC")
+    @Deprecated("Loads every spot with full notes — use windowed/capped notes-stripped queries instead")
     suspend fun getAllHistoryIncludingDeleted(): List<LocationSpot>
 
     /** Cover JPEG paths only — used by orphan-photo sweep (avoids loading full spot rows + notes). */
@@ -464,7 +465,10 @@ interface LocationDao {
 
     @Delete
     suspend fun deleteSpot(spot: LocationSpot)
-    
+
+    @Delete
+    suspend fun deleteSpots(spots: List<LocationSpot>)
+
     @Query("DELETE FROM location_history")
     suspend fun deleteAllHistory()
 
@@ -748,6 +752,20 @@ interface TagDao {
     )
     suspend fun getTagsForSpot(spotId: Int): List<TagEntity>
 
+    /** Batch tag lookup — avoids N+1 when opening Recently Deleted / Archived (up to 3000 spots). */
+    @Query(
+        """
+        SELECT location_tag_cross_ref.locationId AS locationId,
+               tags.id AS tagId,
+               tags.name AS name,
+               tags.usageCount AS usageCount
+        FROM tags
+        INNER JOIN location_tag_cross_ref ON tags.id = location_tag_cross_ref.tagId
+        WHERE location_tag_cross_ref.locationId IN (:spotIds)
+        """
+    )
+    suspend fun getTagAssignmentsForSpots(spotIds: List<Int>): List<SpotTagAssignment>
+
     /** Creates a tag with zero spots attached yet — used by "+ New Tag" entry points (the tag
      * filter sheet, the tag manager) where the user wants a tag to exist before assigning it to
      * anything, unlike [assignTag] which always creates-and-attaches in one step. */
@@ -860,6 +878,9 @@ interface SpotPhotoDao {
 
     @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC")
     suspend fun getForSpot(spotId: Int): List<SpotPhoto>
+
+    @Query("SELECT path FROM spot_photos WHERE spotId IN (:spotIds)")
+    suspend fun getPathsForSpots(spotIds: List<Int>): List<String>
 
     @Query("SELECT * FROM spot_photos ORDER BY spotId ASC, id ASC")
     suspend fun getAllPhotos(): List<SpotPhoto>

@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 
 /** Soft cap so a huge paste can't balloon Room + undo history for the life of the install. */
 private const val NOTEPAD_MAX_CHARS = 50_000
+private const val NOTEPAD_UNDO_MAX_ENTRIES = 40
+private const val NOTEPAD_UNDO_MAX_CHARS = 200_000
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -269,7 +271,13 @@ fun NotepadEditorDialog(
     fun pushHistory() {
         // Store text only — keeping 40 full TextFieldValue snapshots of a long note was a soft OOM path.
         history.add(TextFieldValue(draft.text))
-        if (history.size > 40) history.removeAt(0)
+        while (
+            history.size > NOTEPAD_UNDO_MAX_ENTRIES ||
+            history.sumOf { it.text.length } > NOTEPAD_UNDO_MAX_CHARS
+        ) {
+            if (history.isEmpty()) break
+            history.removeAt(0)
+        }
         redoStack.clear()
     }
 
