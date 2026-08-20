@@ -91,6 +91,52 @@ object VaultBackupManager {
         }
     }
 
+    /** Drain an entry we do not need (notes.txt / gallery HTML) without buffering it. */
+    private fun ZipInputStream.discardEntry(entryName: String, maxEntryBytes: Long, onBytes: (Long) -> Unit) {
+        val buffer = ByteArray(64 * 1024)
+        var written = 0L
+        while (true) {
+            val read = read(buffer)
+            if (read < 0) break
+            written += read
+            if (written > maxEntryBytes) {
+                throw java.io.IOException(
+                    "Backup entry \"$entryName\" is larger than the $maxEntryBytes byte limit"
+                )
+            }
+            onBytes(read.toLong())
+        }
+    }
+
+    /** Root-level JSON that must stay in RAM for the import transaction. */
+    private fun isRootMetaEntry(name: String): Boolean {
+        val base = name.substringAfterLast('/')
+        return base == "vehicles.json" || base == "spots.json" || base == "prefs.json"
+    }
+
+    /** Human-readable companions never used by import — discard during unzip. */
+    private fun isDiscardableMetaEntry(name: String): Boolean {
+        val lower = name.lowercase(Locale.US)
+        return lower.endsWith("notes.txt") ||
+            lower.endsWith("index.html") ||
+            lower == "readme.txt" ||
+            lower.endsWith("/readme.txt")
+    }
+
+    private fun isSpotJsonEntry(name: String): Boolean =
+        name.matches(Regex("spots/[^/]+/spot\\.json"))
+
+    private fun readMetaText(
+        entryName: String,
+        extractedMeta: Map<String, ByteArray>,
+        extractedMetaPaths: Map<String, String>
+    ): String {
+        extractedMetaPaths[entryName]?.let { path ->
+            return File(path).readText(Charsets.UTF_8)
+        }
+        return String(extractedMeta.getValue(entryName), Charsets.UTF_8)
+    }
+
     private val BACKUP_EXCLUDED_PREF_KEYS = setOf(
         "auto_backup_tree_uri", "auto_backup_last_success", "auto_backup_enabled", "auto_backup_last_fingerprint",
         "auto_backup_last_error",
@@ -190,8 +236,16 @@ object VaultBackupManager {
                     }
                     afterPhotoId = page.last().id
                 }
-                val tagsBySpotId = tagDao.getAllSpotTagNames()
-                    .groupBy({ it.locationId }, { it.name })
+                val tagsBySpotId = mutableMapOf<Int, MutableList<String>>()
+                var afterTagRowId = 0L
+                while (true) {
+                    val page = tagDao.getSpotTagNamesPage(afterTagRowId, 2_000)
+                    if (page.isEmpty()) break
+                    page.forEach { t ->
+                        tagsBySpotId.getOrPut(t.locationId) { mutableListOf() }.add(t.name)
+                    }
+                    afterTagRowId = page.last().rowId
+                }
                 // One full spot row at a time — years of 50k notepads must not all sit in RAM.
                 spotIds.forEachIndexed { index, spotId ->
                     val spot = dao.getSpotById(spotId) ?: return@forEachIndexed
@@ -379,14 +433,20 @@ object VaultBackupManager {
         inputUri: Uri,
         replaceExisting: Boolean
     ): Result<Int> = try {
-        // Metadata (json/txt/html/prefs) stays in RAM; photo bytes are spilled to vault_images
-        // during unzip so a years-old vault can't hold every JPEG in a Map at once.
+        // Root JSON (vehicles/prefs/legacy spots) stays in RAM; per-spot spot.json is spilled
+        // like photos; notes.txt / index.html / readme are discarded — never needed for import.
         val extractedMeta = mutableMapOf<String, ByteArray>()
+        val extractedMetaPaths = mutableMapOf<String, String>()
         val extractedPhotoPaths = mutableMapOf<String, String>()
         var manifestJson: JSONObject? = null
         var totalBytes = 0L
         val imagesDir = backupImagesDir(context)
+        val metaSpillDir = File(context.cacheDir, "backup_import_meta").also { dir ->
+            dir.mkdirs()
+            dir.listFiles()?.forEach { runCatching { it.delete() } }
+        }
         var photoSpillIndex = 0
+        var metaSpillIndex = 0
 
         fun isPhotoZipEntry(name: String): Boolean {
             val lower = name.lowercase(Locale.US)
@@ -400,6 +460,16 @@ object VaultBackupManager {
                 lower.endsWith(".webp") || lower.contains("/photo")
         }
 
+        fun accountBytes(chunk: Long) {
+            totalBytes += chunk
+            if (totalBytes > MAX_BACKUP_TOTAL_BYTES) {
+                throw java.io.IOException(
+                    "Backup is larger than the ${MAX_BACKUP_TOTAL_BYTES / (1024 * 1024)} MB import limit"
+                )
+            }
+        }
+
+        try {
         context.contentResolver.openInputStream(inputUri)?.use { rawIn ->
             ZipInputStream(BufferedInputStream(rawIn)).use { zip ->
                 var entry = zip.nextEntry
@@ -408,12 +478,7 @@ object VaultBackupManager {
                         when {
                             entry.name == "manifest.json" -> {
                                 val bytes = zip.readEntryBytesLimited(entry.name, MAX_BACKUP_META_ENTRY_BYTES)
-                                totalBytes += bytes.size
-                                if (totalBytes > MAX_BACKUP_TOTAL_BYTES) {
-                                    throw java.io.IOException(
-                                        "Backup is larger than the ${MAX_BACKUP_TOTAL_BYTES / (1024 * 1024)} MB import limit"
-                                    )
-                                }
+                                accountBytes(bytes.size.toLong())
                                 manifestJson = JSONObject(String(bytes, Charsets.UTF_8))
                             }
                             isPhotoZipEntry(entry.name) -> {
@@ -422,29 +487,43 @@ object VaultBackupManager {
                                     imagesDir,
                                     "import_spill_${System.currentTimeMillis()}_${photoSpillIndex++}.$extension"
                                 )
-                                zip.spillEntryToFile(
-                                    entryName = entry.name,
-                                    destination = outFile,
-                                    maxEntryBytes = MAX_BACKUP_ENTRY_BYTES
-                                ) { chunk ->
-                                    totalBytes += chunk
-                                    if (totalBytes > MAX_BACKUP_TOTAL_BYTES) {
-                                        runCatching { outFile.delete() }
-                                        throw java.io.IOException(
-                                            "Backup is larger than the ${MAX_BACKUP_TOTAL_BYTES / (1024 * 1024)} MB import limit"
-                                        )
-                                    }
+                                try {
+                                    zip.spillEntryToFile(
+                                        entryName = entry.name,
+                                        destination = outFile,
+                                        maxEntryBytes = MAX_BACKUP_ENTRY_BYTES,
+                                        onBytes = { accountBytes(it) }
+                                    )
+                                } catch (e: Exception) {
+                                    runCatching { outFile.delete() }
+                                    throw e
                                 }
                                 extractedPhotoPaths[entry.name] = outFile.absolutePath
                             }
+                            isDiscardableMetaEntry(entry.name) -> {
+                                zip.discardEntry(entry.name, MAX_BACKUP_META_ENTRY_BYTES) { accountBytes(it) }
+                            }
+                            isSpotJsonEntry(entry.name) || !isRootMetaEntry(entry.name) -> {
+                                val outFile = File(
+                                    metaSpillDir,
+                                    "meta_${metaSpillIndex++}_${entry.name.hashCode().toUInt()}.bin"
+                                )
+                                try {
+                                    zip.spillEntryToFile(
+                                        entryName = entry.name,
+                                        destination = outFile,
+                                        maxEntryBytes = MAX_BACKUP_META_ENTRY_BYTES,
+                                        onBytes = { accountBytes(it) }
+                                    )
+                                } catch (e: Exception) {
+                                    runCatching { outFile.delete() }
+                                    throw e
+                                }
+                                extractedMetaPaths[entry.name] = outFile.absolutePath
+                            }
                             else -> {
                                 val bytes = zip.readEntryBytesLimited(entry.name, MAX_BACKUP_META_ENTRY_BYTES)
-                                totalBytes += bytes.size
-                                if (totalBytes > MAX_BACKUP_TOTAL_BYTES) {
-                                    throw java.io.IOException(
-                                        "Backup is larger than the ${MAX_BACKUP_TOTAL_BYTES / (1024 * 1024)} MB import limit"
-                                    )
-                                }
+                                accountBytes(bytes.size.toLong())
                                 extractedMeta[entry.name] = bytes
                             }
                         }
@@ -476,15 +555,36 @@ object VaultBackupManager {
         val imported = try {
             db.withTransaction {
                 if (replaceExisting) {
-                    photosToDeleteAfterCommit.addAll(dao.getAllCoverImagePaths().filter { it.isNotEmpty() })
-                    photosToDeleteAfterCommit.addAll(spotPhotoDao.getAllPhotoPaths().filter { it.isNotEmpty() })
+                    var afterCoverId = 0
+                    while (true) {
+                        val page = dao.getCoverImagePathRowsPage(afterCoverId, 2_000)
+                        if (page.isEmpty()) break
+                        page.forEach { row ->
+                            if (row.imagePath.isNotEmpty()) photosToDeleteAfterCommit.add(row.imagePath)
+                        }
+                        afterCoverId = page.last().id
+                    }
+                    var afterPhotoId = 0
+                    while (true) {
+                        val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
+                        if (page.isEmpty()) break
+                        page.forEach { photosToDeleteAfterCommit.add(it.path) }
+                        afterPhotoId = page.last().id
+                    }
                     dao.deleteAllHistory() // cascades to spot_photos via the FK
                     vehicleDao.deleteAll()
                 }
 
-                val existingSpotSignatures = dao.getAllSpotSignatureRows()
-                    .map { spotSignature(it.timestamp, it.lat, it.lng) }
-                    .toMutableSet()
+                val existingSpotSignatures = mutableSetOf<String>()
+                var afterSigId = 0
+                while (true) {
+                    val page = dao.getSpotSignatureRowsPage(afterSigId, 2_000)
+                    if (page.isEmpty()) break
+                    page.forEach {
+                        existingSpotSignatures.add(spotSignature(it.timestamp, it.lat, it.lng))
+                    }
+                    afterSigId = page.last().id
+                }
 
                 val vehicleIdMap = if (extractedMeta.containsKey("vehicles.json")) {
                     importVehicles(extractedMeta.getValue("vehicles.json"), vehicleDao)
@@ -495,6 +595,7 @@ object VaultBackupManager {
                 when {
                     version >= FOLDER_FORMAT_MIN_VERSION -> importFolderBackup(
                         extractedMeta,
+                        extractedMetaPaths,
                         extractedPhotoPaths,
                         imagesDir,
                         dao,
@@ -533,6 +634,9 @@ object VaultBackupManager {
         // never touched.
         db.tagDao().recomputeAllUsageCounts()
         Result.success(imported)
+        } finally {
+            metaSpillDir.listFiles()?.forEach { runCatching { it.delete() } }
+        }
     } catch (e: Exception) {
         Result.failure(e)
     }
@@ -594,6 +698,7 @@ object VaultBackupManager {
 
     private suspend fun importFolderBackup(
         extractedMeta: Map<String, ByteArray>,
+        extractedMetaPaths: Map<String, String>,
         extractedPhotoPaths: Map<String, String>,
         imagesDir: File,
         dao: LocationDao,
@@ -603,15 +708,24 @@ object VaultBackupManager {
         vehicleIdMap: List<Int>,
         expectedSpotCount: Int
     ): Int {
-        val spotJsonPaths = extractedMeta.keys
-            .filter { it.matches(Regex("spots/[^/]+/spot\\.json")) }
-            .sorted()
+        val spotJsonPaths = (
+            extractedMeta.keys.filter { isSpotJsonEntry(it) } +
+                extractedMetaPaths.keys.filter { isSpotJsonEntry(it) }
+            ).distinct().sorted()
 
         var imported = 0
         spotJsonPaths.forEachIndexed { index, jsonPath ->
             val folderPrefix = jsonPath.removeSuffix("spot.json")
-            val item = JSONObject(String(extractedMeta.getValue(jsonPath), Charsets.UTF_8))
-            val imagePath = resolveSpotPhoto(extractedMeta, extractedPhotoPaths, folderPrefix, item, imagesDir, index)
+            val item = JSONObject(readMetaText(jsonPath, extractedMeta, extractedMetaPaths))
+            val imagePath = resolveSpotPhoto(
+                extractedMeta,
+                extractedMetaPaths,
+                extractedPhotoPaths,
+                folderPrefix,
+                item,
+                imagesDir,
+                index
+            )
             val newSpotId = insertSpotFromJson(dao, item, imagePath, existingSignatures, vehicleIdMap)
             if (newSpotId != null) {
                 imported++
@@ -624,6 +738,14 @@ object VaultBackupManager {
                         val spilled = extractedPhotoPaths[entryName]
                         if (spilled != null) {
                             spotPhotoDao.insertExtraPhotoCapped(newSpotId, spilled)
+                            continue
+                        }
+                        val spilledMeta = extractedMetaPaths[entryName]
+                        if (spilledMeta != null) {
+                            val extension = name.substringAfterLast('.', "jpg")
+                            val outFile = File(imagesDir, "import_extra_${System.currentTimeMillis()}_${index}_$i.$extension")
+                            File(spilledMeta).copyTo(outFile, overwrite = true)
+                            spotPhotoDao.insertExtraPhotoCapped(newSpotId, outFile.absolutePath)
                             continue
                         }
                         val bytes = extractedMeta[entryName] ?: continue
@@ -696,6 +818,7 @@ object VaultBackupManager {
 
     private fun resolveSpotPhoto(
         extractedMeta: Map<String, ByteArray>,
+        extractedMetaPaths: Map<String, String>,
         extractedPhotoPaths: Map<String, String>,
         folderPrefix: String,
         item: JSONObject,
@@ -718,6 +841,13 @@ object VaultBackupManager {
 
         candidates.firstOrNull { extractedPhotoPaths.containsKey(it) }?.let { entryName ->
             return extractedPhotoPaths.getValue(entryName)
+        }
+
+        candidates.firstOrNull { extractedMetaPaths.containsKey(it) }?.let { entryName ->
+            val extension = entryName.substringAfterLast('.', "jpg")
+            val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$index.$extension")
+            File(extractedMetaPaths.getValue(entryName)).copyTo(outFile, overwrite = true)
+            return outFile.absolutePath
         }
 
         val entryName = candidates.firstOrNull { extractedMeta.containsKey(it) }

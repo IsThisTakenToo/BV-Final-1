@@ -2102,7 +2102,12 @@ fun VaultTagEditorDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        allTags.forEach { tag ->
+                        val tagsForPicker = remember(allTags, newTagInput) {
+                            val filtered = if (newTagInput.isBlank()) allTags
+                            else allTags.filter { it.name.contains(newTagInput, ignoreCase = true) }
+                            filtered.take(TAG_CLOUD_CHIP_CAP) to filtered.size
+                        }
+                        tagsForPicker.first.forEach { tag ->
                             val selected = currentTagIds.contains(tag.id)
                             FilterChip(
                                 selected = selected,
@@ -2116,6 +2121,13 @@ fun VaultTagEditorDialog(
                                 colors = vaultTagChipColors(),
                                 border = vaultTagChipBorder(selected),
                                 shape = RoundedCornerShape(10.dp)
+                            )
+                        }
+                        if (tagsForPicker.second > TAG_CLOUD_CHIP_CAP) {
+                            Text(
+                                "Showing $TAG_CLOUD_CHIP_CAP of ${tagsForPicker.second} — type to find more",
+                                color = SpotVaultColors.Muted,
+                                fontSize = 11.sp
                             )
                         }
                     }

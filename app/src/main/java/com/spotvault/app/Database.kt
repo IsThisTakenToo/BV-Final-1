@@ -247,6 +247,20 @@ data class SpotSignatureRow(
     val lng: Double
 )
 
+/** Signature page row with id cursor for keyset pagination. */
+data class SpotSignaturePageRow(
+    val id: Int,
+    val timestamp: Long,
+    val lat: Double,
+    val lng: Double
+)
+
+/** Cover path + id for paged wipe/orphan work. */
+data class CoverImagePathRow(
+    val id: Int,
+    val imagePath: String
+)
+
 /**
  * Notes-free fingerprint projection — prefix/suffix + length catch notepad edits without
  * holding every full 50k note body in RAM at once.
@@ -410,7 +424,18 @@ interface LocationDao {
     suspend fun countAllSpotsIncludingDeleted(): Int
 
     @Query("SELECT timestamp, lat, lng FROM location_history")
+    @Deprecated("Prefer getSpotSignatureRowsPage — full list grows with vault size")
     suspend fun getAllSpotSignatureRows(): List<SpotSignatureRow>
+
+    @Query(
+        """
+        SELECT id, timestamp, lat, lng FROM location_history
+        WHERE id > :afterId
+        ORDER BY id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getSpotSignatureRowsPage(afterId: Int, limit: Int): List<SpotSignaturePageRow>
 
     @Query("SELECT id FROM location_history ORDER BY timestamp DESC")
     suspend fun getAllSpotIdsOrdered(): List<Int>
@@ -531,7 +556,21 @@ interface LocationDao {
 
     /** Cover JPEG paths only — used by orphan-photo sweep (avoids loading full spot rows + notes). */
     @Query("SELECT imagePath FROM location_history WHERE length(imagePath) > 0")
+    @Deprecated("Prefer hasCoverImagePath / getCoverImagePathRowsPage — full list grows with vault size")
     suspend fun getAllCoverImagePaths(): List<String>
+
+    @Query(
+        """
+        SELECT id, imagePath FROM location_history
+        WHERE id > :afterId AND length(imagePath) > 0
+        ORDER BY id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getCoverImagePathRowsPage(afterId: Int, limit: Int): List<CoverImagePathRow>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM location_history WHERE imagePath = :path LIMIT 1)")
+    suspend fun hasCoverImagePath(path: String): Boolean
 
     /** Cover paths for Clear All (active + soft-deleted; archived kept forever). */
     @Query("SELECT imagePath FROM location_history WHERE isArchived = 0 AND length(imagePath) > 0")
@@ -731,7 +770,43 @@ interface LocationDao {
           AND isArchived = 0
         """
     )
+    @Deprecated("Prefer softDeleteAutoDeleteBatch — full candidate id list grows with vault size")
     suspend fun getAutoDeleteCandidateIds(cutoff: Long): List<Int>
+
+    /** Soft-delete up to [limit] auto-delete candidates in one statement. */
+    @Query(
+        """
+        UPDATE location_history SET deletedAt = :now
+        WHERE id IN (
+            SELECT id FROM location_history
+            WHERE timestamp < :cutoff
+              AND deletedAt IS NULL
+              AND isFavorite = 0
+              AND isWishlist = 0
+              AND isArchived = 0
+            LIMIT :limit
+        )
+        """
+    )
+    suspend fun softDeleteAutoDeleteBatch(cutoff: Long, now: Long, limit: Int): Int
+
+    @Query(
+        """
+        SELECT id, lat, lng FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND timestamp >= :sinceTimestamp
+          AND lat BETWEEN :minLat AND :maxLat
+          AND lng BETWEEN :minLng AND :maxLng
+        LIMIT :limit
+        """
+    )
+    suspend fun getActiveSpotCoordsNear(
+        sinceTimestamp: Long,
+        minLat: Double,
+        maxLat: Double,
+        minLng: Double,
+        maxLng: Double,
+        limit: Int
+    ): List<SpotCoords>
 
     @Query(
         """
@@ -739,6 +814,7 @@ interface LocationDao {
         WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND timestamp >= :sinceTimestamp
         """
     )
+    @Deprecated("Prefer getActiveSpotCoordsNear — unbounded window on dense vaults")
     suspend fun getActiveSpotCoordsSince(sinceTimestamp: Long): List<SpotCoords>
 }
 
@@ -1026,7 +1102,11 @@ interface SpotPhotoDao {
     suspend fun getAllPhotos(): List<SpotPhoto>
 
     @Query("SELECT path FROM spot_photos")
+    @Deprecated("Prefer hasPhotoPath / getPhotoRowsPage — full list grows with vault size")
     suspend fun getAllPhotoPaths(): List<String>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM spot_photos WHERE path = :path LIMIT 1)")
+    suspend fun hasPhotoPath(path: String): Boolean
 
     @Query(
         """

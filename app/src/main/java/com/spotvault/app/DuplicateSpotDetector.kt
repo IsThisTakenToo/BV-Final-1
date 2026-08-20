@@ -59,7 +59,19 @@ suspend fun findDeduplicationMergeTarget(
     val windowHours = loadDeduplicationWindowHours(prefs)
     val radiusMeters = loadDeduplicationRadiusMeters(prefs)
     val cutoff = System.currentTimeMillis() - windowHours * 60 * 60 * 1000L
-    val bestId = dao.getActiveSpotCoordsSince(cutoff)
+    // ~111km per degree latitude; longitude shrinks with cos(lat). Pad 20% so the SQL box
+    // never excludes a candidate that haversine would still accept.
+    val deltaDeg = (radiusMeters / 111_000.0) * 1.2
+    val cosLat = kotlin.math.cos(Math.toRadians(lat)).coerceAtLeast(0.2)
+    val deltaLng = deltaDeg / cosLat
+    val bestId = dao.getActiveSpotCoordsNear(
+        sinceTimestamp = cutoff,
+        minLat = lat - deltaDeg,
+        maxLat = lat + deltaDeg,
+        minLng = lng - deltaLng,
+        maxLng = lng + deltaLng,
+        limit = 2_000
+    )
         .filter { it.lat != 0.0 || it.lng != 0.0 }
         .map { it to haversineDistanceMeters(it.lat, it.lng, lat, lng) }
         .filter { (_, distance) -> distance <= radiusMeters }

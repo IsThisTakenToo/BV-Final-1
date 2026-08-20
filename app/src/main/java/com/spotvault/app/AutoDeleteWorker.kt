@@ -137,8 +137,12 @@ class AutoDeleteWorker(private val context: Context, params: WorkerParameters) :
             if (prefs.getBoolean("auto_delete_enabled", false)) {
                 val interval = AutoDeleteInterval.fromId(prefs.getString("auto_delete_interval", AutoDeleteInterval.MONTH.id))
                 val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(interval.days)
-                val candidateIds = dao.getAutoDeleteCandidateIds(cutoff)
-                candidateIds.forEach { dao.softDeleteSpot(it) }
+                val now = System.currentTimeMillis()
+                // Batch UPDATEs — a multi-year vault can have thousands of candidates.
+                while (true) {
+                    val updated = dao.softDeleteAutoDeleteBatch(cutoff, now, limit = 200)
+                    if (updated == 0) break
+                }
                 prefs.edit().putLong("auto_delete_last_run", System.currentTimeMillis()).apply()
             }
 

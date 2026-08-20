@@ -916,17 +916,16 @@ class MainActivity : FragmentActivity() {
             }
 
             val db = AppDatabase.getDatabase(this@MainActivity)
-            val referencedPaths = buildSet {
-                db.locationDao().getAllCoverImagePaths().forEach { path ->
-                    if (path.isNotEmpty()) add(File(path).absolutePath)
-                }
-                db.spotPhotoDao().getAllPhotoPaths().forEach { path ->
-                    if (path.isNotEmpty()) add(File(path).absolutePath)
-                }
-                photoFile?.absolutePath?.let { add(File(it).absolutePath) }
-            }
+            val pendingCameraPath = photoFile?.absolutePath
             candidates.forEach { file ->
-                if (file.absolutePath !in referencedPaths) {
+                val abs = file.absolutePath
+                if (abs == pendingCameraPath) return@forEach
+                val referenced = db.locationDao().hasCoverImagePath(abs) ||
+                    db.spotPhotoDao().hasPhotoPath(abs) ||
+                    // Match non-normalized paths still stored as written at insert time.
+                    db.locationDao().hasCoverImagePath(file.path) ||
+                    db.spotPhotoDao().hasPhotoPath(file.path)
+                if (!referenced) {
                     runCatching { file.delete() }
                 }
             }
@@ -4420,7 +4419,10 @@ fun TimerSelectionDialog(
                                 // Title right above it.
                                 VaultCompactNotesFieldWithExpand(
                                     value = note,
-                                    onValueChange = { note = it },
+                                    onValueChange = { next ->
+                                        note = if (next.text.length <= NOTEPAD_MAX_CHARS) next
+                                        else next.copy(text = next.text.take(NOTEPAD_MAX_CHARS))
+                                    },
                                     label = "Notes",
                                     placeholder = "Bathroom L2, beach by red buoy…",
                                     minLines = 1,
