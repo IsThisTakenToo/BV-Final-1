@@ -145,7 +145,8 @@ fun rememberVaultBrowseSpots(
     return spots
 }
 
-/** Calendar dots — timestamps only (no spot rows in Compose). */
+/** Calendar dots — timestamps only (no spot rows in Compose). Pages through the DB so a
+ * multi-year vault never materializes every timestamp Long at once. */
 @Composable
 fun rememberCalendarSpotDayStarts(dao: LocationDao, enabled: Boolean): Set<Long> {
     val vaultEpoch = rememberVaultInvalidationEpoch()
@@ -156,7 +157,17 @@ fun rememberCalendarSpotDayStarts(dao: LocationDao, enabled: Boolean): Set<Long>
             return@LaunchedEffect
         }
         days = withContext(Dispatchers.IO) {
-            dao.getActiveVaultTimestamps().mapTo(mutableSetOf()) { calendarDayStart(it) }
+            val result = mutableSetOf<Long>()
+            var afterId = 0
+            while (true) {
+                val page = dao.getActiveVaultTimestampsPage(afterId, 2_000)
+                if (page.isEmpty()) break
+                page.forEach { row ->
+                    result.add(calendarDayStart(row.timestamp))
+                    afterId = row.id
+                }
+            }
+            result
         }
     }
     return days

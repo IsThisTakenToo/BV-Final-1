@@ -4150,77 +4150,79 @@ fun VaultIconStylePicker(
     isLocked: (String) -> Boolean = { false },
     onLockedClick: () -> Unit = {}
 ) {
-    val scrollState = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val seasonallySortedVaultIconStyles = remember {
+        getSeasonallySortedItems(VaultIconStyles) { it.activeMonths }
+    }
+    // Same "gear" -> "maglock" migration already applied in MainActivity/PremiumGating — a
+    // raw comparison here would show no card highlighted for anyone whose stored id is still
+    // the retired one, same bug class already fixed for CompassStylePicker above.
+    val normalizedSelectedStyle = if (selectedStyle == "gear") "maglock" else selectedStyle
     Box(modifier = modifier.fillMaxWidth()) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(scrollState),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        val seasonallySortedVaultIconStyles = getSeasonallySortedItems(VaultIconStyles) { it.activeMonths }
-        // Same "gear" -> "maglock" migration already applied in MainActivity/PremiumGating — a
-        // raw comparison here would show no card highlighted for anyone whose stored id is still
-        // the retired one, same bug class already fixed for CompassStylePicker above.
-        val normalizedSelectedStyle = if (selectedStyle == "gear") "maglock" else selectedStyle
-        seasonallySortedVaultIconStyles.forEach { (id, title, subtitle) ->
-            val isSelected = normalizedSelectedStyle == id
-            val locked = isLocked(id)
-            Box(modifier = Modifier.width(108.dp)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .alpha(if (locked) 0.45f else 1f)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        if (isSelected) SpotVaultColors.PrimaryDeep.copy(alpha = 0.35f)
-                        else SpotVaultColors.Surface.copy(alpha = 0.85f)
-                    )
-                    .border(
-                        width = if (isSelected) 2.dp else 1.dp,
-                        color = if (isSelected) SpotVaultColors.Teal else SpotVaultColors.Outline.copy(alpha = 0.45f),
-                        shape = RoundedCornerShape(20.dp)
-                    )
-                    .clickable { if (locked) onLockedClick() else onStyleSelected(id) }
-                    .padding(vertical = 12.dp, horizontal = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    AnimatedVaultIcon(modifier = Modifier.size(72.dp), style = id, animated = false)
+        androidx.compose.foundation.lazy.LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(seasonallySortedVaultIconStyles.size, key = { seasonallySortedVaultIconStyles[it].id }) { index ->
+                val (id, title, subtitle) = seasonallySortedVaultIconStyles[index]
+                val isSelected = normalizedSelectedStyle == id
+                val locked = isLocked(id)
+                Box(modifier = Modifier.width(108.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alpha(if (locked) 0.45f else 1f)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(
+                                if (isSelected) SpotVaultColors.PrimaryDeep.copy(alpha = 0.35f)
+                                else SpotVaultColors.Surface.copy(alpha = 0.85f)
+                            )
+                            .border(
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = if (isSelected) SpotVaultColors.Teal else SpotVaultColors.Outline.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                            .clickable { if (locked) onLockedClick() else onStyleSelected(id) }
+                            .padding(vertical = 12.dp, horizontal = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            AnimatedVaultIcon(modifier = Modifier.size(72.dp), style = id, animated = false)
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = title,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SpotVaultColors.OnSurface,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Text(
+                            text = subtitle,
+                            fontSize = 10.sp,
+                            color = SpotVaultColors.Muted,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            lineHeight = 12.sp,
+                            // A Row sizes to its tallest child even when that child is scrolled off to
+                            // the side — one style with a long subtitle (Mag Lock, or the seasonal
+                            // Halloween/Christmas ones) used to wrap to 3-4 lines while its neighbors
+                            // wrapped to 2, inflating the whole picker's height and leaving dead space
+                            // below whichever shorter card was actually in view. Capping every card to
+                            // the same 2 lines keeps them uniform regardless of which style's text is
+                            // longest.
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                    if (locked) {
+                        PremiumLockBadge(modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
+                    }
                 }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = title,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = SpotVaultColors.OnSurface,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-                Text(
-                    text = subtitle,
-                    fontSize = 10.sp,
-                    color = SpotVaultColors.Muted,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    lineHeight = 12.sp,
-                    // A Row sizes to its tallest child even when that child is scrolled off to
-                    // the side — one style with a long subtitle (Mag Lock, or the seasonal
-                    // Halloween/Christmas ones) used to wrap to 3-4 lines while its neighbors
-                    // wrapped to 2, inflating the whole picker's height and leaving dead space
-                    // below whichever shorter card was actually in view. Capping every card to
-                    // the same 2 lines keeps them uniform regardless of which style's text is
-                    // longest.
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
-            if (locked) {
-                PremiumLockBadge(modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
-            }
             }
         }
-    }
-    TrailingScrollHint(scrollState, modifier = Modifier.align(Alignment.CenterEnd))
+        TrailingScrollHint(listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -4232,98 +4234,98 @@ fun ButtonStylePicker(
     isLocked: (String) -> Boolean = { false },
     onLockedClick: () -> Unit = {}
 ) {
-    val scrollState = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     Box(modifier = modifier.fillMaxWidth()) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(scrollState),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        ButtonStyleOptions.forEach { (id, title, subtitle) ->
-            val isSelected = selectedStyle == id
-            val locked = isLocked(id)
-            Box(modifier = Modifier.width(108.dp)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .alpha(if (locked) 0.45f else 1f)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        if (isSelected) SpotVaultColors.PrimaryDeep.copy(alpha = 0.35f)
-                        else SpotVaultColors.Surface.copy(alpha = 0.85f)
-                    )
-                    .border(
-                        width = if (isSelected) 2.dp else 1.dp,
-                        color = if (isSelected) SpotVaultColors.Teal else SpotVaultColors.Outline.copy(alpha = 0.45f),
-                        shape = RoundedCornerShape(20.dp)
-                    )
-                    .clickable { if (locked) onLockedClick() else onStyleSelected(id) }
-                    .padding(vertical = 14.dp, horizontal = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                val previewShape = when (id) {
-                    "capsule" -> RoundedCornerShape(percent = 50)
-                    "chamfer" -> CutCornerShape(10.dp)
-                    "wild" -> wildButtonPreviewShape()
-                    "leaf" -> leafButtonPreviewShape()
-                    "tactical" -> tacticalButtonPreviewShape()
-                    "hex" -> hexButtonPreviewShape()
-                    "wave" -> waveButtonPreviewShape()
-                    else -> RoundedCornerShape(10.dp)
-                }
-                when (id) {
-                    "wild" -> WildButtonPreview()
-                    "leaf" -> LeafButtonPreview()
-                    "tactical" -> TacticalButtonPreview()
-                    "hex" -> HexButtonPreview()
-                    "wave" -> WaveButtonPreview()
-                    else -> Box(
+        androidx.compose.foundation.lazy.LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(ButtonStyleOptions.size, key = { ButtonStyleOptions[it].first }) { index ->
+                val (id, title, subtitle) = ButtonStyleOptions[index]
+                val isSelected = selectedStyle == id
+                val locked = isLocked(id)
+                Box(modifier = Modifier.width(108.dp)) {
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth(0.85f)
-                            .height(34.dp)
+                            .fillMaxWidth()
+                            .alpha(if (locked) 0.45f else 1f)
+                            .clip(RoundedCornerShape(20.dp))
                             .background(
-                                Brush.horizontalGradient(
-                                    listOf(SpotVaultColors.Primary, SpotVaultColors.PrimaryBright)
-                                ),
-                                previewShape
+                                if (isSelected) SpotVaultColors.PrimaryDeep.copy(alpha = 0.35f)
+                                else SpotVaultColors.Surface.copy(alpha = 0.85f)
                             )
-                            .border(1.dp, SpotVaultColors.Teal.copy(alpha = 0.35f), previewShape),
-                        contentAlignment = Alignment.Center
+                            .border(
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = if (isSelected) SpotVaultColors.Teal else SpotVaultColors.Outline.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                            .clickable { if (locked) onLockedClick() else onStyleSelected(id) }
+                            .padding(vertical = 14.dp, horizontal = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        val previewShape = when (id) {
+                            "capsule" -> RoundedCornerShape(percent = 50)
+                            "chamfer" -> CutCornerShape(10.dp)
+                            "wild" -> wildButtonPreviewShape()
+                            "leaf" -> leafButtonPreviewShape()
+                            "tactical" -> tacticalButtonPreviewShape()
+                            "hex" -> hexButtonPreviewShape()
+                            "wave" -> waveButtonPreviewShape()
+                            else -> RoundedCornerShape(10.dp)
+                        }
+                        when (id) {
+                            "wild" -> WildButtonPreview()
+                            "leaf" -> LeafButtonPreview()
+                            "tactical" -> TacticalButtonPreview()
+                            "hex" -> HexButtonPreview()
+                            "wave" -> WaveButtonPreview()
+                            else -> Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(0.85f)
+                                    .height(34.dp)
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(SpotVaultColors.Primary, SpotVaultColors.PrimaryBright)
+                                        ),
+                                        previewShape
+                                    )
+                                    .border(1.dp, SpotVaultColors.Teal.copy(alpha = 0.35f), previewShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "BUTTON",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = SpotVaultColors.OnPrimary,
+                                    letterSpacing = 1.sp
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "BUTTON",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Black,
-                            color = SpotVaultColors.OnPrimary,
-                            letterSpacing = 1.sp
+                            text = title,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SpotVaultColors.OnSurface,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Text(
+                            text = subtitle,
+                            fontSize = 10.sp,
+                            color = SpotVaultColors.Muted,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            lineHeight = 12.sp,
+                            modifier = Modifier.padding(top = 2.dp)
                         )
                     }
+                    if (locked) {
+                        PremiumLockBadge(modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
+                    }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = title,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = SpotVaultColors.OnSurface,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-                Text(
-                    text = subtitle,
-                    fontSize = 10.sp,
-                    color = SpotVaultColors.Muted,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    lineHeight = 12.sp,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
-            if (locked) {
-                PremiumLockBadge(modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
-            }
             }
         }
-    }
-    TrailingScrollHint(scrollState, modifier = Modifier.align(Alignment.CenterEnd))
+        TrailingScrollHint(listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 

@@ -2025,7 +2025,13 @@ class MainActivity : FragmentActivity() {
                     // `finally` instead, so every exit path — success or exception — releases it.
                     var workingBitmap: Bitmap? = null
                     try {
-                        val bitmap = enhanceBitmapForOCR(rawBitmap)
+                        // Low-RAM: skip the second ARGB contrast copy — upright decode alone is
+                        // enough for plate/sign OCR and halves peak bitmap RAM on Snap.
+                        val bitmap = if (ThemeState.lowRamDevice) {
+                            rawBitmap
+                        } else {
+                            enhanceBitmapForOCR(rawBitmap)
+                        }
                         workingBitmap = bitmap
                         if (bitmap != rawBitmap) rawBitmap.recycle()
                         val image = InputImage.fromBitmap(bitmap, 0)

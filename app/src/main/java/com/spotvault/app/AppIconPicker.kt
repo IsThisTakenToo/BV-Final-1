@@ -62,15 +62,15 @@ fun AppIconPicker(
     onLockedClick: () -> Unit = {},
     premiumUnlocked: Boolean = true
 ) {
-    val scrollState = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     Box(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(scrollState),
+        androidx.compose.foundation.lazy.LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            AppIcon.entries.forEach { icon ->
+            items(AppIcon.entries.size, key = { AppIcon.entries[it].id }) { index ->
+                val icon = AppIcon.entries[index]
                 AppIconPickerCell(
                     icon = icon,
                     selected = icon.id == selectedIconId,
@@ -79,7 +79,7 @@ fun AppIconPicker(
                 )
             }
         }
-        TrailingScrollHint(scrollState, modifier = Modifier.align(Alignment.CenterEnd))
+        TrailingScrollHint(listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 

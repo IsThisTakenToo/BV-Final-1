@@ -214,6 +214,12 @@ data class DeletedSpotCover(
     val imagePath: String
 )
 
+/** Paged calendar timestamps — id cursor so day-dot Set can be built without every Long in RAM. */
+data class SpotIdTimestamp(
+    val id: Int,
+    val timestamp: Long
+)
+
 /** Coords-only row for smart dedup distance checks. */
 data class SpotCoords(
     val id: Int,
@@ -302,7 +308,18 @@ interface LocationDao {
         WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
         """
     )
+    @Deprecated("Prefer getActiveVaultTimestampsPage — full list grows with vault size")
     suspend fun getActiveVaultTimestamps(): List<Long>
+
+    @Query(
+        """
+        SELECT id, timestamp FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND id > :afterId
+        ORDER BY id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getActiveVaultTimestampsPage(afterId: Int, limit: Int): List<SpotIdTimestamp>
 
     @Query(
         """

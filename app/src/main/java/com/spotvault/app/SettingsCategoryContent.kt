@@ -460,13 +460,18 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
             contentSpacing = 6.dp
         ) {
             Text("Color Theme", color = SpotVaultColors.OnSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            val colorThemeScrollState = rememberScrollState()
+            val colorThemeListState = androidx.compose.foundation.lazy.rememberLazyListState()
             Box(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(colorThemeScrollState),
+            androidx.compose.foundation.lazy.LazyRow(
+                state = colorThemeListState,
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                presetThemes.forEach { (id, primary, accent) ->
+                items(presetThemes.size, key = { presetThemes[it].id }) { index ->
+                    val option = presetThemes[index]
+                    val id = option.id
+                    val primary = option.primary
+                    val accent = option.accent
                     val locked = !premiumUnlocked && id !in PremiumFreeTier.freeColorThemeIds
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -529,6 +534,7 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                 // sits right after the presets until a custom swatch exists, then this column
                 // appears and pushes "+" over to the right.
                 if (hasCustomTheme) {
+                    item(key = "custom_theme") {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -575,8 +581,10 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                         }
                         Text("Custom", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = SpotVaultColors.Muted, maxLines = 1)
                     }
+                    }
                 }
 
+                item(key = "new_theme") {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -610,8 +618,9 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                     }
                     Text("New", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = SpotVaultColors.Muted, maxLines = 1)
                 }
+                }
             }
-            TrailingScrollHint(colorThemeScrollState, modifier = Modifier.align(Alignment.CenterEnd))
+            TrailingScrollHint(colorThemeListState, modifier = Modifier.align(Alignment.CenterEnd))
             }
             if (!premiumUnlocked) {
                 PremiumLockBanner(onUpgradeClick = goToPremium, modifier = Modifier.padding(top = 4.dp))

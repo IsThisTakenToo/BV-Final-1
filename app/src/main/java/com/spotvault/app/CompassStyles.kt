@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -1384,75 +1385,79 @@ fun CompassStylePicker(
     isLocked: (String) -> Boolean = { false },
     onLockedClick: () -> Unit = {}
 ) {
-    val scrollState = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val seasonallySortedStyles = remember {
+        getSeasonallySortedItems(CompassStyle.entries) { it.activeMonths }
+    }
+    // Normalized through fromId(), not a raw id == id comparison — same fix
+    // SplashStylePicker/FoundSplashStylePicker already have. CompassStyle.fromId() migrates
+    // retired ids ("wind_vane", "guide_star") to LASER_DOT, but a raw comparison here never
+    // matched that migrated id against anything in CompassStyle.entries, so anyone whose
+    // stored preference was still one of those retired ids (a pre-rename install, or a
+    // restored backup) saw no card highlighted at all here — even though the live compass
+    // screen itself renders Laser Dot correctly, since it calls fromId() internally.
+    val normalizedSelectedId = CompassStyle.fromId(selectedStyleId).id
     Box(modifier = modifier.fillMaxWidth()) {
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(scrollState),
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        val seasonallySortedStyles = getSeasonallySortedItems(CompassStyle.entries) { it.activeMonths }
-        // Normalized through fromId(), not a raw id == id comparison — same fix
-        // SplashStylePicker/FoundSplashStylePicker already have. CompassStyle.fromId() migrates
-        // retired ids ("wind_vane", "guide_star") to LASER_DOT, but a raw comparison here never
-        // matched that migrated id against anything in CompassStyle.entries, so anyone whose
-        // stored preference was still one of those retired ids (a pre-rename install, or a
-        // restored backup) saw no card highlighted at all here — even though the live compass
-        // screen itself renders Laser Dot correctly, since it calls fromId() internally.
-        val normalizedSelectedId = CompassStyle.fromId(selectedStyleId).id
-        seasonallySortedStyles.forEach { style ->
-            val selected = style.id == normalizedSelectedId
-            val locked = isLocked(style.id)
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Box(modifier = Modifier.size(76.dp)) {
+        androidx.compose.foundation.lazy.LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            items(seasonallySortedStyles.size, key = { seasonallySortedStyles[it].id }) { index ->
+                val style = seasonallySortedStyles[index]
+                val selected = style.id == normalizedSelectedId
+                val locked = isLocked(style.id)
                 Column(
-                    modifier = Modifier
-                        .size(76.dp)
-                        .alpha(if (locked) 0.45f else 1f)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(SpotVaultColors.Elevated.copy(alpha = 0.55f))
-                        .border(
-                            width = if (selected) 2.dp else 1.dp,
-                            color = if (selected) SpotVaultColors.Teal else SpotVaultColors.Outline.copy(alpha = 0.4f),
-                            shape = RoundedCornerShape(18.dp)
-                        )
-                        // The label Text below sits outside this clickable Column as a separate
-                        // sibling, so (unlike the color-theme swatches, which merge their label
-                        // in) TalkBack had nothing to announce here but an unlabeled button.
-                        .semantics {
-                            contentDescription = if (locked) "${style.label}, Premium" else style.label
-                            this.selected = selected
-                            role = Role.RadioButton
-                        }
-                        .clickable { if (locked) onLockedClick() else onStyleSelected(style) },
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    VaultCompassDial(
-                        styleId = style.id,
-                        dialRotationDegrees = { 0f },
-                        needleRotationDegrees = { 55f },
-                        modifier = Modifier.size(76.dp),
-                        compactPreview = true
+                    Box(modifier = Modifier.size(76.dp)) {
+                        Column(
+                            modifier = Modifier
+                                .size(76.dp)
+                                .alpha(if (locked) 0.45f else 1f)
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(SpotVaultColors.Elevated.copy(alpha = 0.55f))
+                                .border(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) SpotVaultColors.Teal else SpotVaultColors.Outline.copy(alpha = 0.4f),
+                                    shape = RoundedCornerShape(18.dp)
+                                )
+                                // The label Text below sits outside this clickable Column as a separate
+                                // sibling, so (unlike the color-theme swatches, which merge their label
+                                // in) TalkBack had nothing to announce here but an unlabeled button.
+                                .semantics {
+                                    contentDescription = if (locked) "${style.label}, Premium" else style.label
+                                    this.selected = selected
+                                    role = Role.RadioButton
+                                }
+                                .clickable { if (locked) onLockedClick() else onStyleSelected(style) },
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            VaultCompassDial(
+                                styleId = style.id,
+                                dialRotationDegrees = { 0f },
+                                needleRotationDegrees = { 55f },
+                                modifier = Modifier.size(76.dp),
+                                compactPreview = true
+                            )
+                        }
+                        if (locked) {
+                            PremiumLockBadge(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp))
+                        }
+                    }
+                    Text(
+                        text = style.label,
+                        fontSize = 10.5.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        color = if (selected) SpotVaultColors.Teal else SpotVaultColors.Muted,
+                        maxLines = 2,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 2.dp)
                     )
                 }
-                if (locked) {
-                    PremiumLockBadge(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp))
-                }
-                }
-                Text(
-                    text = style.label,
-                    fontSize = 10.5.sp,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (selected) SpotVaultColors.Teal else SpotVaultColors.Muted,
-                    maxLines = 2,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 2.dp)
-                )
             }
         }
-    }
-    TrailingScrollHint(scrollState, modifier = Modifier.align(Alignment.CenterEnd))
+        TrailingScrollHint(listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
