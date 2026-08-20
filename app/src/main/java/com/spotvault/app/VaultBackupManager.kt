@@ -1,18 +1,23 @@
 package com.spotvault.app
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
+import android.util.JsonReader
+import android.util.JsonToken
 import androidx.room.withTransaction
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStreamReader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,14 +42,21 @@ object VaultBackupManager {
     private const val MAX_BACKUP_META_ENTRY_BYTES = 16L * 1024 * 1024
     /** Cap on base64-embedded thumbnails in index.html — beyond this, cards link to
      * spots/.../photo.jpg so a multi-year vault can't OOM the export StringBuilder. */
-    private const val MAX_HTML_EMBEDDED_PHOTOS = 40
+    private const val MAX_HTML_EMBEDDED_PHOTOS = 16
+    private const val MAX_HTML_EMBEDDED_PHOTOS_LOW_RAM = 6
     /** Skip embedding source JPEGs larger than this — still zip the file; card uses relative link. */
-    private const val MAX_HTML_EMBED_SOURCE_BYTES = 8L * 1024 * 1024
+    private const val MAX_HTML_EMBED_SOURCE_BYTES = 4L * 1024 * 1024
     /** Cap gallery cards in index.html — past this, folders in the zip are still complete. */
     private const val MAX_HTML_GALLERY_CARDS = 200
     private const val MAX_HTML_NOTES_CHARS = 200
     /** Older single-file spots.json backups above this size need a re-export from a modern build. */
     private const val MAX_LEGACY_SPOTS_JSON_BYTES = 4L * 1024 * 1024
+    private const val MAX_IMPORT_TAGS_PER_SPOT = 40
+    private const val MAX_IMPORT_TAG_NAME_CHARS = 40
+    private const val MAX_IMPORT_TITLE_CHARS = 200
+    private const val MAX_IMPORT_ADDRESS_CHARS = 400
+    private const val MAX_IMPORT_CITY_STATE_CHARS = 80
+    private const val MAX_IMPORT_VEHICLES = 80
     /** Total decompressed payload across every zip entry — per-entry limit alone still allows
      * hundreds of large photos to OOM the process when all buffered into [extracted]. */
     internal const val MAX_BACKUP_TOTAL_BYTES = 512L * 1024 * 1024
@@ -179,6 +191,8 @@ object VaultBackupManager {
         val spotCount = dao.countAllSpotsIncludingDeleted()
         val vehicles = vehicleDao.getAllList()
         val vehicleIndexById = vehicles.mapIndexed { index, v -> v.id to index }.toMap()
+        val lowRam = context.getSystemService(ActivityManager::class.java)?.isLowRamDevice == true
+        val maxHtmlEmbeds = if (lowRam) MAX_HTML_EMBEDDED_PHOTOS_LOW_RAM else MAX_HTML_EMBEDDED_PHOTOS
         val resolver = context.contentResolver
         resolver.openOutputStream(outputUri)?.use { rawOut ->
             ZipOutputStream(BufferedOutputStream(rawOut)).use { zip ->
@@ -250,7 +264,7 @@ object VaultBackupManager {
                                 // Only buffer bytes when the HTML gallery will embed this photo —
                                 // past MAX_HTML_EMBEDDED_PHOTOS the zip already has the file stream.
                                 // Cap source size too — pre-compress legacy cameras can still be huge.
-                                if (galleryCardCount < MAX_HTML_EMBEDDED_PHOTOS &&
+                                if (galleryCardCount < maxHtmlEmbeds &&
                                     !spot.isTrashed() &&
                                     source.length() <= MAX_HTML_EMBED_SOURCE_BYTES
                                 ) {
@@ -297,7 +311,7 @@ object VaultBackupManager {
                             // Bound both embeds and card markup — years of spots must not grow
                             // index.html into a multi-hundred-MB StringBuilder.
                             if (galleryCardCount < MAX_HTML_GALLERY_CARDS) {
-                                val embedBytes = if (galleryCardCount < MAX_HTML_EMBEDDED_PHOTOS) photoBytes else null
+                                val embedBytes = if (galleryCardCount < maxHtmlEmbeds) photoBytes else null
                                 cardsHtml.append(buildSpotCardHtml(folderName, spot, photoEntry, embedBytes)).append('\n')
                                 galleryCardCount++
                             }
@@ -653,10 +667,11 @@ object VaultBackupManager {
         // exactly this reason (it transactionally clears every other row first) — this was the one
         // path that bypassed it.
         var newDefaultId: Int? = null
-        for (i in 0 until arr.length()) {
+        val vehicleCount = minOf(arr.length(), MAX_IMPORT_VEHICLES)
+        for (i in 0 until vehicleCount) {
             val v = arr.getJSONObject(i)
-            val name = v.optString("name", "My Car")
-            val bluetoothMac = v.optString("bluetoothMac", "").ifBlank { null }
+            val name = v.optString("name", "My Car").take(80)
+            val bluetoothMac = v.optString("bluetoothMac", "").ifBlank { null }?.take(64)
             val already = existingByIdentity[vehicleIdentity(name, bluetoothMac)]
             if (already != null) {
                 newIds.add(already.id)
@@ -668,12 +683,12 @@ object VaultBackupManager {
                     id = 0,
                     name = name,
                     colorArgb = v.optInt("colorArgb", VehicleColorOptions.first()),
-                    iconKey = v.optString("iconKey", "car"),
-                    notes = v.optString("notes", ""),
+                    iconKey = v.optString("iconKey", "car").take(32),
+                    notes = v.optString("notes", "").take(2_000),
                     isDefault = false,
                     isArchived = v.optBoolean("isArchived", false),
                     bluetoothMac = bluetoothMac,
-                    bluetoothName = v.optString("bluetoothName", "").ifBlank { null },
+                    bluetoothName = v.optString("bluetoothName", "").ifBlank { null }?.take(80),
                     createdAt = v.optLong("createdAt", System.currentTimeMillis())
                 )
             ).toInt()
@@ -754,8 +769,10 @@ object VaultBackupManager {
                 // existing tag with the same name just gets this spot added as a new member.
                 val tagNames = item.optJSONArray("tags")
                 if (tagNames != null) {
-                    for (i in 0 until tagNames.length()) {
-                        tagDao.assignTag(newSpotId, tagNames.getString(i))
+                    val maxTags = minOf(tagNames.length(), MAX_IMPORT_TAGS_PER_SPOT)
+                    for (i in 0 until maxTags) {
+                        val name = tagNames.getString(i).trim().take(MAX_IMPORT_TAG_NAME_CHARS)
+                        if (name.isNotEmpty()) tagDao.assignTag(newSpotId, name)
                     }
                 }
             }
@@ -801,39 +818,91 @@ object VaultBackupManager {
             }
             else -> error("Backup is missing spots.json")
         }
-        val backup = JSONObject(
-            if (spotsFile != null) spotsFile.readText(Charsets.UTF_8)
-            else String(spotsBytes!!, Charsets.UTF_8)
-        )
-        val spotsArray = backup.getJSONArray("spots")
 
+        // Stream one spot object at a time — never materialize the full spots.json DOM.
+        val input = when {
+            spotsFile != null -> spotsFile.inputStream()
+            else -> ByteArrayInputStream(spotsBytes!!)
+        }
         var imported = 0
-        for (i in 0 until spotsArray.length()) {
-            val item = spotsArray.getJSONObject(i)
-            val imageEntry = item.optString("imageEntry", "")
-            val imagePath = when {
-                imageEntry.isEmpty() -> ""
-                extractedPhotoPaths.containsKey(imageEntry) -> extractedPhotoPaths.getValue(imageEntry)
-                extractedMetaPaths.containsKey(imageEntry) -> {
-                    val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
-                    File(extractedMetaPaths.getValue(imageEntry)).copyTo(outFile, overwrite = true)
-                    outFile.absolutePath
+        input.use { stream ->
+            JsonReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    when (reader.nextName()) {
+                        "spots" -> {
+                            reader.beginArray()
+                            var i = 0
+                            while (reader.hasNext()) {
+                                val item = reader.readJsonObject()
+                                val imageEntry = item.optString("imageEntry", "")
+                                val imagePath = when {
+                                    imageEntry.isEmpty() -> ""
+                                    extractedPhotoPaths.containsKey(imageEntry) ->
+                                        extractedPhotoPaths.getValue(imageEntry)
+                                    extractedMetaPaths.containsKey(imageEntry) -> {
+                                        val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
+                                        File(extractedMetaPaths.getValue(imageEntry)).copyTo(outFile, overwrite = true)
+                                        outFile.absolutePath
+                                    }
+                                    extractedMeta.containsKey(imageEntry) -> {
+                                        val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
+                                        outFile.writeBytes(extractedMeta.getValue(imageEntry))
+                                        outFile.absolutePath
+                                    }
+                                    else -> ""
+                                }
+                                if (insertSpotFromJson(dao, item, imagePath, emptyList()) != null) imported++
+                                i++
+                            }
+                            reader.endArray()
+                        }
+                        "prefs" -> applyPrefBackup(reader.readJsonObject(), prefs)
+                        else -> reader.skipValue()
+                    }
                 }
-                extractedMeta.containsKey(imageEntry) -> {
-                    val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
-                    outFile.writeBytes(extractedMeta.getValue(imageEntry))
-                    outFile.absolutePath
-                }
-                else -> ""
+                reader.endObject()
             }
-            if (insertSpotFromJson(dao, item, imagePath, emptyList()) != null) imported++
         }
-
-        backup.optJSONObject("prefs")?.let { prefBackup ->
-            applyPrefBackup(prefBackup, prefs)
-        }
-
         return imported
+    }
+
+    /** One JSON object from [JsonReader] without buffering sibling objects. */
+    private fun JsonReader.readJsonObject(): JSONObject {
+        beginObject()
+        val obj = JSONObject()
+        while (hasNext()) {
+            obj.put(nextName(), readJsonValue())
+        }
+        endObject()
+        return obj
+    }
+
+    private fun JsonReader.readJsonValue(): Any? {
+        return when (peek()) {
+            JsonToken.BEGIN_OBJECT -> readJsonObject()
+            JsonToken.BEGIN_ARRAY -> {
+                beginArray()
+                val arr = JSONArray()
+                while (hasNext()) arr.put(readJsonValue())
+                endArray()
+                arr
+            }
+            JsonToken.STRING -> nextString()
+            JsonToken.NUMBER -> {
+                val raw = nextString()
+                raw.toLongOrNull() ?: raw.toDoubleOrNull() ?: raw
+            }
+            JsonToken.BOOLEAN -> nextBoolean()
+            JsonToken.NULL -> {
+                nextNull()
+                JSONObject.NULL
+            }
+            else -> {
+                skipValue()
+                null
+            }
+        }
     }
 
     private fun resolveSpotPhoto(
@@ -915,15 +984,15 @@ object VaultBackupManager {
                 timestamp = timestamp,
                 lat = lat,
                 lng = lng,
-                address = item.optString("address", ""),
+                address = item.optString("address", "").take(MAX_IMPORT_ADDRESS_CHARS),
                 isFavorite = item.optBoolean("isFavorite", false),
-                title = item.optString("title", ""),
+                title = item.optString("title", "").take(MAX_IMPORT_TITLE_CHARS),
                 isWishlist = item.optBoolean("isWishlist", false),
                 isVisited = item.optBoolean("isVisited", false),
                 deletedAt = deletedAt,
                 vehicleId = vehicleId,
-                city = item.optString("city", ""),
-                state = item.optString("state", ""),
+                city = item.optString("city", "").take(MAX_IMPORT_CITY_STATE_CHARS),
+                state = item.optString("state", "").take(MAX_IMPORT_CITY_STATE_CHARS),
                 isArchived = item.optBoolean("isArchived", false),
                 isPinned = item.optBoolean("isPinned", false)
             )
@@ -971,7 +1040,10 @@ object VaultBackupManager {
                     if (value.length > 16_384) return@forEach
                     entry.put("t", "string"); entry.put("v", value)
                 }
-                is Set<*> -> { entry.put("t", "set"); entry.put("v", JSONArray(value.filterIsInstance<String>())) }
+                is Set<*> -> {
+                    val capped = value.filterIsInstance<String>().filter { it.length <= 512 }.take(500)
+                    entry.put("t", "set"); entry.put("v", JSONArray(capped))
+                }
                 else -> return@forEach
             }
             out.put(key, entry)
@@ -1009,7 +1081,11 @@ object VaultBackupManager {
                 // directly under "custom_categories" / "custom_tags" with no type wrapper.
                 is JSONArray -> {
                     val set = mutableSetOf<String>()
-                    for (i in 0 until raw.length()) set.add(raw.getString(i))
+                    val maxItems = minOf(raw.length(), 500)
+                    for (i in 0 until maxItems) {
+                        val s = raw.getString(i)
+                        if (s.length <= 512) set.add(s)
+                    }
                     editor.putStringSet(key, set)
                 }
                 else -> {}

@@ -2043,7 +2043,10 @@ class MainActivity : FragmentActivity() {
                                         prominentText = line.text
                                     }
                                 }
-                                fullTextBuilder.append(line.text).append(" ")
+                                // Cap as we go — OCR can emit huge walls of text before trim/take.
+                                if (fullTextBuilder.length < NOTEPAD_MAX_CHARS) {
+                                    fullTextBuilder.append(line.text).append(' ')
+                                }
                             }
                         }
 
