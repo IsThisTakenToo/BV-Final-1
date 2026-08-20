@@ -515,7 +515,7 @@ private fun CompassSpotRoute(
     LaunchedEffect(spotId, fallbackLat, fallbackLng) {
         withContext(Dispatchers.IO) {
             if (spotId > 0) {
-                dao.getSpotById(spotId)?.let { spot ->
+                dao.getSpotByIdLite(spotId)?.let { spot ->
                     lat = spot.lat
                     lng = spot.lng
                     title = spot.title.ifBlank { "Saved Spot" }
@@ -569,7 +569,7 @@ private fun SavedSpotDetailRoute(
 
     LaunchedEffect(spotId) {
         spot = withContext(Dispatchers.IO) {
-            dao.getSpotById(spotId)
+            dao.getSpotByIdLite(spotId)
         }
         isLoading = false
     }
@@ -606,7 +606,7 @@ private fun SavedSpotDetailRoute(
                 val current = dao.getSpotById(spotId) ?: return@launch
                 dao.updateSpot(current.copy(locationDetails = updatedNotes))
             }
-            spot = loaded.copy(locationDetails = updatedNotes)
+            spot = loaded.copy(locationDetails = updatedNotes.take(160))
         },
         onNavigateToCompass = {
             navController.navigateToCompass(spotId = loaded.id)
@@ -625,7 +625,7 @@ private fun SavedSpotDetailRoute(
             spotId = loaded.id,
             currentTitle = loaded.title,
             currentTimestamp = loaded.timestamp,
-            currentNotes = loaded.locationDetails,
+            currentNotes = rememberFullSpotNotes(dao, loaded.id, loaded.locationDetails),
             currentCity = loaded.city,
             currentState = loaded.state,
             currentVehicleId = loaded.vehicleId,
@@ -637,7 +637,7 @@ private fun SavedSpotDetailRoute(
                     // one-time snapshot from when this screen opened (see the LaunchedEffect
                     // above) and never refreshes on its own. A photo attached from this same
                     // screen's own "Add Photo" button (FullScreenImageViewer shows it live via
-                    // its own observeSpotById query, but that never flows back into this outer
+                    // its own observeSpotByIdLite query, but that never flows back into this outer
                     // loaded/spot state) would otherwise get silently erased the moment Edit was
                     // saved — copy()-ing the stale `loaded` here would write its still-blank
                     // imagePath straight back over the one just attached. The optimistic local
@@ -659,7 +659,7 @@ private fun SavedSpotDetailRoute(
                 spot = loaded.copy(
                     title = newTitle,
                     timestamp = newTimestamp,
-                    locationDetails = newNotes,
+                    locationDetails = newNotes.take(160),
                     city = newCity,
                     state = newState,
                     vehicleId = newVehicleId

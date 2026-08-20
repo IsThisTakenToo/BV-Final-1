@@ -700,7 +700,7 @@ fun VaultHistorySpotCard(
 }
 
 @Composable
-private fun rememberFullSpotNotes(dao: LocationDao, spotId: Int, preview: String): String {
+internal fun rememberFullSpotNotes(dao: LocationDao, spotId: Int, preview: String): String {
     val notes by produceState(initialValue = preview, spotId) {
         value = withContext(Dispatchers.IO) {
             dao.getSpotById(spotId)?.locationDetails ?: preview

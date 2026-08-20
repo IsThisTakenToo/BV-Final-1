@@ -2005,7 +2005,12 @@ class MainActivity : FragmentActivity() {
             val ocrResult = withContext(Dispatchers.Default) {
                 var extractedText = ""
                 var prominentText = ""
-                val rawBitmap = getUprightBitmap(currentPhotoPath)
+                val rawBitmap = getUprightBitmap(
+                    currentPhotoPath,
+                    // OCR doesn't need the full 1600 archive size — smaller peak with upright +
+                    // contrast copies alive together, same readable plate/sign text for Snap.
+                    maxDimension = if (ThemeState.lowRamDevice) 1024 else 1280
+                )
                 if (rawBitmap != null) {
                     // A new client is created per capture (there's no long-lived shared instance
                     // to reuse), so each one has to close itself when done — ML Kit's own docs
@@ -2380,7 +2385,7 @@ fun FullScreenImageViewer(
     val spotPhotoDao = remember { AppDatabase.getDatabase(context).spotPhotoDao() }
     val liveSpot: LocationSpot? by produceState(initialValue = spotItem, spotId) {
         if (spotId >= 0) {
-            locationDao.observeSpotById(spotId).collect { value = it }
+            locationDao.observeSpotByIdLite(spotId).collect { value = it }
         }
     }
     val effectiveImagePath = if (spotId >= 0) (liveSpot?.imagePath ?: "") else imagePath

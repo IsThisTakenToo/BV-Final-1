@@ -257,6 +257,7 @@ data class SpotFingerprintRow(
 @Dao
 interface LocationDao {
     @Query("SELECT * FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 ORDER BY timestamp DESC")
+    @Deprecated("Loads every active spot with full notes — use windowed/capped notes-stripped queries")
     fun getAllHistory(): Flow<List<LocationSpot>>
 
     /**
@@ -273,6 +274,7 @@ interface LocationDao {
         ORDER BY timestamp DESC
         """
     )
+    @Deprecated("Unbounded browse list — use getActiveVaultSpotsForBrowseCapped / windowed VaultHistoryBrowse")
     suspend fun getActiveVaultSpotsForBrowse(): List<LocationSpot>
 
     @Query(
@@ -437,8 +439,32 @@ interface LocationDao {
     @Query("SELECT * FROM location_history WHERE id = :spotId LIMIT 1")
     fun observeSpotById(spotId: Int): Flow<LocationSpot?>
 
+    /** Notes-stripped live spot — detail photo strip only needs imagePath, not a 50k notepad. */
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE id = :spotId
+        LIMIT 1
+        """
+    )
+    fun observeSpotByIdLite(spotId: Int): Flow<LocationSpot?>
+
     @Query("SELECT * FROM location_history WHERE id = :spotId LIMIT 1")
     suspend fun getSpotById(spotId: Int): LocationSpot?
+
+    /** Notes-stripped one-shot — detail surfaces that only preview notes. */
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE id = :spotId
+        LIMIT 1
+        """
+    )
+    suspend fun getSpotByIdLite(spotId: Int): LocationSpot?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSpot(spot: LocationSpot)
@@ -490,6 +516,7 @@ interface LocationDao {
     suspend fun countNonWishlistSpots(): Int
 
     @Query("SELECT * FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 ORDER BY timestamp DESC")
+    @Deprecated("Loads every active spot with full notes — use capped/windowed queries")
     suspend fun getHistoryList(): List<LocationSpot>
 
     @Query("SELECT * FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 ORDER BY timestamp DESC LIMIT :limit")
@@ -502,6 +529,7 @@ interface LocationDao {
         ORDER BY timestamp DESC
         """
     )
+    @Deprecated("Unbounded favorites — use getFavoriteSpotsNewest / getFavoriteSpotsOldest")
     suspend fun getFavoriteSpots(): List<LocationSpot>
 
     /** Widget-only bound — Glance cannot safely materialize unbounded favorite rows + thumbnails. */
