@@ -71,7 +71,7 @@ object GpxParser {
                 LocationSpot(
                     id = 0,
                     imagePath = "",
-                    locationDetails = desc.orEmpty(),
+                    locationDetails = desc.orEmpty().take(NOTEPAD_MAX_CHARS),
                     timestamp = parseGpxTime(time),
                     lat = wLat,
                     lng = wLng,

@@ -233,6 +233,13 @@ data class SpotTagNameRow(
     val name: String
 )
 
+/** Paged tag assignment row — includes sqlite rowid for keyset pagination. */
+data class SpotTagNamePageRow(
+    val rowId: Long,
+    val locationId: Int,
+    val name: String
+)
+
 /** Dedup signature without loading notes — used during backup import merge checks. */
 data class SpotSignatureRow(
     val timestamp: Long,
@@ -421,7 +428,25 @@ interface LocationDao {
         ORDER BY id ASC
         """
     )
+    @Deprecated("Prefer getSpotFingerprintRowsPage — full list grows with vault size")
     suspend fun getAllSpotFingerprintRows(): List<SpotFingerprintRow>
+
+    @Query(
+        """
+        SELECT id, imagePath,
+               length(locationDetails) AS notesLength,
+               substr(locationDetails, 1, 64) AS notesPrefix,
+               CASE WHEN length(locationDetails) <= 64 THEN ''
+                    ELSE substr(locationDetails, length(locationDetails) - 63, 64) END AS notesSuffix,
+               timestamp, lat, lng, address, isFavorite, title, isWishlist, isVisited, deletedAt,
+               vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE id > :afterId
+        ORDER BY id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getSpotFingerprintRowsPage(afterId: Int, limit: Int): List<SpotFingerprintRow>
 
     @Query(
         """
@@ -454,6 +479,7 @@ interface LocationDao {
         FROM location_history
         WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND isPinned = 1
         ORDER BY timestamp DESC
+        LIMIT 80
         """
     )
     suspend fun getPinnedVaultSpotsForBrowse(): List<LocationSpot>
@@ -751,7 +777,20 @@ interface TagDao {
         ORDER BY ref.locationId ASC, tags.name COLLATE NOCASE ASC
         """
     )
+    @Deprecated("Prefer getSpotTagNamesPage — full list grows with vault size")
     suspend fun getAllSpotTagNames(): List<SpotTagNameRow>
+
+    @Query(
+        """
+        SELECT ref.rowid AS rowId, ref.locationId AS locationId, tags.name AS name
+        FROM location_tag_cross_ref AS ref
+        INNER JOIN tags ON tags.id = ref.tagId
+        WHERE ref.rowid > :afterRowId
+        ORDER BY ref.rowid ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getSpotTagNamesPage(afterRowId: Long, limit: Int): List<SpotTagNamePageRow>
 
     /** One-shot spot list for the Tag Filter widget's selected tags — every spot carrying at
      * least one of [tagIds], deduplicated (DISTINCT) so a spot matching more than one selected
@@ -953,17 +992,35 @@ interface TagDao {
 
 @Dao
 interface SpotPhotoDao {
-    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC")
+    /** Matches the detail strip display cap — do not load unlimited extras into Compose. */
+    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 24")
     fun observeForSpot(spotId: Int): Flow<List<SpotPhoto>>
 
     @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC")
     suspend fun getForSpot(spotId: Int): List<SpotPhoto>
 
+    @Query("SELECT COUNT(*) FROM spot_photos WHERE spotId = :spotId")
+    suspend fun countForSpot(spotId: Int): Int
+
+    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 1")
+    suspend fun getOldestForSpot(spotId: Int): SpotPhoto?
+
     @Query("SELECT path FROM spot_photos WHERE spotId IN (:spotIds)")
     suspend fun getPathsForSpots(spotIds: List<Int>): List<String>
 
     @Query("SELECT spotId, path FROM spot_photos ORDER BY spotId ASC, id ASC")
+    @Deprecated("Prefer getPhotoRowsPage — full list grows with vault size")
     suspend fun getAllPhotoPathRows(): List<SpotPhotoPathRow>
+
+    @Query(
+        """
+        SELECT id, spotId, path, createdAt FROM spot_photos
+        WHERE id > :afterId
+        ORDER BY id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getPhotoRowsPage(afterId: Int, limit: Int): List<SpotPhoto>
 
     @Query("SELECT * FROM spot_photos ORDER BY spotId ASC, id ASC")
     suspend fun getAllPhotos(): List<SpotPhoto>
@@ -985,6 +1042,19 @@ interface SpotPhotoDao {
 
     @Query("DELETE FROM spot_photos WHERE id = :id")
     suspend fun deleteById(id: Int)
+}
+
+/** Extra gallery photos per spot (beyond cover [LocationSpot.imagePath]). Matches detail strip. */
+const val MAX_EXTRA_PHOTOS_PER_SPOT = 24
+
+/** Insert an extra photo; when at cap, drop the oldest file+row so the new shot is kept. */
+suspend fun SpotPhotoDao.insertExtraPhotoCapped(spotId: Int, path: String) {
+    while (countForSpot(spotId) >= MAX_EXTRA_PHOTOS_PER_SPOT) {
+        val oldest = getOldestForSpot(spotId) ?: break
+        runCatching { java.io.File(oldest.path).takeIf { it.exists() }?.delete() }
+        deleteById(oldest.id)
+    }
+    insert(SpotPhoto(spotId = spotId, path = path))
 }
 
 @Database(

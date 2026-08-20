@@ -1,11 +1,6 @@
 package com.spotvault.app
 
 import androidx.activity.compose.BackHandler
-
-/** Soft cap so a huge paste can't balloon Room + undo history for the life of the install. */
-private const val NOTEPAD_MAX_CHARS = 50_000
-private const val NOTEPAD_UNDO_MAX_ENTRIES = 40
-private const val NOTEPAD_UNDO_MAX_CHARS = 200_000
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -79,6 +74,11 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/** Soft cap so a huge paste can't balloon Room + undo history for the life of the install. */
+const val NOTEPAD_MAX_CHARS = 50_000
+private const val NOTEPAD_UNDO_MAX_ENTRIES = 40
+private const val NOTEPAD_UNDO_MAX_CHARS = 200_000
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable

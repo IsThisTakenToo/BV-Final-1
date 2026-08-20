@@ -561,7 +561,7 @@ class MainActivity : FragmentActivity() {
         if (current.imagePath.isBlank()) {
             db.locationDao().updateSpot(current.copy(imagePath = absolutePath))
         } else {
-            db.spotPhotoDao().insert(SpotPhoto(spotId = spotId, path = absolutePath))
+            db.spotPhotoDao().insertExtraPhotoCapped(spotId, absolutePath)
         }
     }
 

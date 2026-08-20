@@ -4381,6 +4381,7 @@ fun VaultFilterableSpotList(
 ) {
     val context = LocalContext.current
     val userLocation = rememberUserLocationForDistance()
+    val distanceUnit = rememberDistanceUnit(prefs)
     val vehicleDao = remember { AppDatabase.getDatabase(context).vehicleDao() }
     val allVehicles by vehicleDao.observeAll().collectAsState(initial = emptyList())
     var showArchivedVehicles by rememberSaveable { mutableStateOf(false) }

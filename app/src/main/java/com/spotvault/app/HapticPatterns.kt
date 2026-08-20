@@ -9,7 +9,6 @@ import android.os.VibratorManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -146,13 +145,12 @@ fun HapticPatternPicker(
     onLockedClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+    androidx.compose.foundation.lazy.LazyRow(
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        HapticPattern.entries.forEach { pattern ->
+        items(HapticPattern.entries.size, key = { HapticPattern.entries[it].id }) { index ->
+            val pattern = HapticPattern.entries[index]
             val selected = pattern.id == selectedPatternId
             val locked = isLocked(pattern.id)
             Box(modifier = Modifier.width(140.dp)) {

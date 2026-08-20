@@ -103,7 +103,7 @@ suspend fun mergeDeduplicatedSpot(
     )
     dao.updateSpot(merged)
     if (!newPhotoBecomesPrimary && newImagePath.isNotBlank()) {
-        spotPhotoDao.insert(SpotPhoto(spotId = target.id, path = newImagePath))
+        spotPhotoDao.insertExtraPhotoCapped(target.id, newImagePath)
     }
     return merged
 }

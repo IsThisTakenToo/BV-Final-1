@@ -179,8 +179,17 @@ object VaultBackupManager {
                 val cardsHtml = StringBuilder()
                 var visibleSpotCount = 0
                 var galleryCardCount = 0
-                // Path-only index — full SpotPhoto rows (id/createdAt) are unused for export.
-                val photosBySpotId = spotPhotoDao.getAllPhotoPathRows().groupBy { it.spotId }
+                // Path-only index — page into a map so mega-vault photo tables don't allocate once.
+                val photosBySpotId = mutableMapOf<Int, MutableList<String>>()
+                var afterPhotoId = 0
+                while (true) {
+                    val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
+                    if (page.isEmpty()) break
+                    page.forEach { p ->
+                        photosBySpotId.getOrPut(p.spotId) { mutableListOf() }.add(p.path)
+                    }
+                    afterPhotoId = page.last().id
+                }
                 val tagsBySpotId = tagDao.getAllSpotTagNames()
                     .groupBy({ it.locationId }, { it.name })
                 // One full spot row at a time — years of 50k notepads must not all sit in RAM.
@@ -213,8 +222,8 @@ object VaultBackupManager {
 
                     val extraPhotos = photosBySpotId[spot.id].orEmpty()
                     val extraPhotoNames = mutableListOf<String>()
-                    extraPhotos.forEachIndexed { photoIndex, extra ->
-                        val source = File(extra.path)
+                    extraPhotos.forEachIndexed { photoIndex, extraPath ->
+                        val source = File(extraPath)
                         if (source.exists()) {
                             val name = "photo_${photoIndex + 2}.${source.extension.ifBlank { "jpg" }}"
                             writeZipFile(zip, "$folderPrefix$name", source)
@@ -290,28 +299,34 @@ object VaultBackupManager {
             digest.update('|'.code.toByte())
         }
 
-        dao.getAllSpotFingerprintRows().forEach { s ->
-            feed(s.id.toString()); feedSep()
-            feed(s.imagePath); feedSep()
-            // Prefix/suffix + length — notepad edits invalidate without loading full note bodies.
-            feed(s.notesLength.toString()); feedSep()
-            feed(s.notesPrefix); feedSep()
-            feed(s.notesSuffix); feedSep()
-            feed(s.timestamp.toString()); feedSep()
-            feed(s.lat.toString()); feedSep()
-            feed(s.lng.toString()); feedSep()
-            feed(s.address); feedSep()
-            feed(s.isFavorite.toString()); feedSep()
-            feed(s.title); feedSep()
-            feed(s.isWishlist.toString()); feedSep()
-            feed(s.isVisited.toString()); feedSep()
-            feed(s.deletedAt?.toString().orEmpty()); feedSep()
-            feed(s.vehicleId?.toString().orEmpty()); feedSep()
-            feed(s.city); feedSep()
-            feed(s.state); feedSep()
-            feed(s.isArchived.toString()); feedSep()
-            feed(s.isPinned.toString())
-            feedEnd()
+        var afterSpotId = 0
+        while (true) {
+            val page = dao.getSpotFingerprintRowsPage(afterSpotId, 2_000)
+            if (page.isEmpty()) break
+            page.forEach { s ->
+                feed(s.id.toString()); feedSep()
+                feed(s.imagePath); feedSep()
+                // Prefix/suffix + length — notepad edits invalidate without loading full note bodies.
+                feed(s.notesLength.toString()); feedSep()
+                feed(s.notesPrefix); feedSep()
+                feed(s.notesSuffix); feedSep()
+                feed(s.timestamp.toString()); feedSep()
+                feed(s.lat.toString()); feedSep()
+                feed(s.lng.toString()); feedSep()
+                feed(s.address); feedSep()
+                feed(s.isFavorite.toString()); feedSep()
+                feed(s.title); feedSep()
+                feed(s.isWishlist.toString()); feedSep()
+                feed(s.isVisited.toString()); feedSep()
+                feed(s.deletedAt?.toString().orEmpty()); feedSep()
+                feed(s.vehicleId?.toString().orEmpty()); feedSep()
+                feed(s.city); feedSep()
+                feed(s.state); feedSep()
+                feed(s.isArchived.toString()); feedSep()
+                feed(s.isPinned.toString())
+                feedEnd()
+            }
+            afterSpotId = page.last().id
         }
         vehicleDao.getAllList().sortedBy { it.id }.forEach { v ->
             feed(v.id.toString()); feedSep()
@@ -325,16 +340,28 @@ object VaultBackupManager {
             feed(v.bluetoothName.orEmpty())
             feedEnd()
         }
-        // One photo query + one tag-assignment query — not N+1 getForSpot/getTagsForSpot per spot.
-        spotPhotoDao.getAllPhotoPathRows().forEach { p ->
-            feed(p.spotId.toString()); feedSep()
-            feed(p.path)
-            feedEnd()
+        // Page photo paths — years of extras must not all sit in one List.
+        var afterPhotoId = 0
+        while (true) {
+            val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
+            if (page.isEmpty()) break
+            page.forEach { p ->
+                feed(p.spotId.toString()); feedSep()
+                feed(p.path)
+                feedEnd()
+            }
+            afterPhotoId = page.last().id
         }
-        tagDao.getAllSpotTagNames().forEach { t ->
-            feed(t.locationId.toString()); feedSep()
-            feed(t.name)
-            feedEnd()
+        var afterTagRowId = 0L
+        while (true) {
+            val page = tagDao.getSpotTagNamesPage(afterTagRowId, 2_000)
+            if (page.isEmpty()) break
+            page.forEach { t ->
+                feed(t.locationId.toString()); feedSep()
+                feed(t.name)
+                feedEnd()
+            }
+            afterTagRowId = page.last().rowId
         }
         feed(serializeAllPrefs(prefs).toString())
 
@@ -590,19 +617,20 @@ object VaultBackupManager {
                 imported++
                 val extraNames = item.optJSONArray("extraPhotos")
                 if (extraNames != null) {
-                    for (i in 0 until extraNames.length()) {
+                    val maxExtras = minOf(extraNames.length(), MAX_EXTRA_PHOTOS_PER_SPOT)
+                    for (i in 0 until maxExtras) {
                         val name = extraNames.getString(i)
                         val entryName = folderPrefix + name
                         val spilled = extractedPhotoPaths[entryName]
                         if (spilled != null) {
-                            spotPhotoDao.insert(SpotPhoto(spotId = newSpotId, path = spilled))
+                            spotPhotoDao.insertExtraPhotoCapped(newSpotId, spilled)
                             continue
                         }
                         val bytes = extractedMeta[entryName] ?: continue
                         val extension = name.substringAfterLast('.', "jpg")
                         val outFile = File(imagesDir, "import_extra_${System.currentTimeMillis()}_${index}_$i.$extension")
                         outFile.writeBytes(bytes)
-                        spotPhotoDao.insert(SpotPhoto(spotId = newSpotId, path = outFile.absolutePath))
+                        spotPhotoDao.insertExtraPhotoCapped(newSpotId, outFile.absolutePath)
                     }
                 }
                 // Tag names, not ids — tags are globally unique by name (see TagEntity's unique
@@ -733,7 +761,7 @@ object VaultBackupManager {
             LocationSpot(
                 id = 0,
                 imagePath = imagePath,
-                locationDetails = item.optString("locationDetails", ""),
+                locationDetails = item.optString("locationDetails", "").take(NOTEPAD_MAX_CHARS),
                 timestamp = timestamp,
                 lat = lat,
                 lng = lng,

@@ -47,7 +47,7 @@ fun vaultBrowseNeedsFullDataset(
 }
 
 @Composable
-private fun rememberVaultInvalidationEpoch(): Long {
+internal fun rememberVaultInvalidationEpoch(): Long {
     val context = LocalContext.current
     var epoch by remember { mutableLongStateOf(0L) }
     DisposableEffect(context) {
@@ -137,7 +137,7 @@ fun rememberVaultBrowseSpots(
             .distinctUntilChanged()
             .collect { (lastVisible, total) ->
                 if (total > 0 && lastVisible >= total - 8 && hasMore) {
-                    limit = (limit + VAULT_BROWSE_PAGE_SIZE).coerceAtMost(10_000)
+                    limit = (limit + VAULT_BROWSE_PAGE_SIZE).coerceAtMost(VAULT_BROWSE_FULL_CAP)
                 }
             }
     }

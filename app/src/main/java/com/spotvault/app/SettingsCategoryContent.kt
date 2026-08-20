@@ -17,6 +17,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
@@ -1178,15 +1179,15 @@ private fun FontFamilyPicker(
     isLocked: (String) -> Boolean = { false },
     onLockedClick: () -> Unit = {}
 ) {
-    val scrollState = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     Box(modifier = modifier.fillMaxWidth()) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(scrollState),
+    androidx.compose.foundation.lazy.LazyRow(
+        state = listState,
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        AppFontOptions.all.forEach { option ->
+        items(AppFontOptions.all.size, key = { AppFontOptions.all[it].id }) { index ->
+            val option = AppFontOptions.all[index]
             val selected = option.id == selectedFontId
             val locked = isLocked(option.id)
             val family = remember(option.id) { AppFontOptions.familyFor(option.id) }
@@ -1241,7 +1242,7 @@ private fun FontFamilyPicker(
             }
         }
     }
-    TrailingScrollHint(scrollState, modifier = Modifier.align(Alignment.CenterEnd))
+    TrailingScrollHint(listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -2071,11 +2072,12 @@ private fun SoundPicker(
     selectedId: String,
     onSelect: (String) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    androidx.compose.foundation.lazy.LazyRow(
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        options.forEach { (id, label) ->
+        items(options.size, key = { options[it].first }) { index ->
+            val (id, label) = options[index]
             val selected = id == selectedId
             Row(
                 modifier = Modifier
@@ -2299,6 +2301,7 @@ fun GoogleDriveBackupSection(prefs: SharedPreferences) {
     var connected by remember { mutableStateOf(prefs.getBoolean("drive_connected", false)) }
     var accountEmail by remember { mutableStateOf(prefs.getString("drive_account_email", null)) }
     var lastBackupMillis by remember { mutableStateOf(prefs.getLong("drive_last_backup_success", 0L)) }
+    val lastBackupError = prefs.getString("drive_last_backup_error", null)
     var driveState by remember { mutableStateOf<DriveOnboardingState>(DriveOnboardingState.Idle) }
     var consentContinuation by remember { mutableStateOf<((Intent?) -> Unit)?>(null) }
     var showDisconnectConfirm by remember { mutableStateOf(false) }
@@ -2431,6 +2434,14 @@ fun GoogleDriveBackupSection(prefs: SharedPreferences) {
                         color = SpotVaultColors.Muted,
                         fontSize = 12.sp
                     )
+                    if (!lastBackupError.isNullOrBlank()) {
+                        Text(
+                            lastBackupError,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
                 }
             }
             if (driveState is DriveOnboardingState.Failed) {
@@ -2569,6 +2580,7 @@ fun DataSettingsContent(
     var autoBackupTreeUri by remember { mutableStateOf(prefs.getString("auto_backup_tree_uri", null)) }
     var autoBackupFrequency by remember { mutableStateOf(prefs.getString("auto_backup_frequency", "weekly") ?: "weekly") }
     val lastBackupMillis = prefs.getLong("auto_backup_last_success", 0L)
+    val lastAutoBackupError = prefs.getString("auto_backup_last_error", null)
 
     // AppLockGate.begin()/end() around every SAF picker below — App Lock's re-lock-on-background
     // check can't otherwise tell "the app briefly lost the foreground to a picker it launched
@@ -2782,6 +2794,14 @@ fun DataSettingsContent(
                     fontSize = 12.sp,
                     modifier = Modifier.padding(top = 4.dp)
                 )
+                if (!lastAutoBackupError.isNullOrBlank()) {
+                    Text(
+                        text = lastAutoBackupError,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
         }
 
