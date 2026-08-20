@@ -176,7 +176,8 @@ object GpxParser {
             result = parser.text.orEmpty()
             parser.nextTag()
         }
-        return result.trim()
+        // Cap before trim so a malicious/huge GPX text node cannot allocate twice.
+        return result.take(NOTEPAD_MAX_CHARS).trim()
     }
 
 }

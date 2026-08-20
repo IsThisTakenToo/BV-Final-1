@@ -161,10 +161,7 @@ object VaultBackupManager {
         PREMIUM_UNLOCKED_PREF
     )
 
-    private fun spotSignature(timestamp: Long, lat: Double, lng: Double): String =
-        "$timestamp|${"%.6f".format(Locale.US, lat)}|${"%.6f".format(Locale.US, lng)}"
-
-    fun backupImagesDir(context: Context): File {
+    private fun backupImagesDir(context: Context): File {
         val dir = File(context.filesDir, "vault_images")
         if (!dir.exists()) dir.mkdirs()
         return dir
@@ -179,7 +176,7 @@ object VaultBackupManager {
         prefs: SharedPreferences,
         outputUri: Uri
     ): Result<Int> = runCatching {
-        val spotIds = dao.getAllSpotIdsOrdered()
+        val spotCount = dao.countAllSpotsIncludingDeleted()
         val vehicles = vehicleDao.getAllList()
         val vehicleIndexById = vehicles.mapIndexed { index, v -> v.id to index }.toMap()
         val resolver = context.contentResolver
@@ -189,7 +186,7 @@ object VaultBackupManager {
                     put("format", FORMAT)
                     put("version", VERSION)
                     put("exportedAt", System.currentTimeMillis())
-                    put("spotCount", spotIds.size)
+                    put("spotCount", spotCount)
                     put("vehicleCount", vehicles.size)
                     put("layout", "spots/<folder>/ — photo.jpg, extra photos, notes.txt, and spot.json bundled per saved location; vehicles.json at the root")
                 }
@@ -229,93 +226,83 @@ object VaultBackupManager {
                 val cardsHtml = StringBuilder()
                 var visibleSpotCount = 0
                 var galleryCardCount = 0
-                // Path-only index — page into a map so mega-vault photo tables don't allocate once.
-                val photosBySpotId = mutableMapOf<Int, MutableList<String>>()
-                var afterPhotoId = 0
+                // Page spot ids + load extras/tags per spot — no full-vault maps in RAM.
+                var exportIndex = 0
+                var afterTimestamp = Long.MAX_VALUE
+                var afterId = Int.MAX_VALUE
                 while (true) {
-                    val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
-                    if (page.isEmpty()) break
-                    page.forEach { p ->
-                        photosBySpotId.getOrPut(p.spotId) { mutableListOf() }.add(p.path)
-                    }
-                    afterPhotoId = page.last().id
-                }
-                val tagsBySpotId = mutableMapOf<Int, MutableList<String>>()
-                var afterTagRowId = 0L
-                while (true) {
-                    val page = tagDao.getSpotTagNamesPage(afterTagRowId, 2_000)
-                    if (page.isEmpty()) break
-                    page.forEach { t ->
-                        tagsBySpotId.getOrPut(t.locationId) { mutableListOf() }.add(t.name)
-                    }
-                    afterTagRowId = page.last().rowId
-                }
-                // One full spot row at a time — years of 50k notepads must not all sit in RAM.
-                spotIds.forEachIndexed { index, spotId ->
-                    val spot = dao.getSpotById(spotId) ?: return@forEachIndexed
-                    val folderName = spotFolderName(index, spot)
-                    val folderPrefix = "spots/$folderName/"
-                    var photoBytes: ByteArray? = null
-                    val photoEntry = if (spot.imagePath.isNotEmpty()) {
-                        val source = File(spot.imagePath)
-                        if (source.exists()) {
-                            val entryName = "${folderPrefix}photo.jpg"
-                            writeZipFile(zip, entryName, source)
-                            // Only buffer bytes when the HTML gallery will embed this photo —
-                            // past MAX_HTML_EMBEDDED_PHOTOS the zip already has the file stream.
-                            // Cap source size too — pre-compress legacy cameras can still be huge.
-                            if (galleryCardCount < MAX_HTML_EMBEDDED_PHOTOS &&
-                                !spot.isTrashed() &&
-                                source.length() <= MAX_HTML_EMBED_SOURCE_BYTES
-                            ) {
-                                photoBytes = source.readBytes()
+                    val idPage = dao.getSpotIdsNewestPage(afterTimestamp, afterId, 500)
+                    if (idPage.isEmpty()) break
+                    for (idRow in idPage) {
+                        val spotId = idRow.id
+                        val index = exportIndex++
+                        afterTimestamp = idRow.timestamp
+                        afterId = idRow.id
+                        val spot = dao.getSpotById(spotId) ?: continue
+                        val folderName = spotFolderName(index, spot)
+                        val folderPrefix = "spots/$folderName/"
+                        var photoBytes: ByteArray? = null
+                        val photoEntry = if (spot.imagePath.isNotEmpty()) {
+                            val source = File(spot.imagePath)
+                            if (source.exists()) {
+                                val entryName = "${folderPrefix}photo.jpg"
+                                writeZipFile(zip, entryName, source)
+                                // Only buffer bytes when the HTML gallery will embed this photo —
+                                // past MAX_HTML_EMBEDDED_PHOTOS the zip already has the file stream.
+                                // Cap source size too — pre-compress legacy cameras can still be huge.
+                                if (galleryCardCount < MAX_HTML_EMBEDDED_PHOTOS &&
+                                    !spot.isTrashed() &&
+                                    source.length() <= MAX_HTML_EMBED_SOURCE_BYTES
+                                ) {
+                                    photoBytes = source.readBytes()
+                                }
+                                entryName
+                            } else {
+                                ""
                             }
-                            entryName
                         } else {
                             ""
                         }
-                    } else {
-                        ""
-                    }
 
-                    val extraPhotos = photosBySpotId[spot.id].orEmpty()
-                    val extraPhotoNames = mutableListOf<String>()
-                    extraPhotos.forEachIndexed { photoIndex, extraPath ->
-                        val source = File(extraPath)
-                        if (source.exists()) {
-                            val name = "photo_${photoIndex + 2}.${source.extension.ifBlank { "jpg" }}"
-                            writeZipFile(zip, "$folderPrefix$name", source)
-                            extraPhotoNames.add(name)
+                        val extraPhotos = spotPhotoDao.getPathsForSpotCapped(spot.id)
+                        val extraPhotoNames = mutableListOf<String>()
+                        extraPhotos.forEachIndexed { photoIndex, extraPath ->
+                            val source = File(extraPath)
+                            if (source.exists()) {
+                                val name = "photo_${photoIndex + 2}.${source.extension.ifBlank { "jpg" }}"
+                                writeZipFile(zip, "$folderPrefix$name", source)
+                                extraPhotoNames.add(name)
+                            }
                         }
-                    }
 
-                    val vehicleExportIndex = spot.vehicleId?.let { vehicleIndexById[it] }
-                    val tagNames = tagsBySpotId[spot.id].orEmpty()
-                    val spotJson = spotToJson(spot, photoEntry.removePrefix(folderPrefix), extraPhotoNames, vehicleExportIndex, tagNames)
-                    writeZipText(zip, "${folderPrefix}spot.json", spotJson.toString(2))
-                    writeZipText(zip, "${folderPrefix}notes.txt", buildSpotNotesText(spot, tagNames))
+                        val vehicleExportIndex = spot.vehicleId?.let { vehicleIndexById[it] }
+                        val tagNames = tagDao.getTagsForSpot(spot.id).map { it.name }
+                        val spotJson = spotToJson(spot, photoEntry.removePrefix(folderPrefix), extraPhotoNames, vehicleExportIndex, tagNames)
+                        writeZipText(zip, "${folderPrefix}spot.json", spotJson.toString(2))
+                        writeZipText(zip, "${folderPrefix}notes.txt", buildSpotNotesText(spot, tagNames))
 
-                    // Card HTML (with the photo downscaled+base64-embedded by buildSpotCardHtml)
-                    // is built right here, immediately, while photoBytes is still in scope for
-                    // this one spot — not stashed in a list for the whole export to process
-                    // later. The old code kept every spot's full-resolution photo bytes alive
-                    // simultaneously across the entire export (in a List<SpotExportSummary>),
-                    // which meant a vault with thousands of photos — exactly what years of real
-                    // use produces — could OOM mid-export. Since this whole function is wrapped
-                    // in runCatching, that OOM was swallowed silently: every future scheduled
-                    // backup after a vault crossed that threshold would fail the same way,
-                    // forever, with "Auto Backup: On" still showing in Settings while it quietly
-                    // stopped protecting anything. Building the card here bounds peak memory to
-                    // one photo's worth, regardless of vault size.
-                    if (!spot.isTrashed()) {
-                        // Bound both embeds and card markup — years of spots must not grow
-                        // index.html into a multi-hundred-MB StringBuilder.
-                        if (galleryCardCount < MAX_HTML_GALLERY_CARDS) {
-                            val embedBytes = if (galleryCardCount < MAX_HTML_EMBEDDED_PHOTOS) photoBytes else null
-                            cardsHtml.append(buildSpotCardHtml(folderName, spot, photoEntry, embedBytes)).append('\n')
-                            galleryCardCount++
+                        // Card HTML (with the photo downscaled+base64-embedded by buildSpotCardHtml)
+                        // is built right here, immediately, while photoBytes is still in scope for
+                        // this one spot — not stashed in a list for the whole export to process
+                        // later. The old code kept every spot's full-resolution photo bytes alive
+                        // simultaneously across the entire export (in a List<SpotExportSummary>),
+                        // which meant a vault with thousands of photos — exactly what years of real
+                        // use produces — could OOM mid-export. Since this whole function is wrapped
+                        // in runCatching, that OOM was swallowed silently: every future scheduled
+                        // backup after a vault crossed that threshold would fail the same way,
+                        // forever, with "Auto Backup: On" still showing in Settings while it quietly
+                        // stopped protecting anything. Building the card here bounds peak memory to
+                        // one photo's worth, regardless of vault size.
+                        if (!spot.isTrashed()) {
+                            // Bound both embeds and card markup — years of spots must not grow
+                            // index.html into a multi-hundred-MB StringBuilder.
+                            if (galleryCardCount < MAX_HTML_GALLERY_CARDS) {
+                                val embedBytes = if (galleryCardCount < MAX_HTML_EMBEDDED_PHOTOS) photoBytes else null
+                                cardsHtml.append(buildSpotCardHtml(folderName, spot, photoEntry, embedBytes)).append('\n')
+                                galleryCardCount++
+                            }
+                            visibleSpotCount++
                         }
-                        visibleSpotCount++
                     }
                 }
 
@@ -329,7 +316,7 @@ object VaultBackupManager {
             }
         } ?: error("Could not open backup destination")
 
-        spotIds.size
+        spotCount
     }
 
     private fun LocationSpot.isTrashed(): Boolean = deletedAt != null
@@ -586,17 +573,6 @@ object VaultBackupManager {
                     vehicleDao.deleteAll()
                 }
 
-                val existingSpotSignatures = mutableSetOf<String>()
-                var afterSigId = 0
-                while (true) {
-                    val page = dao.getSpotSignatureRowsPage(afterSigId, 2_000)
-                    if (page.isEmpty()) break
-                    page.forEach {
-                        existingSpotSignatures.add(spotSignature(it.timestamp, it.lat, it.lng))
-                    }
-                    afterSigId = page.last().id
-                }
-
                 val vehicleIdMap = if (extractedMeta.containsKey("vehicles.json")) {
                     importVehicles(extractedMeta.getValue("vehicles.json"), vehicleDao)
                 } else {
@@ -612,19 +588,17 @@ object VaultBackupManager {
                         dao,
                         spotPhotoDao,
                         tagDao,
-                        existingSpotSignatures,
                         vehicleIdMap,
                         expectedSpotCount = manifest.optInt("spotCount", -1)
                     )
-                        else -> importLegacyBackup(
-                            extractedMeta,
-                            extractedMetaPaths,
-                            extractedPhotoPaths,
-                            imagesDir,
-                            dao,
-                            prefs,
-                            existingSpotSignatures
-                        )
+                    else -> importLegacyBackup(
+                        extractedMeta,
+                        extractedMetaPaths,
+                        extractedPhotoPaths,
+                        imagesDir,
+                        dao,
+                        prefs
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -724,7 +698,6 @@ object VaultBackupManager {
         dao: LocationDao,
         spotPhotoDao: SpotPhotoDao,
         tagDao: TagDao,
-        existingSignatures: MutableSet<String>,
         vehicleIdMap: List<Int>,
         expectedSpotCount: Int
     ): Int {
@@ -746,7 +719,7 @@ object VaultBackupManager {
                 imagesDir,
                 index
             )
-            val newSpotId = insertSpotFromJson(dao, item, imagePath, existingSignatures, vehicleIdMap)
+            val newSpotId = insertSpotFromJson(dao, item, imagePath, vehicleIdMap)
             if (newSpotId != null) {
                 imported++
                 val extraNames = item.optJSONArray("extraPhotos")
@@ -805,8 +778,7 @@ object VaultBackupManager {
         extractedPhotoPaths: Map<String, String>,
         imagesDir: File,
         dao: LocationDao,
-        prefs: SharedPreferences,
-        existingSignatures: MutableSet<String>
+        prefs: SharedPreferences
     ): Int {
         val spotsFile = extractedMetaPaths["spots.json"]?.let { File(it) }
         val spotsBytes = extractedMeta["spots.json"]
@@ -854,7 +826,7 @@ object VaultBackupManager {
                 }
                 else -> ""
             }
-            if (insertSpotFromJson(dao, item, imagePath, existingSignatures, emptyList()) != null) imported++
+            if (insertSpotFromJson(dao, item, imagePath, emptyList()) != null) imported++
         }
 
         backup.optJSONObject("prefs")?.let { prefBackup ->
@@ -912,15 +884,15 @@ object VaultBackupManager {
         dao: LocationDao,
         item: JSONObject,
         imagePath: String,
-        existingSignatures: MutableSet<String>,
         vehicleIdMap: List<Int>
     ): Int? {
         val timestamp = item.optLong("timestamp", System.currentTimeMillis())
         val lat = item.optDouble("lat", 0.0)
         val lng = item.optDouble("lng", 0.0)
-        val signature = spotSignature(timestamp, lat, lng)
 
-        if (!existingSignatures.add(signature)) {
+        // EXISTS against Room (visible inside this transaction) — no unbounded HashSet of every
+        // existing vault signature for merge imports of multi-year backups.
+        if (dao.hasSpotSignature(timestamp, lat, lng)) {
             // Same timestamp + location already accounted for — skip, and don't leave the
             // photo we already unzipped for this entry sitting around as an orphan.
             if (imagePath.isNotEmpty()) runCatching { File(imagePath).delete() }

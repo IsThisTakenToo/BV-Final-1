@@ -896,26 +896,26 @@ class MainActivity : FragmentActivity() {
                 File(filesDir, "images"),
                 File(filesDir, "vault_images")
             )
-            val candidates = imageDirs.flatMap { dir ->
-                dir.listFiles()?.filter { it.isFile && it.lastModified() < cutoff }.orEmpty()
-            }
-            if (candidates.isEmpty()) {
-                prefs.edit().putLong("orphan_photo_sweep_at", now).apply()
-                return@launch
-            }
-
             val db = AppDatabase.getDatabase(this@MainActivity)
             val pendingCameraPath = photoFile?.absolutePath
-            candidates.forEach { file ->
-                val abs = file.absolutePath
-                if (abs == pendingCameraPath) return@forEach
-                val referenced = db.locationDao().hasCoverImagePath(abs) ||
-                    db.spotPhotoDao().hasPhotoPath(abs) ||
-                    // Match non-normalized paths still stored as written at insert time.
-                    db.locationDao().hasCoverImagePath(file.path) ||
-                    db.spotPhotoDao().hasPhotoPath(file.path)
-                if (!referenced) {
-                    runCatching { file.delete() }
+            imageDirs.forEach { dir ->
+                if (!dir.isDirectory) return@forEach
+                // Stream directory entries — listFiles() on a years-old vault_images/ can allocate
+                // a huge File[] before any orphan check runs.
+                java.nio.file.Files.newDirectoryStream(dir.toPath()).use { stream ->
+                    for (path in stream) {
+                        val file = path.toFile()
+                        if (!file.isFile || file.lastModified() >= cutoff) continue
+                        val abs = file.absolutePath
+                        if (abs == pendingCameraPath) continue
+                        val referenced = db.locationDao().hasCoverImagePath(abs) ||
+                            db.spotPhotoDao().hasPhotoPath(abs) ||
+                            db.locationDao().hasCoverImagePath(file.path) ||
+                            db.spotPhotoDao().hasPhotoPath(file.path)
+                        if (!referenced) {
+                            runCatching { file.delete() }
+                        }
+                    }
                 }
             }
             prefs.edit().putLong("orphan_photo_sweep_at", now).apply()
@@ -4413,8 +4413,10 @@ fun TimerSelectionDialog(
                                 VaultCompactNotesFieldWithExpand(
                                     value = note,
                                     onValueChange = { next ->
-                                        note = if (next.text.length <= NOTEPAD_MAX_CHARS) next
-                                        else next.copy(text = next.text.take(NOTEPAD_MAX_CHARS))
+                                        // Keep instance-state Bundle small — full notepad lives in
+                                        // VaultCompactNotesFieldWithExpand / NotepadEditorDialog.
+                                        note = if (next.text.length <= 1_500) next
+                                        else next.copy(text = next.text.take(1_500))
                                     },
                                     label = "Notes",
                                     placeholder = "Bathroom L2, beach by red buoy…",

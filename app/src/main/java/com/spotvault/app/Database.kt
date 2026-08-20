@@ -444,7 +444,36 @@ interface LocationDao {
     suspend fun getSpotSignatureRowsPage(afterId: Int, limit: Int): List<SpotSignaturePageRow>
 
     @Query("SELECT id FROM location_history ORDER BY timestamp DESC")
+    @Deprecated("Prefer getSpotIdsNewestPage — full id list grows with vault size")
     suspend fun getAllSpotIdsOrdered(): List<Int>
+
+    @Query(
+        """
+        SELECT id, timestamp FROM location_history
+        WHERE timestamp < :afterTimestamp
+           OR (timestamp = :afterTimestamp AND id < :afterId)
+        ORDER BY timestamp DESC, id DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getSpotIdsNewestPage(
+        afterTimestamp: Long,
+        afterId: Int,
+        limit: Int
+    ): List<SpotIdTimestamp>
+
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM location_history
+            WHERE timestamp = :timestamp
+              AND printf('%.6f', lat) = printf('%.6f', :lat)
+              AND printf('%.6f', lng) = printf('%.6f', :lng)
+            LIMIT 1
+        )
+        """
+    )
+    suspend fun hasSpotSignature(timestamp: Long, lat: Double, lng: Double): Boolean
 
     @Query(
         """
@@ -1139,6 +1168,9 @@ interface SpotPhotoDao {
 
     @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC")
     suspend fun getForSpot(spotId: Int): List<SpotPhoto>
+
+    @Query("SELECT path FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 24")
+    suspend fun getPathsForSpotCapped(spotId: Int): List<String>
 
     @Query("SELECT COUNT(*) FROM spot_photos WHERE spotId = :spotId")
     suspend fun countForSpot(spotId: Int): Int
