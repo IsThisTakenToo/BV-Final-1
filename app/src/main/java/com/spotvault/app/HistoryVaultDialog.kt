@@ -2883,7 +2883,6 @@ fun HistoryVaultTabPage(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val topTags by tagDao.getTopTags().collectAsState(initial = emptyList())
     val allTags by tagDao.getAllTags().collectAsState(initial = emptyList())
-    val spotIdToTags = rememberVaultSpotIdToTags(tagDao)
     // rememberSaveable, not remember, for everything below the user actively picks — matches
     // the identical filter state in VaultFilterableSpotList (Favorites Hub/Calendar/Location
     // Browser), which already survives rotation the same way. This tab was the one place still
@@ -2913,6 +2912,11 @@ fun HistoryVaultTabPage(
         listState = listState,
         gridState = gridState,
         vaultViewMode = vaultViewMode
+    )
+    val spotIdToTags = rememberVaultSpotIdToTags(
+        tagDao = tagDao,
+        spotIds = historyList.map { it.id },
+        loadAllAssignments = selectedTag != null || searchQuery.isNotBlank()
     )
     val pinnedSpots = remember(historyList) {
         historyList.filter { it.isPinned && it.deletedAt == null && !it.isArchived && !it.isWishlist }
@@ -4386,7 +4390,6 @@ fun VaultFilterableSpotList(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val topTags by tagDao.getTopTags().collectAsState(initial = emptyList())
     val allTags by tagDao.getAllTags().collectAsState(initial = emptyList())
-    val spotIdToTags = rememberVaultSpotIdToTags(tagDao)
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var sortBy by rememberSaveable { mutableStateOf(VaultSortOption.NEWEST) }
@@ -4401,6 +4404,12 @@ fun VaultFilterableSpotList(
         )
     ) { mutableStateOf(VaultNearMeFilter.OFF) }
     var showPhotosOnly by rememberSaveable { mutableStateOf(false) }
+
+    val spotIdToTags = rememberVaultSpotIdToTags(
+        tagDao = tagDao,
+        spotIds = baseSpots.map { it.id },
+        loadAllAssignments = selectedTag != null || searchQuery.isNotBlank()
+    )
 
     LaunchedEffect(selectedItems) {
         if (selectedItems.isEmpty()) selectionModeActive = false

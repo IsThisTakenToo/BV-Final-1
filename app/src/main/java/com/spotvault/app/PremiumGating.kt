@@ -24,6 +24,9 @@ import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -131,21 +134,43 @@ fun TrailingScrollHint(scrollState: ScrollState, modifier: Modifier = Modifier) 
         enter = fadeIn(),
         exit = fadeOut()
     ) {
-        Box(
-            modifier = Modifier
-                .size(26.dp)
-                .clip(CircleShape)
-                .background(SpotVaultColors.Void.copy(alpha = 0.6f))
-                .border(1.dp, SpotVaultColors.Teal.copy(alpha = 0.35f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = "More options — scroll right",
-                tint = SpotVaultColors.Teal.copy(alpha = 0.9f),
-                modifier = Modifier.size(16.dp)
-            )
-        }
+        TrailingScrollHintBadge()
+    }
+}
+
+/** Same hint for [LazyRow] pickers — only visible cells are composed; the chevron still appears
+ * while more items sit off-screen to the right. */
+@Composable
+fun TrailingScrollHint(listState: androidx.compose.foundation.lazy.LazyListState, modifier: Modifier = Modifier) {
+    val canScrollForward by remember {
+        derivedStateOf { listState.canScrollForward }
+    }
+    AnimatedVisibility(
+        visible = canScrollForward,
+        modifier = modifier,
+        enter = fadeIn(),
+        exit = fadeOut()
+    ) {
+        TrailingScrollHintBadge()
+    }
+}
+
+@Composable
+private fun TrailingScrollHintBadge() {
+    Box(
+        modifier = Modifier
+            .size(26.dp)
+            .clip(CircleShape)
+            .background(SpotVaultColors.Void.copy(alpha = 0.6f))
+            .border(1.dp, SpotVaultColors.Teal.copy(alpha = 0.35f), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = "More options — scroll right",
+            tint = SpotVaultColors.Teal.copy(alpha = 0.9f),
+            modifier = Modifier.size(16.dp)
+        )
     }
 }
 

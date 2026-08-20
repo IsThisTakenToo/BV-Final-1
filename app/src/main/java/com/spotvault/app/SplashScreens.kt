@@ -3260,13 +3260,15 @@ fun SplashStylePicker(
     isLocked: (String) -> Boolean = { false },
     onLockedClick: () -> Unit = {}
 ) {
-    val scrollState = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     Box(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(scrollState),
+        androidx.compose.foundation.lazy.LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            SplashStyle.entries.forEach { style ->
+            items(SplashStyle.entries.size, key = { SplashStyle.entries[it].id }) { index ->
+                val style = SplashStyle.entries[index]
                 val normalizedSelection = SplashStyle.fromId(selectedStyleId).id
                 val selected = style.id == normalizedSelection
                 val locked = isLocked(style.id)
@@ -3332,7 +3334,7 @@ fun SplashStylePicker(
                 }
             }
         }
-        TrailingScrollHint(scrollState, modifier = Modifier.align(Alignment.CenterEnd))
+        TrailingScrollHint(listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 

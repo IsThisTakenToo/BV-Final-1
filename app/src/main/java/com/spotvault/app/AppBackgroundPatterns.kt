@@ -856,15 +856,15 @@ fun BackgroundPatternPicker(
     isLocked: (String) -> Boolean = { false },
     onLockedClick: () -> Unit = {}
 ) {
-    val scrollState = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     Box(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(scrollState),
+        androidx.compose.foundation.lazy.LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            BackgroundPattern.entries.forEach { pattern ->
+            items(BackgroundPattern.entries.size, key = { BackgroundPattern.entries[it].id }) { index ->
+                val pattern = BackgroundPattern.entries[index]
                 val locked = isLocked(pattern.id)
                 BackgroundPatternCell(
                     pattern = pattern,
@@ -875,7 +875,7 @@ fun BackgroundPatternPicker(
                 )
             }
         }
-        TrailingScrollHint(scrollState, modifier = Modifier.align(Alignment.CenterEnd))
+        TrailingScrollHint(listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 

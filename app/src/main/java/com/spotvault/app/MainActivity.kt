@@ -7354,6 +7354,18 @@ fun SettingsCategoryDetailScreen(
         // Scaffold's already-inset content padding.
         Box(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (categoryId == "help") {
+                // Help uses its own LazyColumn — nesting it under verticalScroll would compose
+                // every section/answer at once and defeat the point of lazy guide browsing.
+                HelpGuideSettingsContent(
+                    highlightTopic = helpHighlight,
+                    onHighlightConsumed = onHelpHighlightConsumed,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 4.dp)
+                )
+            } else {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -7375,7 +7387,6 @@ fun SettingsCategoryDetailScreen(
                     "vehicles" -> VehiclesSettingsContent(prefs, dao)
                     "data" -> DataSettingsContent(prefs, dao, onAppLockChanged = onAppLockChanged)
                     "premium" -> PremiumSettingsContent(prefs)
-                    "help" -> HelpGuideSettingsContent(highlightTopic = helpHighlight, onHighlightConsumed = onHelpHighlightConsumed)
                     "about" -> AboutSettingsContent()
                 }
                 Spacer(modifier = Modifier.fillMaxWidth().height(navBarBottom + 24.dp))
@@ -7387,6 +7398,7 @@ fun SettingsCategoryDetailScreen(
                     emphasizeHint = true,
                     modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 8.dp).width(6.dp)
                 )
+            }
             }
         }
             // Gradient fade + bouncing arrow overlaid on content instead of a solid Scaffold

@@ -3006,15 +3006,15 @@ fun FoundSplashStylePicker(
     previewTitle: String = DEFAULT_FOUND_SPLASH_TITLE,
     previewSubtitle: String = DEFAULT_FOUND_SPLASH_SUBTITLE
 ) {
-    val scrollState = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     Box(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(scrollState),
+        androidx.compose.foundation.lazy.LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            FoundSplashStyle.entries.forEach { style ->
+            items(FoundSplashStyle.entries.size, key = { FoundSplashStyle.entries[it].id }) { index ->
+                val style = FoundSplashStyle.entries[index]
                 val normalizedSelection = FoundSplashStyle.fromId(selectedStyleId).id
                 val selected = style.id == normalizedSelection
                 val locked = isLocked(style.id)
@@ -3103,6 +3103,6 @@ fun FoundSplashStylePicker(
                 }
             }
         }
-        TrailingScrollHint(scrollState, modifier = Modifier.align(Alignment.CenterEnd))
+        TrailingScrollHint(listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }

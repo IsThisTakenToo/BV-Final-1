@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -34,6 +35,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -2881,7 +2883,8 @@ fun DataSettingsContent(
 @Composable
 fun HelpGuideSettingsContent(
     highlightTopic: HelpHighlightTarget? = null,
-    onHighlightConsumed: () -> Unit = {}
+    onHighlightConsumed: () -> Unit = {},
+    modifier: Modifier = Modifier
 ) {
     val expandedSections = remember { mutableStateMapOf<String, Boolean>() }
     val expandedItems = remember { mutableStateMapOf<String, Boolean>() }
@@ -2909,6 +2912,7 @@ fun HelpGuideSettingsContent(
             }
         }
     }
+    val navBarBottom = with(LocalDensity.current) { SystemBarInsets.navigationBarPx.toDp() }
 
     LaunchedEffect(highlightTopic) {
         val target = highlightTopic ?: return@LaunchedEffect
@@ -2926,36 +2930,45 @@ fun HelpGuideSettingsContent(
         onHighlightConsumed()
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Search Guide…") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = SpotVaultColors.Teal) },
-            trailingIcon = if (searchQuery.isNotEmpty()) {
-                {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear search", tint = SpotVaultColors.Muted)
+    androidx.compose.foundation.lazy.LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = navBarBottom + 24.dp)
+    ) {
+        item(key = "help_search") {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Search Guide…") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = SpotVaultColors.Teal) },
+                trailingIcon = if (searchQuery.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search", tint = SpotVaultColors.Muted)
+                        }
                     }
-                }
-            } else null,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            singleLine = true,
-            shape = RoundedCornerShape(16.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = SpotVaultColors.Teal,
-                unfocusedBorderColor = SpotVaultColors.Outline.copy(alpha = 0.5f)
-            )
-        )
-        if (isSearching && filteredTopics.isEmpty()) {
-            Text(
-                "No results for \"$trimmedQuery\" — try a different word.",
-                color = SpotVaultColors.Muted,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 4.dp)
+                } else null,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = SpotVaultColors.Teal,
+                    unfocusedBorderColor = SpotVaultColors.Outline.copy(alpha = 0.5f)
+                )
             )
         }
-        filteredTopics.forEach { (sectionTitle, items) ->
+        if (isSearching && filteredTopics.isEmpty()) {
+            item(key = "help_empty") {
+                Text(
+                    "No results for \"$trimmedQuery\" — try a different word.",
+                    color = SpotVaultColors.Muted,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+        }
+        items(filteredTopics.size, key = { filteredTopics[it].first }) { index ->
+            val (sectionTitle, items) = filteredTopics[index]
             val sectionExpanded = if (isSearching) true else (expandedSections[sectionTitle] ?: false)
             SettingsSectionCard(
                 title = sectionTitle,

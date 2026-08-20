@@ -160,11 +160,40 @@ private fun spotSortDistanceMeters(
     return haversineDistanceMeters(user.first, user.second, spot.lat, spot.lng)
 }
 
-/** Shared Vault tag map — one lightweight Flow instead of @Relation reloading every spot. */
+/** Shared Vault tag map — one lightweight Flow instead of @Relation reloading every spot.
+ * When [loadAllAssignments] is false, only tags for [spotIds] are loaded (windowed browse).
+ * Search / tag-filter need the full active assignment index. */
 @Composable
-fun rememberVaultSpotIdToTags(tagDao: TagDao): Map<Int, List<TagEntity>> {
-    val rows by tagDao.observeActiveSpotTagAssignments().collectAsState(initial = emptyList())
-    return remember(rows) { rows.toTagsBySpotId() }
+fun rememberVaultSpotIdToTags(
+    tagDao: TagDao,
+    spotIds: List<Int> = emptyList(),
+    loadAllAssignments: Boolean = true
+): Map<Int, List<TagEntity>> {
+    val assignmentFlow = remember(loadAllAssignments) {
+        if (loadAllAssignments) tagDao.observeActiveSpotTagAssignments()
+        else kotlinx.coroutines.flow.flowOf(emptyList())
+    }
+    val allRows by assignmentFlow.collectAsState(initial = emptyList())
+    val scoped by produceState(emptyMap<Int, List<TagEntity>>(), spotIds, loadAllAssignments) {
+        if (loadAllAssignments) {
+            value = emptyMap()
+            return@produceState
+        }
+        value = withContext(Dispatchers.IO) {
+            if (spotIds.isEmpty()) {
+                emptyMap()
+            } else {
+                spotIds.chunked(500)
+                    .flatMap { chunk -> tagDao.getTagAssignmentsForSpots(chunk) }
+                    .toTagsBySpotId()
+            }
+        }
+    }
+    return if (loadAllAssignments) {
+        remember(allRows) { allRows.toTagsBySpotId() }
+    } else {
+        scoped
+    }
 }
 
 /**
