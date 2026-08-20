@@ -9,8 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,9 +16,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -85,6 +84,18 @@ class TagFilterWidgetConfigActivity : ComponentActivity() {
         ThemeState.fontFamilyId = prefs.getString("app_font_family", AppFontOptions.DEFAULT_ID) ?: AppFontOptions.DEFAULT_ID
         SpotVaultColors.updateAmoled(prefs.getBoolean("amoled_black", false))
 
+        // Exported config Activity — if App Lock is on, do not list tag names here. Route to
+        // MainActivity (which shows the lock screen); launcher placement can be retried after unlock.
+        if (prefs.getBoolean(APP_LOCK_ENABLED_PREF, false)) {
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+            )
+            finish()
+            return
+        }
+
         setContent {
             SpotVaultTheme(darkTheme = true) {
                 TagFilterWidgetConfigScreen(
@@ -98,7 +109,18 @@ class TagFilterWidgetConfigActivity : ComponentActivity() {
 
     private fun saveAndFinish(tagIds: Set<Int>) {
         lifecycleScope.launch {
-            val glanceId = GlanceAppWidgetManager(this@TagFilterWidgetConfigActivity).getGlanceIdBy(appWidgetId)
+            // Same lag this Activity's own pre-populate LaunchedEffect already guards against with
+            // runCatching (Glance's id mapping can still be settling right after first placement) —
+            // an uncaught throw here would crash the Activity at the worst possible moment, mid
+            // widget-placement, instead of just finishing with the RESULT_CANCELED already set in
+            // onCreate.
+            val glanceId = runCatching {
+                GlanceAppWidgetManager(this@TagFilterWidgetConfigActivity).getGlanceIdBy(appWidgetId)
+            }.getOrNull()
+            if (glanceId == null) {
+                finish()
+                return@launch
+            }
             updateAppWidgetState(this@TagFilterWidgetConfigActivity, glanceId) { glancePrefs ->
                 glancePrefs[TagFilterWidget.KEY_TAG_IDS] = tagIds.map { it.toString() }.toSet()
             }
@@ -111,7 +133,7 @@ class TagFilterWidgetConfigActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TagFilterWidgetConfigScreen(
     appWidgetId: Int,
@@ -174,12 +196,13 @@ private fun TagFilterWidgetConfigScreen(
                     modifier = Modifier.padding(vertical = 24.dp)
                 )
             } else {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 120.dp),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    allTags.forEach { tag ->
+                    items(allTags, key = { it.id }) { tag ->
                         val selected = tag.id in selectedTagIds
                         FilterChip(
                             selected = selected,

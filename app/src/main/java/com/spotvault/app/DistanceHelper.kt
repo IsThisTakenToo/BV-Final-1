@@ -195,8 +195,19 @@ fun rememberUserLocationForDistance(): Pair<Double, Double>? {
     val context = LocalContext.current
     var location by remember { mutableStateOf<Pair<Double, Double>?>(null) }
 
+    // Was a single one-shot fetch — every "X away" label built on this (called once per Vault
+    // screen, not per row, so this cost is cheap) froze at whatever location was current the
+    // moment the screen first composed and never updated again, silently drifting from reality
+    // the longer the screen stayed open/backgrounded while the user actually moved. Re-reading
+    // periodically (not a continuous requestLocationUpdates subscription — this is just the OS's
+    // already-cached last-known fix, essentially free) keeps it reasonably fresh for as long as
+    // the screen stays open without the battery cost of live tracking a "how far away" label
+    // never needed in the first place.
     androidx.compose.runtime.LaunchedEffect(Unit) {
-        location = fetchLastKnownLocation(context)
+        while (true) {
+            location = fetchLastKnownLocation(context) ?: location
+            kotlinx.coroutines.delay(60_000L)
+        }
     }
 
     return location
@@ -226,13 +237,30 @@ fun SpotDistanceLabel(
     prefs: SharedPreferences,
     modifier: Modifier = Modifier
 ) {
+    SpotDistanceLabel(
+        spotLat = spotLat,
+        spotLng = spotLng,
+        prefs = prefs,
+        modifier = modifier,
+        userLocation = rememberUserLocationForDistance(),
+        distanceUnit = rememberDistanceUnit(prefs)
+    )
+}
+
+@Composable
+fun SpotDistanceLabel(
+    spotLat: Double,
+    spotLng: Double,
+    prefs: SharedPreferences,
+    userLocation: Pair<Double, Double>?,
+    distanceUnit: String,
+    modifier: Modifier = Modifier
+) {
     if (spotLat == 0.0 && spotLng == 0.0) return
 
-    val userLocation = rememberUserLocationForDistance()
-    val unit = rememberDistanceUnit(prefs)
-    val label = remember(userLocation, unit, spotLat, spotLng) {
+    val label = remember(userLocation, distanceUnit, spotLat, spotLng) {
         userLocation?.let { (userLat, userLng) ->
-            formatSpotDistanceLabel(userLat, userLng, spotLat, spotLng, unit)
+            formatSpotDistanceLabel(userLat, userLng, spotLat, spotLng, distanceUnit)
         }
     }
 

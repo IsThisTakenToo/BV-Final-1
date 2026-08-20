@@ -127,8 +127,8 @@ fun isMotionBookmarkFetchCurrent(prefs: SharedPreferences, token: Long): Boolean
 fun saveMotionBookmark(prefs: SharedPreferences, mac: String, lat: Double, lng: Double) {
     prefs.edit()
         .putString(BOOKMARK_MAC_KEY, mac.uppercase())
-        .putFloat(BOOKMARK_LAT_KEY, lat.toFloat())
-        .putFloat(BOOKMARK_LNG_KEY, lng.toFloat())
+        .putCoord(BOOKMARK_LAT_KEY, lat)
+        .putCoord(BOOKMARK_LNG_KEY, lng)
         .putLong(BOOKMARK_TIMESTAMP_KEY, System.currentTimeMillis())
         .apply()
 }
@@ -153,13 +153,15 @@ fun clearMotionBookmark(prefs: SharedPreferences) {
 fun consumeValidMotionBookmark(prefs: SharedPreferences, disconnectedMac: String): Pair<Double, Double>? {
     val bookmarkMac = prefs.getString(BOOKMARK_MAC_KEY, null)
     val timestamp = prefs.getLong(BOOKMARK_TIMESTAMP_KEY, -1L)
-    val lat = prefs.getFloat(BOOKMARK_LAT_KEY, Float.NaN)
-    val lng = prefs.getFloat(BOOKMARK_LNG_KEY, Float.NaN)
+    val hasLat = prefs.contains(BOOKMARK_LAT_KEY)
+    val hasLng = prefs.contains(BOOKMARK_LNG_KEY)
+    val lat = if (hasLat) prefs.getCoord(BOOKMARK_LAT_KEY, Double.NaN) else Double.NaN
+    val lng = if (hasLng) prefs.getCoord(BOOKMARK_LNG_KEY, Double.NaN) else Double.NaN
     clearMotionBookmark(prefs)
 
     if (bookmarkMac == null || timestamp <= 0L || lat.isNaN() || lng.isNaN()) return null
     if (bookmarkMac != disconnectedMac.uppercase()) return null
     if (System.currentTimeMillis() - timestamp > BOOKMARK_TTL_MILLIS) return null
 
-    return lat.toDouble() to lng.toDouble()
+    return lat to lng
 }

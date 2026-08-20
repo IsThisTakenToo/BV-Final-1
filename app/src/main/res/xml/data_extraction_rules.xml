@@ -12,6 +12,7 @@
         <exclude domain="database" path="spotvault_database-wal" />
         <exclude domain="database" path="spotvault_database-shm" />
         <exclude domain="file" path="images/" />
+        <exclude domain="file" path="vault_images/" />
         <exclude domain="file" path="exports/" />
         <exclude domain="sharedpref" path="SpotVaultPrefs.xml" />
     </cloud-backup>
@@ -20,6 +21,7 @@
         <exclude domain="database" path="spotvault_database-wal" />
         <exclude domain="database" path="spotvault_database-shm" />
         <exclude domain="file" path="images/" />
+        <exclude domain="file" path="vault_images/" />
         <exclude domain="file" path="exports/" />
         <exclude domain="sharedpref" path="SpotVaultPrefs.xml" />
     </device-transfer>

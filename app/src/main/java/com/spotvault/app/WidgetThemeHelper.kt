@@ -62,6 +62,32 @@ object WidgetThemeHelper {
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
     )
 
+    // Coalesces refreshAllWidgetsAwait's ~1.6s/5-pass chain — see that function for why.
+    private val refreshMutex = kotlinx.coroutines.sync.Mutex()
+    @Volatile
+    private var refreshRequestedAgain = false
+    private var debounceJob: kotlinx.coroutines.Job? = null
+
+    /** Fire-and-forget refresh — safe to call from any thread, including hot paths. */
+    fun refreshAllWidgets(context: Context) {
+        val appContext = context.applicationContext
+        widgetRefreshScope.launch {
+            refreshAllWidgetsAwait(appContext)
+        }
+    }
+
+    /** Debounced refresh for Room InvalidationTracker fans-outs — Vault edits can invalidate
+     * location_history/tags many times in a row; without this each one kicked off the full
+     * ~1.6s/5-pass widget chain. Final state still lands via [refreshRequestedAgain] coalesce. */
+    fun refreshAllWidgetsDebounced(context: Context, delayMs: Long = 750L) {
+        val appContext = context.applicationContext
+        debounceJob?.cancel()
+        debounceJob = widgetRefreshScope.launch {
+            kotlinx.coroutines.delay(delayMs)
+            refreshAllWidgetsAwait(appContext)
+        }
+    }
+
     /** The button style widgets actually render with — "classic" (Rounded, the app's own
      * default) when widget layout sync is off, otherwise whatever the app's active Button
      * Style is. Mirrors [effectiveThemeId]'s separate toggle for widget colors. */
@@ -201,23 +227,24 @@ object WidgetThemeHelper {
     ): Bitmap {
         val labelColor = labelColorArgb ?: fgColor
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         if (buttonStyle != "wild" && !outlined) {
-            drawPhysicalButtonShadow(canvas, widthPx, heightPx, bgColor, buttonStyle, density)
+            drawPhysicalButtonShadow(canvas, safeW, safeH, bgColor, buttonStyle, density)
         }
-        drawButtonBackground(canvas, widthPx, heightPx, bgColor, buttonStyle, density, premiumPolish)
+        drawButtonBackground(canvas, safeW, safeH, bgColor, buttonStyle, density, premiumPolish)
         if (outlined && borderColor != null) {
-            drawButtonOutline(canvas, widthPx, heightPx, borderColor, buttonStyle, density)
+            drawButtonOutline(canvas, safeW, safeH, borderColor, buttonStyle, density)
         }
         if (buttonStyle != "wild") {
-            drawButtonPolish(canvas, widthPx, heightPx, buttonStyle, density, richer = true, primaryAction = primaryAction || premiumPolish)
+            drawButtonPolish(canvas, safeW, safeH, buttonStyle, density, richer = true, primaryAction = primaryAction || premiumPolish)
             if (!outlined) {
-                drawPhysicalButtonRim(canvas, widthPx, heightPx, bgColor, buttonStyle, density)
+                drawPhysicalButtonRim(canvas, safeW, safeH, bgColor, buttonStyle, density)
             }
         }
 
-        val insets = buttonContentInsets(widthPx, heightPx, buttonStyle, density)
+        val insets = buttonContentInsets(safeW, safeH, buttonStyle, density)
         val contentW = insets.right - insets.left
         val contentH = insets.bottom - insets.top
         val singleWord = !label.contains(' ')
@@ -1000,15 +1027,16 @@ object WidgetThemeHelper {
         heightPx: Int
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         if (buttonStyle != "wild") {
-            drawPhysicalButtonShadow(canvas, widthPx, heightPx, bgColor, buttonStyle, density)
+            drawPhysicalButtonShadow(canvas, safeW, safeH, bgColor, buttonStyle, density)
         }
-        drawButtonBackground(canvas, widthPx, heightPx, bgColor, buttonStyle, density, premiumPolish = false)
+        drawButtonBackground(canvas, safeW, safeH, bgColor, buttonStyle, density, premiumPolish = false)
         if (buttonStyle != "wild") {
-            drawButtonPolish(canvas, widthPx, heightPx, buttonStyle, density, richer = true)
-            drawPhysicalButtonRim(canvas, widthPx, heightPx, bgColor, buttonStyle, density)
+            drawButtonPolish(canvas, safeW, safeH, buttonStyle, density, richer = true)
+            drawPhysicalButtonRim(canvas, safeW, safeH, bgColor, buttonStyle, density)
         }
 
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1020,8 +1048,8 @@ object WidgetThemeHelper {
                 setShadowLayer(2f, 0f, 1f * density, Color.argb(190, 0, 0, 0))
             }
         }
-        val textY = heightPx / 2f - (paint.descent() + paint.ascent()) / 2f
-        canvas.drawText(label, widthPx / 2f, textY, paint)
+        val textY = safeH / 2f - (paint.descent() + paint.ascent()) / 2f
+        canvas.drawText(label, safeW / 2f, textY, paint)
         return bitmap
     }
 
@@ -1078,19 +1106,43 @@ object WidgetThemeHelper {
     fun dpToPx(context: Context, dp: Float): Int =
         (dp * context.resources.displayMetrics.density).toInt()
 
+    /**
+     * Caps Exact-size Glance widget bitmaps. Large tablets can request 800×600dp @3x (~17MB
+     * ARGB per full-bleed gradient alone); binder RemoteViews also reject oversized payloads.
+     * Callers should draw using the returned dims (canvas clips if they keep the uncapped size).
+     */
+    fun clampWidgetBitmapDims(
+        widthPx: Int,
+        heightPx: Int,
+        maxEdgePx: Int = 1536,
+        maxPixels: Int = 2_000_000
+    ): Pair<Int, Int> {
+        var w = widthPx.coerceAtLeast(1)
+        var h = heightPx.coerceAtLeast(1)
+        if (w > maxEdgePx || h > maxEdgePx) {
+            val scale = minOf(maxEdgePx.toFloat() / w, maxEdgePx.toFloat() / h)
+            w = (w * scale).toInt().coerceAtLeast(1)
+            h = (h * scale).toInt().coerceAtLeast(1)
+        }
+        val pixels = w.toLong() * h.toLong()
+        if (pixels > maxPixels) {
+            val scale = kotlin.math.sqrt(maxPixels.toDouble() / pixels.toDouble()).toFloat()
+            w = (w * scale).toInt().coerceAtLeast(1)
+            h = (h * scale).toInt().coerceAtLeast(1)
+        }
+        return w to h
+    }
+
+    fun createSafeArgb8888Bitmap(widthPx: Int, heightPx: Int): Bitmap {
+        val (w, h) = clampWidgetBitmapDims(widthPx, heightPx)
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    }
+
     fun actionLabelColor(fgColor: Int, buttonStyle: String, outlined: Boolean = false, backgroundArgb: Int? = null): Int =
         widgetButtonTextColor(fgColor, buttonStyle, outlined, backgroundArgb)
 
     fun bumpWidgetRevision(prefs: SharedPreferences) {
         prefs.edit().putLong(WIDGET_REVISION_PREF, System.currentTimeMillis()).commit()
-    }
-
-    /** Fire-and-forget refresh — safe to call from any thread, including hot paths. */
-    fun refreshAllWidgets(context: Context) {
-        val appContext = context.applicationContext
-        widgetRefreshScope.launch {
-            refreshAllWidgetsAwait(appContext)
-        }
     }
 
     /** Blocking refresh — used where the caller wants to know the widgets were told to repaint
@@ -1192,27 +1244,45 @@ object WidgetThemeHelper {
 
     suspend fun refreshAllWidgetsAwait(context: Context) {
         val appContext = context.applicationContext
-        // Same trigger point as every widget repaint (Track/Found/Pin, auto-park, timer expiry,
-        // etc.) — anything that changes "is_pinned" already calls this, so the Quick Track tile
-        // piggybacks on it instead of needing its own scattered set of call sites. Quick Pin has
-        // no state to refresh here — it's a one-shot action tile, not a toggle.
-        runCatching { QuickTrackTileService.requestTileUpdate(appContext) }
-            .onFailure { android.util.Log.e("WidgetRefresh", "Tile update request failed", it) }
-        REFRESH_PASS_DELAYS_MS.forEachIndexed { index, delayMs ->
-            if (index > 0) kotlinx.coroutines.delay(delayMs - REFRESH_PASS_DELAYS_MS[index - 1])
-            syncGlanceState(appContext)
-            runCatching { EverydayQuickActionsWidget().updateAll(appContext) }
-                .onFailure { android.util.Log.e("WidgetRefresh", "updateAll(Everyday) failed", it) }
-            runCatching { PremiumGlanceWidget().updateAll(appContext) }
-                .onFailure { android.util.Log.e("WidgetRefresh", "updateAll(Premium) failed", it) }
-            runCatching { VaultFavoritesWidget().updateAll(appContext) }
-                .onFailure { android.util.Log.e("WidgetRefresh", "updateAll(VaultFavorites) failed", it) }
-            runCatching { TagFilterWidget().updateAll(appContext) }
-                .onFailure { android.util.Log.e("WidgetRefresh", "updateAll(TagFilter) failed", it) }
-            forceSystemWidgetUpdate(appContext, EverydayQuickActionsWidgetReceiver::class.java)
-            forceSystemWidgetUpdate(appContext, PremiumGlanceWidgetReceiver::class.java)
-            forceSystemWidgetUpdate(appContext, VaultFavoritesWidgetReceiver::class.java)
-            forceSystemWidgetUpdate(appContext, TagFilterWidgetReceiver::class.java)
+        // Back-to-back triggers (Found immediately followed by a new Track, a fast double-tap on
+        // a toggle) used to each launch this ~1.6s/5-pass chain fully independently — every one
+        // redundantly re-querying Room and re-rendering every widget's bitmaps in parallel with
+        // the others. tryLock() coalesces that: a call arriving while one's already in flight just
+        // asks it to loop once more after finishing (so the latest state still lands) instead of
+        // starting a second overlapping chain.
+        if (!refreshMutex.tryLock()) {
+            refreshRequestedAgain = true
+            return
+        }
+        try {
+            do {
+                refreshRequestedAgain = false
+                // Same trigger point as every widget repaint (Track/Found/Pin, auto-park, timer
+                // expiry, etc.) — anything that changes "is_pinned" already calls this, so the
+                // Quick Track tile piggybacks on it instead of needing its own scattered set of
+                // call sites. Quick Pin has no state to refresh here — it's a one-shot action
+                // tile, not a toggle.
+                runCatching { QuickTrackTileService.requestTileUpdate(appContext) }
+                    .onFailure { android.util.Log.e("WidgetRefresh", "Tile update request failed", it) }
+                REFRESH_PASS_DELAYS_MS.forEachIndexed { index, delayMs ->
+                    if (index > 0) kotlinx.coroutines.delay(delayMs - REFRESH_PASS_DELAYS_MS[index - 1])
+                    syncGlanceState(appContext)
+                    runCatching { EverydayQuickActionsWidget().updateAll(appContext) }
+                        .onFailure { android.util.Log.e("WidgetRefresh", "updateAll(Everyday) failed", it) }
+                    runCatching { PremiumGlanceWidget().updateAll(appContext) }
+                        .onFailure { android.util.Log.e("WidgetRefresh", "updateAll(Premium) failed", it) }
+                    runCatching { VaultFavoritesWidget().updateAll(appContext) }
+                        .onFailure { android.util.Log.e("WidgetRefresh", "updateAll(VaultFavorites) failed", it) }
+                    runCatching { TagFilterWidget().updateAll(appContext) }
+                        .onFailure { android.util.Log.e("WidgetRefresh", "updateAll(TagFilter) failed", it) }
+                    forceSystemWidgetUpdate(appContext, EverydayQuickActionsWidgetReceiver::class.java)
+                    forceSystemWidgetUpdate(appContext, PremiumGlanceWidgetReceiver::class.java)
+                    forceSystemWidgetUpdate(appContext, VaultFavoritesWidgetReceiver::class.java)
+                    forceSystemWidgetUpdate(appContext, TagFilterWidgetReceiver::class.java)
+                }
+            } while (refreshRequestedAgain)
+        } finally {
+            refreshMutex.unlock()
         }
     }
 

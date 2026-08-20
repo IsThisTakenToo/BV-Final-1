@@ -10,6 +10,8 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
 
+private const val MAX_DRIVE_AUTO_BACKUP_ATTEMPTS = 5
+
 /** Silent weekly backup to the signed-in Google account's Drive appDataFolder — the "kept safe
  * even if you never open Settings" path described in [WelcomeOnboardingScreen]'s Drive step. Runs
  * on unmetered Wi-Fi only, so it can never surprise the user with mobile data usage — but does
@@ -25,17 +27,31 @@ class DriveAutoBackupWorker(private val context: Context, params: WorkerParamete
         if (!prefs.getBoolean("drive_connected", false)) return Result.success()
 
         val tokenResult = DriveSyncManager.silentAccessToken(context)
-        val accessToken = tokenResult.getOrElse { return Result.success() }
+        val accessToken = tokenResult.getOrElse { e ->
+            if (e is DriveReauthRequiredException) {
+                // Revoked/expired consent won't fix itself by silently retrying next week —
+                // clearing this flips GoogleDriveBackupSection back to "not connected" the next
+                // time Settings is opened, so the user actually finds out and can reconnect,
+                // instead of "Last backup" just quietly stopping while the toggle still reads on.
+                prefs.edit().putBoolean("drive_connected", false).apply()
+                return Result.success()
+            }
+            // Transient Play Services / network failures should retry, not look "healthy".
+            val message = e.message ?: e.javaClass.simpleName
+            prefs.edit().putString("drive_last_backup_error", message).apply()
+            return if (runAttemptCount >= MAX_DRIVE_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
+        }
 
         return try {
             val db = AppDatabase.getDatabase(context)
             val dao = db.locationDao()
             val vehicleDao = db.vehicleDao()
             val spotPhotoDao = db.spotPhotoDao()
+            val tagDao = db.tagDao()
 
             // Same "skip if nothing changed" fingerprint check as the SAF auto-backup worker —
             // no reason to re-upload an identical zip every week.
-            val fingerprint = VaultBackupManager.computeFingerprint(dao, vehicleDao, spotPhotoDao, prefs)
+            val fingerprint = VaultBackupManager.computeFingerprint(dao, vehicleDao, spotPhotoDao, tagDao, prefs)
             if (fingerprint == prefs.getString("drive_last_backup_fingerprint", null)) {
                 return Result.success()
             }
@@ -43,10 +59,20 @@ class DriveAutoBackupWorker(private val context: Context, params: WorkerParamete
             // uploadBackup() persists drive_last_backup_success/fingerprint itself on success,
             // so every caller (this worker, onboarding's connect, Settings' "Back Up Now") gets
             // consistent bookkeeping from one place — nothing left to write here.
-            val result = DriveSyncManager.uploadBackup(context, dao, vehicleDao, spotPhotoDao, prefs, accessToken)
-            if (result.isSuccess) Result.success() else Result.retry()
+            val result = DriveSyncManager.uploadBackup(context, dao, vehicleDao, spotPhotoDao, tagDao, prefs, accessToken)
+            if (result.isSuccess) {
+                prefs.edit().remove("drive_last_backup_error").apply()
+                Result.success()
+            } else {
+                val message = result.exceptionOrNull()?.message ?: "Drive upload failed"
+                android.util.Log.e("DriveAutoBackup", "Drive auto-backup failed", result.exceptionOrNull())
+                prefs.edit().putString("drive_last_backup_error", message).apply()
+                if (runAttemptCount >= MAX_DRIVE_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
+            }
         } catch (e: Exception) {
-            Result.retry()
+            android.util.Log.e("DriveAutoBackup", "Drive auto-backup crashed", e)
+            prefs.edit().putString("drive_last_backup_error", e.message ?: e.javaClass.simpleName).apply()
+            if (runAttemptCount >= MAX_DRIVE_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
         }
     }
 }

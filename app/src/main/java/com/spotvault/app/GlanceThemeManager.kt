@@ -191,10 +191,11 @@ object GlanceThemeManager {
     }
 
     fun createGradientBitmap(widthPx: Int, heightPx: Int, theme: GlanceWidgetTheme, density: Float = 2.75f): Bitmap {
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         val radius = theme.containerCornerRadius.value * density
         val rect = RectF(0f, 0f, w, h)
         val clip = Path().apply { addRoundRect(rect, radius, radius, Path.Direction.CW) }

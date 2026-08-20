@@ -216,7 +216,11 @@ fun AutomaticParkingSettingsContent(
 
     LaunchedEffect(Unit) {
         migrateLegacyCarVehicleIfNeeded(context, prefs, vehicleDao)
-        vaultSpots = dao.getHistoryList().filter { !it.isWishlist }
+        vaultSpots = dao.getActiveVaultSpotsNewestPrefix(30)
+        // Same rename-sync as the Vehicles screen — this screen shows each linked vehicle's
+        // Bluetooth name too (below), and someone might land here first without ever opening
+        // Vehicles settings after renaming a device in Android's own Bluetooth settings.
+        syncVehicleBluetoothNames(context, vehicleDao)
     }
 
     LaunchedEffect(enabled) {
@@ -731,7 +735,20 @@ fun AutomaticParkingSettingsContent(
                     }
                 }
             }
-            AutoParkActionButton(text = "Add Zone", onClick = { showAddQuietZone = true })
+            AutoParkActionButton(
+                text = "Add Zone",
+                onClick = {
+                    if (quietZones.size >= MAX_AUTO_PARK_QUIET_ZONES) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Quiet Zone limit reached ($MAX_AUTO_PARK_QUIET_ZONES).",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        showAddQuietZone = true
+                    }
+                }
+            )
         }
     }
 
@@ -809,15 +826,22 @@ fun AutomaticParkingSettingsContent(
 
 @Composable
 fun PermissionStatusRow(title: String, granted: Boolean, explanation: String) {
-    val color = if (granted) SpotVaultColors.Teal else SpotVaultColors.Muted
+    // Danger, not Muted, when ungranted — a grey "Needed" label read as just another line of
+    // fine print, easy to skim past on a screen full of muted explanation text. This is the one
+    // state on this row that actually means "auto-park/tracking won't work until you act," so it
+    // needs to look different from the rest of the row, not blend into it.
+    val color = if (granted) SpotVaultColors.Teal else SpotVaultColors.Danger
     Column(modifier = Modifier.fillMaxWidth()) {
         // Top, not CenterVertically — matters once the title can wrap to a second line (see
-        // below): top-aligns the icon and the Granted/Needed label with the title's first line
+        // below): top-aligns the icon and the Granted/Needed badge with the title's first line
         // instead of the vertical middle of the whole wrapped block. Identical to
         // CenterVertically for the common single-line case.
         Row(verticalAlignment = Alignment.Top) {
             Icon(
-                if (granted) Icons.Default.Check else Icons.Default.LocationOn,
+                // A generic location pin for every ungranted row — even Bluetooth and Battery
+                // Optimization — was misleading on top of being low-contrast. A warning glyph
+                // reads as "needs attention" regardless of which permission this row is about.
+                if (granted) Icons.Default.Check else Icons.Default.Warning,
                 contentDescription = null,
                 tint = color,
                 modifier = Modifier.size(18.dp)
@@ -840,10 +864,23 @@ fun PermissionStatusRow(title: String, granted: Boolean, explanation: String) {
                 // real available width even when the row had plenty of room to spare. A single
                 // weight(1f) here claims all of that leftover space for the title (still renders
                 // left-aligned, so short titles look identical) and still pushes the Granted/
-                // Needed label to the row's end on its own, no separate Spacer needed.
+                // Needed badge to the row's end on its own, no separate Spacer needed.
                 modifier = Modifier.padding(start = 8.dp, end = 8.dp).weight(1f)
             )
-            Text(if (granted) "Granted" else "Needed", color = color, fontSize = 12.sp, maxLines = 1, softWrap = false)
+            Box(
+                modifier = Modifier
+                    .background(color.copy(alpha = if (granted) 0.14f else 0.18f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    if (granted) "Granted" else "Needed",
+                    color = color,
+                    fontSize = 12.sp,
+                    fontWeight = if (granted) FontWeight.Medium else FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
         }
         Text(explanation, color = SpotVaultColors.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, start = 26.dp))
     }
@@ -873,18 +910,21 @@ fun AutoParkActionButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    SpotVaultOutlinedButton(
+    // Filled, not outlined — a thin teal-on-dark outline read as low-priority fine print next to
+    // the muted explanation text above it, easy to miss on a screen where actually tapping this
+    // (grant the permission, add the zone) is the whole point of the row. Shared by every "Grant
+    // ... Permission" row, "Add Zone", and "Open Battery Settings", so this one change covers all
+    // of them.
+    SpotVaultButton(
         onClick = onClick,
         modifier = modifier.fillMaxWidth().heightIn(min = 40.dp),
-        shape = spotVaultButtonShape(),
-        border = androidx.compose.foundation.BorderStroke(1.dp, SpotVaultColors.Teal.copy(alpha = 0.5f)),
-        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = SpotVaultColors.Teal)
+        shape = spotVaultButtonShape()
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(16.dp))
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
         }
-        Text(text, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.Teal)
+        Text(text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
     }
 }
 

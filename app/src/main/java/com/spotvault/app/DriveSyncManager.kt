@@ -17,6 +17,8 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,9 +42,22 @@ import kotlin.coroutines.resumeWithException
  * that avoids any risk of backing up a `.db` file mid-write, and restores go back through Room's
  * own DAOs instead of overwriting database files directly.
  */
+/** Drive access needs an interactive consent screen to refresh — cannot be resolved silently in
+ * the background. See [DriveSyncManager.silentAccessToken]. */
+class DriveReauthRequiredException : Exception("Drive access needs re-authorization; can't do that from the background")
+
 object DriveSyncManager {
     private const val DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata"
     private const val BACKUP_FILE_NAME = "droppinvault_backup.zip"
+
+    // uploadBackup's own cleanup pass lists every remote backup file and deletes everything but
+    // the id it just created — with no coordination, two calls overlapping (the weekly
+    // DriveAutoBackupWorker firing while the user taps Settings' "Back Up Now") can each delete
+    // the *other* call's freshly-uploaded file in the same pass, leaving zero backups even though
+    // both calls report success. This only serializes calls within this process — it can't help
+    // if two different devices signed into the same account happen to back up at once — but that
+    // is a far rarer overlap than the same app racing its own worker.
+    private val backupMutex = Mutex()
     private const val DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
     private const val DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
 
@@ -120,6 +135,7 @@ object DriveSyncManager {
         Identity.getAuthorizationClient(activity)
             .authorize(request)
             .addOnSuccessListener { result: AuthorizationResult ->
+                if (!cont.isActive) return@addOnSuccessListener
                 if (result.hasResolution()) {
                     val pendingIntent = result.pendingIntent
                     if (pendingIntent == null) {
@@ -136,7 +152,9 @@ object DriveSyncManager {
                     }
                 }
             }
-            .addOnFailureListener { e -> cont.resumeWithException(e) }
+            .addOnFailureListener { e ->
+                if (cont.isActive) cont.resumeWithException(e)
+            }
     }
 
     /** Same idea, but for a background [Context] with no Activity — used by
@@ -149,14 +167,21 @@ object DriveSyncManager {
         Identity.getAuthorizationClient(context)
             .authorize(request)
             .addOnSuccessListener { result: AuthorizationResult ->
+                if (!cont.isActive) return@addOnSuccessListener
                 val token = result.accessToken
                 if (result.hasResolution() || token == null) {
-                    cont.resume(Result.failure(IllegalStateException("Drive access needs re-authorization; can't do that from the background")))
+                    // Distinct type (not a plain IllegalStateException) so DriveAutoBackupWorker can
+                    // tell "this account's Drive consent needs an interactive re-grant" — persistent
+                    // until the user reconnects — apart from an ordinary transient failure (network
+                    // blip, Play Services hiccup) that's worth silently retrying next week instead.
+                    cont.resume(Result.failure(DriveReauthRequiredException()))
                 } else {
                     cont.resume(Result.success(token))
                 }
             }
-            .addOnFailureListener { e -> cont.resume(Result.failure(e)) }
+            .addOnFailureListener { e ->
+                if (cont.isActive) cont.resume(Result.failure(e))
+            }
     }
 
     /** Finishes the consent step started by [AuthOutcome.NeedsConsent] once the launcher
@@ -177,13 +202,14 @@ object DriveSyncManager {
         dao: LocationDao,
         vehicleDao: VehicleDao,
         spotPhotoDao: SpotPhotoDao,
+        tagDao: TagDao,
         prefs: SharedPreferences,
         accessToken: String
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        backupMutex.withLock { runCatching {
             val tempFile = File(context.cacheDir, "drive_upload_${System.currentTimeMillis()}.zip")
             try {
-                VaultBackupManager.exportBackup(context, dao, vehicleDao, spotPhotoDao, prefs, Uri.fromFile(tempFile))
+                VaultBackupManager.exportBackup(context, dao, vehicleDao, spotPhotoDao, tagDao, prefs, Uri.fromFile(tempFile))
                     .getOrThrow()
                 // Upload the new backup *before* touching the old one — deleting first and
                 // uploading second would leave a window where a dropped connection or interrupted
@@ -207,7 +233,7 @@ object DriveSyncManager {
                 // "Last backup" timestamp — previously only the Worker persisted this, so a
                 // manual upload looked successful in the moment but silently reverted to "No
                 // backup uploaded yet" the next time Settings was reopened.
-                val fingerprint = VaultBackupManager.computeFingerprint(dao, vehicleDao, spotPhotoDao, prefs)
+                val fingerprint = VaultBackupManager.computeFingerprint(dao, vehicleDao, spotPhotoDao, tagDao, prefs)
                 prefs.edit()
                     .putLong("drive_last_backup_success", System.currentTimeMillis())
                     .putString("drive_last_backup_fingerprint", fingerprint)
@@ -215,7 +241,7 @@ object DriveSyncManager {
             } finally {
                 tempFile.delete()
             }
-        }
+        } }
     }
 
     suspend fun downloadAndRestore(
@@ -224,10 +250,11 @@ object DriveSyncManager {
         dao: LocationDao,
         vehicleDao: VehicleDao,
         spotPhotoDao: SpotPhotoDao,
+        tagDao: TagDao,
         prefs: SharedPreferences,
         accessToken: String
     ): Result<Int> = withContext(Dispatchers.IO) {
-        runCatching {
+        backupMutex.withLock { runCatching {
             val fileId = findBackupFileId(accessToken) ?: error("No backup found in Google Drive")
             val tempFile = File(context.cacheDir, "drive_restore_${System.currentTimeMillis()}.zip")
             try {
@@ -235,12 +262,12 @@ object DriveSyncManager {
                 // First-run restore only: an empty vault is being hydrated from the user's own
                 // prior backup, not merged with anything — same "replace" semantics the manual
                 // Import Backup flow uses when the user explicitly chooses to replace.
-                VaultBackupManager.importBackup(context, db, dao, vehicleDao, spotPhotoDao, prefs, Uri.fromFile(tempFile), replaceExisting = true)
+                VaultBackupManager.importBackup(context, db, dao, vehicleDao, spotPhotoDao, tagDao, prefs, Uri.fromFile(tempFile), replaceExisting = true)
                     .getOrThrow()
             } finally {
                 tempFile.delete()
             }
-        }
+        } }
     }
 
     private fun findBackupFileId(accessToken: String): String? = findAllBackupFileIds(accessToken).firstOrNull()
@@ -250,7 +277,10 @@ object DriveSyncManager {
      * left duplicates behind, silently eating into the user's Drive quota forever. Returning every
      * match lets [uploadBackup] clean all of them up, not just the first one found. */
     private fun findAllBackupFileIds(accessToken: String): List<String> {
-        val url = "$DRIVE_FILES_URL?spaces=appDataFolder&q=${Uri.encode("name = '$BACKUP_FILE_NAME' and trashed = false")}&fields=${Uri.encode("files(id,name)")}"
+        // orderBy modifiedTime desc so findBackupFileId() / restore always pick the newest zip
+        // when interrupted uploads left duplicates — without this, firstOrNull() was an arbitrary
+        // Drive-order pick and could silently restore a stale backup.
+        val url = "$DRIVE_FILES_URL?spaces=appDataFolder&q=${Uri.encode("name = '$BACKUP_FILE_NAME' and trashed = false")}&orderBy=${Uri.encode("modifiedTime desc")}&fields=${Uri.encode("files(id,name,modifiedTime)")}"
         val request = Request.Builder().url(url).header("Authorization", "Bearer $accessToken").get().build()
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("Drive list failed: ${response.code}")
@@ -326,6 +356,7 @@ object DriveSyncManager {
         val dao = db.locationDao()
         val vehicleDao = db.vehicleDao()
         val spotPhotoDao = db.spotPhotoDao()
+        val tagDao = db.tagDao()
         // Deliberately getOrThrow(), not getOrDefault(false): this check decides whether to
         // restore or upload, and a transient failure here (a network blip right after the OAuth
         // consent screen closes, a momentary 5xx from Drive's list endpoint) is NOT the same
@@ -342,18 +373,18 @@ object DriveSyncManager {
         // has real local spots, neither "restore over the device" nor "upload over the Drive
         // backup" is safe to pick automatically — either one can silently throw away real data.
         // That case is punted to the caller as ConflictFound instead of being decided here.
-        val localVaultIsEmpty = withContext(Dispatchers.IO) { dao.getAllHistoryIncludingDeleted().isEmpty() }
+        val localVaultIsEmpty = withContext(Dispatchers.IO) { dao.countAllSpotsIncludingDeleted() == 0 }
         when {
             hasBackup && !localVaultIsEmpty -> return@runCatching ConnectOutcome.ConflictFound(email, token)
             hasBackup -> {
-                val restoredCount = downloadAndRestore(activity, db, dao, vehicleDao, spotPhotoDao, prefs, token).getOrThrow()
+                val restoredCount = downloadAndRestore(activity, db, dao, vehicleDao, spotPhotoDao, tagDao, prefs, token).getOrThrow()
                 finishConnecting(activity, prefs, email)
                 ConnectOutcome.Connected(email, restoredCount)
             }
             else -> {
                 // Nothing to restore — push what's on the device now instead of waiting up to 7
                 // days for the periodic worker, so "connected" actually means "backed up" now.
-                uploadBackup(activity, dao, vehicleDao, spotPhotoDao, prefs, token).getOrThrow()
+                uploadBackup(activity, dao, vehicleDao, spotPhotoDao, tagDao, prefs, token).getOrThrow()
                 finishConnecting(activity, prefs, email)
                 ConnectOutcome.Connected(email, null)
             }
@@ -375,11 +406,12 @@ object DriveSyncManager {
         val dao = db.locationDao()
         val vehicleDao = db.vehicleDao()
         val spotPhotoDao = db.spotPhotoDao()
+        val tagDao = db.tagDao()
         val restoredCount = when (choice) {
             ConflictChoice.RESTORE_FROM_DRIVE ->
-                downloadAndRestore(context, db, dao, vehicleDao, spotPhotoDao, prefs, accessToken).getOrThrow()
+                downloadAndRestore(context, db, dao, vehicleDao, spotPhotoDao, tagDao, prefs, accessToken).getOrThrow()
             ConflictChoice.OVERWRITE_DRIVE_BACKUP -> {
-                uploadBackup(context, dao, vehicleDao, spotPhotoDao, prefs, accessToken).getOrThrow()
+                uploadBackup(context, dao, vehicleDao, spotPhotoDao, tagDao, prefs, accessToken).getOrThrow()
                 null
             }
         }
@@ -418,7 +450,7 @@ object DriveSyncManager {
                 accessTokenFromConsentResult(activity, data).getOrThrow()
             }
         }
-        uploadBackup(activity, db.locationDao(), db.vehicleDao(), db.spotPhotoDao(), prefs, token).getOrThrow()
+        uploadBackup(activity, db.locationDao(), db.vehicleDao(), db.spotPhotoDao(), db.tagDao(), prefs, token).getOrThrow()
     }
 
     private fun downloadFile(accessToken: String, fileId: String, destination: File) {
@@ -430,7 +462,24 @@ object DriveSyncManager {
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("Drive download failed: ${response.code}")
             val body = response.body ?: error("Drive download returned an empty body")
-            destination.outputStream().use { out -> body.byteStream().copyTo(out) }
+            val buffer = ByteArray(64 * 1024)
+            var total = 0L
+            destination.outputStream().use { out ->
+                body.byteStream().use { input ->
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > VaultBackupManager.MAX_BACKUP_TOTAL_BYTES) {
+                            runCatching { destination.delete() }
+                            error(
+                                "Drive backup is larger than the ${VaultBackupManager.MAX_BACKUP_TOTAL_BYTES / (1024 * 1024)} MB limit"
+                            )
+                        }
+                        out.write(buffer, 0, read)
+                    }
+                }
+            }
         }
     }
 }

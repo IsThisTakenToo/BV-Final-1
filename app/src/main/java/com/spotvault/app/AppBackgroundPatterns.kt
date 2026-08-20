@@ -165,7 +165,17 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMapPinGlyph(
 private fun GradientMeshBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
     val reducedMotion = ThemeState.reduceAnimations
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
     val boost = if (previewBoost) 2.6f else 1.75f
 
     // Kept as a State object (not `by`-destructured here) — this is the app's default
@@ -253,7 +263,17 @@ private fun GradientMeshBackground(modifier: Modifier = Modifier, previewBoost: 
 private fun AuroraBandsBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
     val reducedMotion = ThemeState.reduceAnimations
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
 
     // Kept as a State object — see GradientMeshBackground's comment above for why, including why
     // previewBoost skips rememberInfiniteTransition entirely instead of just ignoring its value.
@@ -319,7 +339,17 @@ private fun AuroraBandsBackground(modifier: Modifier = Modifier, previewBoost: B
 @Composable
 private fun HexTessellationBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
     Box(
         modifier = modifier.fillMaxSize().drawWithCache {
             val spacing = (if (previewBoost) 22.dp else 34.dp).toPx()
@@ -372,7 +402,17 @@ private fun HexTessellationBackground(modifier: Modifier = Modifier, previewBoos
 @Composable
 private fun LightLeaksBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
     Box(
         modifier = modifier.fillMaxSize().drawWithCache {
             val w = size.width
@@ -439,7 +479,17 @@ private fun LightLeaksBackground(modifier: Modifier = Modifier, previewBoost: Bo
 private fun WaveFlowBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
     val reducedMotion = ThemeState.reduceAnimations
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
 
     // Kept as a State object — see GradientMeshBackground's comment above for why, including why
     // previewBoost skips rememberInfiniteTransition entirely instead of just ignoring its value.
@@ -495,7 +545,17 @@ private fun WaveFlowBackground(modifier: Modifier = Modifier, previewBoost: Bool
 private fun NebulaMistBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
     val reducedMotion = ThemeState.reduceAnimations
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
 
     // Kept as a State object — see GradientMeshBackground's comment above for why, including why
     // previewBoost skips rememberInfiniteTransition entirely instead of just ignoring its value.
@@ -565,7 +625,17 @@ private fun NebulaMistBackground(modifier: Modifier = Modifier, previewBoost: Bo
 private fun ScanSweepBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
     val reducedMotion = ThemeState.reduceAnimations
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
 
     // Kept as a State object — see GradientMeshBackground's comment above for why, including why
     // previewBoost skips rememberInfiniteTransition entirely instead of just ignoring its value.
@@ -652,13 +722,32 @@ private fun ScanSweepBackground(modifier: Modifier = Modifier, previewBoost: Boo
 @Composable
 private fun PinFieldBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
     Box(
         modifier = modifier.fillMaxSize().drawWithCache {
             val spacing = (if (previewBoost) 52.dp else 72.dp).toPx()
-            val random = Random(42)
             val center = Offset(size.width * 0.5f, size.height * 0.45f)
             onDrawBehind {
+                // Random(42) created here, inside onDrawBehind, not hoisted up next to `spacing`
+                // above — onDrawBehind can legitimately re-run many times without drawWithCache
+                // itself re-running (e.g. every frame of the splash screen's own progress
+                // animation, which shares this draw phase with no layer boundary between them).
+                // A single Random instance shared across those re-invocations kept advancing its
+                // sequence on every extra call, so each pin's jitter offset silently drifted frame
+                // to frame — read as the whole pin field stuttering/vibrating for the splash's
+                // duration. Recreating it fresh here means every draw call reproduces the exact
+                // same seeded sequence, so the pins render in the same place every time.
+                val random = Random(42)
                 drawPatternBase(baseFill, themeColors, previewBoost)
 
                 drawCircle(
@@ -730,7 +819,17 @@ private fun PinFieldBackground(modifier: Modifier = Modifier, previewBoost: Bool
 @Composable
 private fun PlainDarkBackground(modifier: Modifier = Modifier, previewBoost: Boolean = false) {
     val themeColors = LocalSpotVaultColors.current
-    val baseFill = if (previewBoost) themeColors.Elevated else themeColors.Void
+    // themeColors.Void directly, not SpotVaultColors.Void — this ambient background is drawn
+    // behind every screen for the entire time the app is open, and reading straight off the
+    // CompositionLocal instead of the AMOLED-aware getter meant the app's flagship "true black"
+    // toggle never actually applied to it: every screen kept painting the per-theme dark color
+    // (e.g. a dark purple, not black) right over wherever a screen-level Void read (which does
+    // go through the AMOLED-aware getter) had already painted real black underneath. Checking
+    // ThemeState.isAmoled here directly — it's a real mutableStateOf, so this still redraws
+    // correctly the instant the toggle changes — is the fix, same logic SpotVaultColors.Void
+    // itself uses. previewBoost (Settings' pattern picker thumbnails) intentionally stays
+    // Elevated regardless, same as before.
+    val baseFill = if (previewBoost) themeColors.Elevated else if (ThemeState.isAmoled) Color.Black else themeColors.Void
     Box(
         modifier = modifier.fillMaxSize().drawWithCache {
             onDrawBehind {

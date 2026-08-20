@@ -1,4 +1,4 @@
-# BeaconVault
+# DropPin Vault
 
 Native **Android** app (Kotlin + Jetpack Compose) for saving, organizing, and navigating back to important locations.
 

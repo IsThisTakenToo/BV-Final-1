@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.FlashOn
@@ -71,6 +72,8 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
@@ -88,6 +91,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -116,11 +120,15 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -347,7 +355,7 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                 label = { Text("Vault Name") },
                 supportingText = {
                     Text(
-                        "Home header, splash & widget (max $MAX_VAULT_DISPLAY_NAME_LENGTH chars)",
+                        "Home header & splash screen (max $MAX_VAULT_DISPLAY_NAME_LENGTH chars)",
                         color = SpotVaultColors.Muted,
                         fontSize = 11.sp
                     )
@@ -1407,6 +1415,13 @@ fun PremiumSettingsContent(prefs: SharedPreferences) {
                 checked = premiumUnlocked,
                 onCheckedChange = {
                     premiumUnlocked = it
+                    // revertLockedCosmeticsToFree only touches SharedPreferences-backed cosmetics
+                    // (theme, vault icon, compass, button, background) — the app icon is a real
+                    // PackageManager activity-alias, not just a pref, so it can't be reverted by
+                    // an editor write and has to be checked separately, before premium flips off
+                    // in prefs (storedIcon() is ungated and reads the raw value either way, but
+                    // checking first keeps this next to its cause).
+                    val iconNeedsRevert = !it && AppIconManager.storedIcon(prefs) != AppIcon.DEFAULT
                     // commitThemeChange refreshes every placed widget so an already-placed
                     // Premium widget flips out of its locked state right away instead of
                     // needing to be removed and re-added to pick up the change.
@@ -1421,8 +1436,52 @@ fun PremiumSettingsContent(prefs: SharedPreferences) {
                         }
                         putBoolean(PREMIUM_UNLOCKED_PREF, it)
                     }
+                    // Without this, turning premium off left a premium launcher icon alias
+                    // enabled indefinitely — currentIconId() would report "default" everywhere
+                    // in the UI (masking the drift) while the actual home-screen icon, and the
+                    // underlying "app_icon" pref itself, both stayed on the premium one. No
+                    // process kill here (unlike the manual picker flow) — this fires from a
+                    // background entitlement change, not a user-initiated icon pick, so silently
+                    // self-correcting the alias and letting it show up on the next natural
+                    // restart is far less jarring than killing the app mid-toggle.
+                    if (iconNeedsRevert) {
+                        AppIconManager.applyIcon(settingsContext, prefs, AppIcon.DEFAULT)
+                    }
                 }
             )
+        }
+    }
+}
+
+/** Small, content-hugging unit pill for the merge-distance slider — deliberately not the
+ * full-width DistanceUnitSegmentedToggle used for the app-wide Distance Units setting (miles/km);
+ * this only needs to sit next to a single slider label without competing for room. */
+@Composable
+private fun CompactUnitToggle(useFeet: Boolean, onToggle: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(SpotVaultColors.Deep)
+            .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+            .padding(2.dp)
+    ) {
+        listOf(false to "m", true to "ft").forEach { (isFeet, label) ->
+            val selected = useFeet == isFeet
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (selected) SpotVaultColors.Teal else Color.Transparent)
+                    .clickable { onToggle(isFeet) }
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    label,
+                    fontSize = 11.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (selected) SpotVaultColors.Ink else SpotVaultColors.Muted
+                )
+            }
         }
     }
 }
@@ -1440,6 +1499,8 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
     var autoDeleteInterval by remember { mutableStateOf(prefs.getString("auto_delete_interval", AutoDeleteInterval.MONTH.id) ?: AutoDeleteInterval.MONTH.id) }
     var smartDeduplicationEnabled by remember { mutableStateOf(isSmartDeduplicationEnabled(prefs)) }
     var deduplicationWindowHours by remember { mutableStateOf(loadDeduplicationWindowHours(prefs)) }
+    var deduplicationRadiusMeters by remember { mutableStateOf(loadDeduplicationRadiusMeters(prefs)) }
+    var deduplicationRadiusUsesFeet by remember { mutableStateOf(loadDeduplicationRadiusUsesFeet(prefs)) }
     var showAutoDeleteIntervalDialog by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
     var showTagManager by remember { mutableStateOf(false) }
@@ -1576,8 +1637,48 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
                     valueRange = MIN_DEDUPLICATION_WINDOW_HOURS.toFloat()..MAX_DEDUPLICATION_WINDOW_HOURS.toFloat(),
                     steps = (MAX_DEDUPLICATION_WINDOW_HOURS - MIN_DEDUPLICATION_WINDOW_HOURS) / 6 - 1
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (deduplicationRadiusUsesFeet) {
+                            "Merge distance: ${metersToFeet(deduplicationRadiusMeters)} ft"
+                        } else {
+                            "Merge distance: $deduplicationRadiusMeters m"
+                        },
+                        color = SpotVaultColors.OnSurface,
+                        fontSize = 13.sp
+                    )
+                    CompactUnitToggle(
+                        useFeet = deduplicationRadiusUsesFeet,
+                        onToggle = { feet ->
+                            deduplicationRadiusUsesFeet = feet
+                            prefs.edit().putBoolean(DEDUPLICATION_RADIUS_UNIT_FEET_PREF, feet).apply()
+                        }
+                    )
+                }
+                Slider(
+                    value = deduplicationRadiusMeters.toFloat(),
+                    onValueChange = { newValue ->
+                        // Snaps to the nearest round step itself — Slider's own `steps` only
+                        // guarantees even spacing between MIN and MAX, not that those stops land
+                        // on whole 5m increments, and a "23m" merge radius would read as an
+                        // arbitrary number next to the deliberately round 10-60m range this was
+                        // tuned around.
+                        val meters = (Math.round(newValue / DEDUPLICATION_RADIUS_STEP_METERS) * DEDUPLICATION_RADIUS_STEP_METERS)
+                            .coerceIn(MIN_DEDUPLICATION_RADIUS_METERS, MAX_DEDUPLICATION_RADIUS_METERS)
+                        deduplicationRadiusMeters = meters
+                        prefs.edit().putInt(DEDUPLICATION_RADIUS_METERS_PREF, meters).apply()
+                    },
+                    valueRange = MIN_DEDUPLICATION_RADIUS_METERS.toFloat()..MAX_DEDUPLICATION_RADIUS_METERS.toFloat(),
+                    steps = (MAX_DEDUPLICATION_RADIUS_METERS - MIN_DEDUPLICATION_RADIUS_METERS) / DEDUPLICATION_RADIUS_STEP_METERS - 1
+                )
+
                 Text(
-                    "Spots saved within about 25 meters of each other inside this window are treated as the same place — only the timestamp and any blank fields (photo, notes) are updated.",
+                    "Spots saved within this distance of each other, inside the merge window above, are treated as the same place — only the timestamp and any blank fields (photo, notes) are updated.",
                     color = SpotVaultColors.Muted,
                     fontSize = 12.sp,
                     lineHeight = 16.sp
@@ -1586,22 +1687,24 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
         }
 
         SettingsSectionCard(title = "Tags", subtitle = "Rename or delete tags used to organize spots across the Vault") {
-            SpotVaultOutlinedButton(
+            SpotVaultButton(
                 onClick = { showTagManager = true },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Icon(Icons.Default.Sell, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.padding(end = 8.dp))
-                Text("Manage Tags", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                Icon(Icons.Default.Sell, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
+                Text("Manage Tags", fontWeight = FontWeight.Bold)
             }
         }
 
         SettingsSectionCard(title = "Archive", subtitle = "Spots hidden from the Vault but kept forever") {
-            SpotVaultOutlinedButton(
+            SpotVaultButton(
                 onClick = { showArchivedSpots = true },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Icon(Icons.Default.Archive, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.padding(end = 8.dp))
-                Text("Archived Spots", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
+                Text("Archived Spots", fontWeight = FontWeight.Bold)
             }
         }
 
@@ -1671,7 +1774,7 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
 
         SettingsSectionCard(
             title = "Danger Zone",
-            subtitle = "Destructive actions"
+            subtitle = "Permanently erases your saved data"
         ) {
             ClearAllVaultDataButton(dao = dao, spotPhotoDao = spotPhotoDao, coroutineScope = coroutineScope)
         }
@@ -1696,7 +1799,7 @@ fun QuickPinSettingsContent(prefs: SharedPreferences) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SettingsSectionCard(
             title = "Quick-Pin Behavior",
-            subtitle = "Tactical quick-save sheet"
+            subtitle = "Configure one-tap saving and auto-naming rules"
         ) {
             SettingsToggleRow(
                 title = "Auto-Close After Save",
@@ -2128,17 +2231,27 @@ fun ClearAllVaultDataButton(dao: LocationDao, spotPhotoDao: SpotPhotoDao, corout
                             // the paths needed to find them. Same leak class as RecentlyDeletedDialog/
                             // ArchivedSpotsDialog's "Delete Forever" had — "Clear All" is the bulk
                             // version of that exact operation and needs the same file cleanup.
-                            val spots = dao.getHistoryList().filter { !it.isArchived }
-                            spots.forEach { spot ->
-                                if (spot.imagePath.isNotEmpty()) {
-                                    runCatching { File(spot.imagePath).delete() }
-                                }
-                                spotPhotoDao.getForSpot(spot.id).forEach { extra ->
-                                    runCatching { File(extra.path).delete() }
-                                }
+                            // Path-only queries (not full spot rows) so large vaults don't OOM here.
+                            // Covers active + soft-deleted; archived rows are intentionally kept.
+                            dao.getCoverImagePathsForClearAll().forEach { path ->
+                                runCatching { File(path).delete() }
+                            }
+                            spotPhotoDao.getPhotoPathsForClearAll().forEach { path ->
+                                runCatching { File(path).delete() }
                             }
                             dao.deleteAllNonArchivedHistory()
                             tagDao.recomputeAllUsageCounts()
+                            withContext(Dispatchers.Main) {
+                                ActiveTrackingHelper.clearActiveTracking(context)
+                                val prefs = context.getSharedPreferences("SpotVaultPrefs", android.content.Context.MODE_PRIVATE)
+                                WidgetThemeHelper.bumpWidgetRevision(prefs)
+                                WidgetThemeHelper.refreshAllWidgets(context)
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Vault cleared",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         }
                         showClearDataTypeConfirm = false
                         clearDataConfirmText = ""
@@ -2313,24 +2426,34 @@ fun GoogleDriveBackupSection(prefs: SharedPreferences) {
                 Text((driveState as DriveOnboardingState.Failed).message, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
             }
             Row(modifier = Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SpotVaultOutlinedButton(
+                SpotVaultButton(
                     onClick = { backUpNow() },
                     enabled = driveState !is DriveOnboardingState.Working && driveState !is DriveOnboardingState.NeedsConflictResolution,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotVaultColors.Teal,
+                        contentColor = SpotVaultColors.OnTeal
+                    ),
                     modifier = Modifier.weight(1f)
                 ) {
                     if (driveState is DriveOnboardingState.Working) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = SpotVaultColors.Teal)
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = SpotVaultColors.OnTeal)
                     } else {
-                        Text("Back Up Now", color = SpotVaultColors.Teal)
+                        Text("Back Up Now")
                     }
                 }
-                SpotVaultOutlinedButton(
+                // Same soft-danger fill as Clear All Vault Data elsewhere in Settings — solid
+                // enough to read as a real button, still visually distinct as the destructive
+                // option next to Back Up Now's teal.
+                SpotVaultButton(
                     onClick = { showDisconnectConfirm = true },
                     enabled = driveState !is DriveOnboardingState.Working,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = SpotVaultColors.Danger),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotVaultColors.Danger.copy(alpha = 0.18f),
+                        contentColor = SpotVaultColors.Danger
+                    ),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Disconnect", color = SpotVaultColors.Danger)
+                    Text("Disconnect")
                 }
             }
         } else {
@@ -2343,16 +2466,17 @@ fun GoogleDriveBackupSection(prefs: SharedPreferences) {
             if (driveState is DriveOnboardingState.Failed) {
                 Text((driveState as DriveOnboardingState.Failed).message, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
             }
-            SpotVaultOutlinedButton(
+            SpotVaultButton(
                 onClick = { connect() },
                 enabled = driveState !is DriveOnboardingState.Working && driveState !is DriveOnboardingState.NeedsConflictResolution,
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                shape = RoundedCornerShape(16.dp)
             ) {
                 if (driveState is DriveOnboardingState.Working || driveState is DriveOnboardingState.NeedsConflictResolution) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = SpotVaultColors.Teal)
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = SpotVaultColors.ButtonLabel)
                 } else {
-                    Icon(Icons.Default.CloudUpload, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.padding(end = 8.dp))
-                    Text("Connect Google Drive", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
+                    Text("Connect Google Drive", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -2424,6 +2548,7 @@ fun DataSettingsContent(
     val coroutineScope = rememberCoroutineScope()
     val vehicleDao = remember { AppDatabase.getDatabase(settingsContext).vehicleDao() }
     val spotPhotoDao = remember { AppDatabase.getDatabase(settingsContext).spotPhotoDao() }
+    val tagDao = remember { AppDatabase.getDatabase(settingsContext).tagDao() }
     val vaultDisplayName = remember { loadVaultDisplayNameFromPrefs(prefs) }
     var appLockEnabled by remember { mutableStateOf(prefs.getBoolean(APP_LOCK_ENABLED_PREF, false)) }
     var showImportConfirm by remember { mutableStateOf(false) }
@@ -2444,7 +2569,7 @@ fun DataSettingsContent(
         AppLockGate.end()
         uri?.let { outputUri ->
             coroutineScope.launch(Dispatchers.IO) {
-                val result = VaultBackupManager.exportBackup(settingsContext, dao, vehicleDao, spotPhotoDao, prefs, outputUri)
+                val result = VaultBackupManager.exportBackup(settingsContext, dao, vehicleDao, spotPhotoDao, tagDao, prefs, outputUri)
                 val message = result.fold(
                     onSuccess = { count -> "Exported $count spots to backup." },
                     onFailure = { "Export failed: ${it.message ?: "Unknown error"}" }
@@ -2470,7 +2595,13 @@ fun DataSettingsContent(
         AppLockGate.end()
         if (result != null) {
             backupMessage = result.fold(
-                onSuccess = { count -> "Imported $count waypoints from GPX." },
+                onSuccess = { result ->
+                    if (result.truncated) {
+                        "Imported ${result.imported} waypoints (capped at ${GpxParser.MAX_IMPORT_WAYPOINTS})."
+                    } else {
+                        "Imported ${result.imported} waypoints from GPX."
+                    }
+                },
                 onFailure = { "GPX import failed: ${it.message ?: "Unknown error"}" }
             )
         }
@@ -2540,23 +2671,50 @@ fun DataSettingsContent(
             title = "Manual Backup",
             subtitle = "Export or import your full vault as a single .zip file, whenever you want"
         ) {
-            SettingsActionRow(
-                title = "Export Vault Backup",
-                subtitle = "ZIP with each spot in its own folder — photo, notes.txt, and details together",
+            // These used to be SettingsActionRow — the same plain chevron-row style used for
+            // pure navigation elsewhere in Settings, which read as "go look at something" rather
+            // than "do something right now." A one-off action like a manual export/import reads
+            // more clearly as an actual button, matching Manage Tags/Archive below and Google
+            // Drive's own Connect/Back Up Now buttons above.
+            SpotVaultButton(
                 onClick = {
                     AppLockGate.begin()
                     val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US)
                         .format(Date())
                     exportBackupLauncher.launch("DropPinVault_Backup_$stamp.zip")
-                }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Export Vault Backup", fontWeight = FontWeight.Bold)
+            }
+            Text(
+                "ZIP with each spot in its own folder — photo, notes.txt, and details together",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 6.dp, bottom = 10.dp)
             )
-            SettingsActionRow(
-                title = "Import Vault Backup",
-                subtitle = "Restore spots, vehicles, and photos from a DropPin Vault .zip backup",
+            SpotVaultButton(
                 onClick = {
                     AppLockGate.begin()
                     importBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
-                }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Import Vault Backup", fontWeight = FontWeight.Bold)
+            }
+            Text(
+                "Restore spots, vehicles, and photos from a DropPin Vault .zip backup",
+                color = SpotVaultColors.Muted,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 6.dp, bottom = 10.dp)
             )
             Text(
                 "Exports a universally readable .zip archive containing all your spots, photos, and an interactive HTML gallery.",
@@ -2632,7 +2790,7 @@ fun DataSettingsContent(
 
         SettingsSectionCard(
             title = "Data & Privacy",
-            subtitle = "Destructive actions"
+            subtitle = "Permanently erases your saved data"
         ) {
             ClearAllVaultDataButton(dao = dao, spotPhotoDao = spotPhotoDao, coroutineScope = coroutineScope)
         }
@@ -2642,7 +2800,7 @@ fun DataSettingsContent(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(vaultDisplayName, color = SpotVaultColors.OnSurface, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Text("Version 1.0.26", color = SpotVaultColors.Muted, fontSize = 13.sp)
+            Text("Version ${BuildConfig.VERSION_NAME}", color = SpotVaultColors.Muted, fontSize = 13.sp)
         }
     }
 
@@ -2671,6 +2829,7 @@ fun DataSettingsContent(
                                     dao,
                                     vehicleDao,
                                     spotPhotoDao,
+                                    tagDao,
                                     prefs,
                                     uri,
                                     replaceExisting = false
@@ -2731,6 +2890,25 @@ fun HelpGuideSettingsContent(
     // gain from making writes to it trigger recomposition.
     val itemRequesters = remember { mutableMapOf<String, BringIntoViewRequester>() }
     var pulsingKey by remember { mutableStateOf<String?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    val trimmedQuery = searchQuery.trim()
+    val isSearching = trimmedQuery.isNotEmpty()
+    // While searching, every matching section renders forced-open (collapsible = false below) —
+    // browsing normally still respects whatever the user last expanded/collapsed by hand, but a
+    // search result hidden behind a collapsed section (or an item you'd still have to tap to
+    // reveal the very text that matched) would defeat the point of searching in the first place.
+    val filteredTopics = remember(trimmedQuery) {
+        if (!isSearching) {
+            HelpTopics
+        } else {
+            HelpTopics.mapNotNull { (section, items) ->
+                val matches = items.filter { item ->
+                    searchTextMatches(item.question, trimmedQuery) || searchTextMatches(item.answer, trimmedQuery)
+                }
+                if (matches.isEmpty()) null else section to matches
+            }
+        }
+    }
 
     LaunchedEffect(highlightTopic) {
         val target = highlightTopic ?: return@LaunchedEffect
@@ -2749,18 +2927,46 @@ fun HelpGuideSettingsContent(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        HelpTopics.forEach { (sectionTitle, items) ->
-            val sectionExpanded = expandedSections[sectionTitle] ?: false
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search Guide…") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = SpotVaultColors.Teal) },
+            trailingIcon = if (searchQuery.isNotEmpty()) {
+                {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear search", tint = SpotVaultColors.Muted)
+                    }
+                }
+            } else null,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = SpotVaultColors.Teal,
+                unfocusedBorderColor = SpotVaultColors.Outline.copy(alpha = 0.5f)
+            )
+        )
+        if (isSearching && filteredTopics.isEmpty()) {
+            Text(
+                "No results for \"$trimmedQuery\" — try a different word.",
+                color = SpotVaultColors.Muted,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
+        filteredTopics.forEach { (sectionTitle, items) ->
+            val sectionExpanded = if (isSearching) true else (expandedSections[sectionTitle] ?: false)
             SettingsSectionCard(
                 title = sectionTitle,
                 subtitle = null,
-                collapsible = true,
+                collapsible = !isSearching,
                 expanded = sectionExpanded,
                 onExpandChange = { expandedSections[sectionTitle] = !sectionExpanded }
             ) {
                 items.forEach { item ->
                     val itemKey = "$sectionTitle::${item.question}"
-                    val expanded = expandedItems[itemKey] ?: false
+                    val expanded = if (isSearching) true else (expandedItems[itemKey] ?: false)
                     val requester = remember(itemKey) { BringIntoViewRequester() }
                     itemRequesters[itemKey] = requester
                     val isPulsing = pulsingKey == itemKey
@@ -2775,7 +2981,7 @@ fun HelpGuideSettingsContent(
                             .bringIntoViewRequester(requester)
                             .clip(RoundedCornerShape(12.dp))
                             .background(SpotVaultColors.Teal.copy(alpha = highlightAlpha))
-                            .clickable { expandedItems[itemKey] = !expanded }
+                            .clickable(enabled = !isSearching) { expandedItems[itemKey] = !expanded }
                             .padding(vertical = 10.dp, horizontal = 6.dp)
                     ) {
                         Row(
@@ -2784,9 +2990,9 @@ fun HelpGuideSettingsContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(
-                                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                                modifier = Modifier.weight(1f).padding(end = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
@@ -2799,19 +3005,21 @@ fun HelpGuideSettingsContent(
                                 }
                                 Text(item.question, color = SpotVaultColors.OnSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.weight(1f))
                             }
-                            Icon(
-                                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = null,
-                                tint = SpotVaultColors.Teal
-                            )
+                            if (!isSearching) {
+                                Icon(
+                                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = null,
+                                    tint = SpotVaultColors.Teal
+                                )
+                            }
                         }
                         if (expanded) {
                             Text(
                                 item.answer,
                                 color = SpotVaultColors.Muted,
                                 fontSize = 13.sp,
-                                lineHeight = 18.sp,
-                                modifier = Modifier.padding(top = 6.dp)
+                                lineHeight = 20.sp,
+                                modifier = Modifier.padding(top = 8.dp)
                             )
                         }
                     }
@@ -2823,13 +3031,13 @@ fun HelpGuideSettingsContent(
 
 @Composable
 fun AboutSettingsContent() {
-    data class IconCredit(val library: String, val license: String, val url: String, val usedFor: String)
+    data class IconCredit(val library: String, val license: String, val licenseUrl: String, val url: String, val usedFor: String)
     data class SoundCredit(val name: String, val author: String)
 
     val credits = listOf(
-        IconCredit("Font Awesome Free", "CC BY 4.0", "fontawesome.com", "Vehicle icons (car, SUV/van, pickup, motorcycle, bicycle, boat, electric)"),
-        IconCredit("Material Symbols", "Apache License 2.0", "fonts.google.com/icons", "Vehicle icons (scooter) and general app icons"),
-        IconCredit("Tabler Icons", "MIT License", "tabler.io/icons", "Vehicle icons (other / steering wheel)")
+        IconCredit("Font Awesome Free", "CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/", "fontawesome.com", "Vehicle icons (car, SUV/van, pickup, motorcycle, bicycle, boat, electric)"),
+        IconCredit("Material Symbols", "Apache License 2.0", "https://www.apache.org/licenses/LICENSE-2.0", "fonts.google.com/icons", "Vehicle icons (scooter) and general app icons"),
+        IconCredit("Tabler Icons", "MIT License", "https://opensource.org/licenses/MIT", "tabler.io/icons", "Vehicle icons (other / steering wheel)")
     )
 
     val vaultSoundCredits = listOf(
@@ -2863,7 +3071,7 @@ fun AboutSettingsContent() {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(DEFAULT_VAULT_DISPLAY_NAME, color = SpotVaultColors.OnSurface, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Text("Version 1.0.26", color = SpotVaultColors.Muted, fontSize = 13.sp)
+            Text("Version ${BuildConfig.VERSION_NAME}", color = SpotVaultColors.Muted, fontSize = 13.sp)
         }
 
         SettingsSectionCard(title = "Legal", subtitle = "How DropPin Vault handles your data") {
@@ -2893,17 +3101,51 @@ fun AboutSettingsContent() {
                     Column {
                         Text(credit.library, color = SpotVaultColors.OnSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                         Text(credit.usedFor, color = SpotVaultColors.Muted, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 2.dp))
-                        Text("${credit.license} · ${credit.url}", color = SpotVaultColors.PrimaryBright.copy(alpha = 0.75f), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                        Row(modifier = Modifier.padding(top = 2.dp)) {
+                            Text(
+                                credit.license,
+                                color = SpotVaultColors.PrimaryBright.copy(alpha = 0.9f),
+                                fontSize = 12.sp,
+                                textDecoration = TextDecoration.Underline,
+                                modifier = Modifier.clickable { openUrl(credit.licenseUrl) }
+                            )
+                            Text(" · ", color = SpotVaultColors.PrimaryBright.copy(alpha = 0.75f), fontSize = 12.sp)
+                            Text(
+                                credit.url,
+                                color = SpotVaultColors.PrimaryBright.copy(alpha = 0.9f),
+                                fontSize = 12.sp,
+                                textDecoration = TextDecoration.Underline,
+                                modifier = Modifier.clickable { openUrl("https://${credit.url}") }
+                            )
+                        }
                     }
                 }
             }
         }
 
-        SettingsSectionCard(
-            title = "Sound Credits",
-            subtitle = "Every button and vault sound is a real recording from freesound.org, released under a CC0 license — free to use with no attribution required, but full credit to the original creators anyway:"
-        ) {
+        SettingsSectionCard(title = "Sound Credits") {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // freesound.org needs to stay clickable inline, mid-sentence — not something
+                // SettingsSectionCard's plain-String subtitle slot can carry, so this whole
+                // sentence moved into the card body as its own Text instead.
+                val freesoundLinkStyle = TextLinkStyles(
+                    style = SpanStyle(
+                        color = SpotVaultColors.PrimaryBright,
+                        textDecoration = TextDecoration.Underline
+                    )
+                )
+                Text(
+                    buildAnnotatedString {
+                        append("Every button and vault sound is a real recording from ")
+                        withLink(LinkAnnotation.Url("https://freesound.org", freesoundLinkStyle)) {
+                            append("freesound.org")
+                        }
+                        append(", released under a CC0 license — free to use with no attribution required, but full credit to the original creators anyway:")
+                    },
+                    color = SpotVaultColors.Muted,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
                 Text("VAULT SOUNDS", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 0.8.sp)
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     vaultSoundCredits.forEach { credit ->

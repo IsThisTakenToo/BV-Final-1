@@ -727,6 +727,9 @@ private fun rememberLiveUserLocation(): LiveLocationFix? {
 
             isListening = true
             fused.lastLocation.addOnSuccessListener { last ->
+                // Guard against a late Task callback after stopListening()/onDispose — writing
+                // Compose state after the effect is gone is wasted work and can crash.
+                if (!isListening) return@addOnSuccessListener
                 // Unfiltered before this, a cached fix from wherever the phone last resolved
                 // location — possibly hours old, possibly from an entirely different place —
                 // would seed the compass immediately with no age/freshness check at all, briefly

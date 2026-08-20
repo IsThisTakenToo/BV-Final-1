@@ -1,9 +1,11 @@
 package com.spotvault.app
 
+import android.content.Context
 import android.os.Build
 import android.view.WindowManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
@@ -24,9 +26,25 @@ import androidx.core.view.WindowCompat
 @Composable
 fun EnsureDialogEdgeToEdge() {
     val view = LocalView.current
+    val context = LocalContext.current
     SideEffect {
         val dialogWindow = (view.parent as? DialogWindowProvider)?.window
         if (dialogWindow != null) {
+            // App Lock's screenshot/screen-recording block and blanked Recents thumbnail
+            // (MainActivity.applySecureFlag) only ever touched MainActivity's own Window —
+            // FLAG_SECURE is per-Window, not inherited by child windows, and every full-screen
+            // Dialog that calls this function (photo viewer, Notepad, Settings, the Snap/Pin save
+            // screen, and others) opens its own separate Window. Without this, a locked vault's
+            // actual photo/note content was still screenshottable, recordable, and visible in the
+            // Recents thumbnail the instant one of these Dialogs was on top — completely
+            // defeating the one thing App Lock's own doc comment says it exists to prevent.
+            val appLockEnabled = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+                .getBoolean(APP_LOCK_ENABLED_PREF, false)
+            if (appLockEnabled) {
+                dialogWindow.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            } else {
+                dialogWindow.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
             // Compose's Dialog can otherwise size its window to the "safe" area (excluding
             // system bars) even after decorFitsSystemWindows is disabled — leaving less real
             // height than navigationBarsPadding()/imePadding() further down assume is available,

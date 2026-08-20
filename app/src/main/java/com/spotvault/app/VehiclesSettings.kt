@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -80,6 +81,10 @@ fun VehiclesSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
 
     LaunchedEffect(Unit) {
         migrateLegacyCarVehicleIfNeeded(context, prefs, vehicleDao)
+        // Catches a device renamed in Android's own Bluetooth settings since the last time this
+        // screen was open — observeAll()/observeActive() below are reactive Flows, so any name
+        // this actually changes shows up in the list immediately, with no extra state to wire.
+        syncVehicleBluetoothNames(context, vehicleDao)
     }
 
     when (val current = screen) {
@@ -132,7 +137,12 @@ private fun VehicleListScreen(
             }
             SpotVaultButton(
                 onClick = onAdd,
-                modifier = Modifier.fillMaxWidth().height(38.dp),
+                // heightIn(min=), not a hard height() — same fix as SettingsCategoryContent.kt's
+                // own scale-sensitive buttons. A fixed height clips the label instead of growing
+                // when the app's own text-scale setting (or the system's own large-text
+                // accessibility setting) leaves less room than the default 13-16sp button text
+                // needs inside ButtonDefaults' vertical content padding.
+                modifier = Modifier.fillMaxWidth().heightIn(min = 38.dp),
                 shape = spotVaultButtonShape(),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                     containerColor = SpotVaultColors.Primary,
@@ -322,6 +332,17 @@ fun VehicleEditScreen(
 
     var canSetDefault by remember { mutableStateOf(true) }
 
+    // Re-checks the currently-linked device's live name against a freshly-loaded bondedDevices
+    // list and updates the local field if it's changed — called after every bondedDevices reload
+    // below (initial load and the Refresh button) so a rename made in Android's own Bluetooth
+    // settings shows up here immediately instead of only after the next time this vehicle is
+    // linked from scratch. Local state only; Save is still what commits it to the database.
+    fun refreshLinkedDeviceName(devices: List<Pair<String, String>>) {
+        val mac = bluetoothMac ?: return
+        val liveName = devices.firstOrNull { it.first.equals(mac, ignoreCase = true) }?.second ?: return
+        if (liveName != bluetoothName) bluetoothName = liveName
+    }
+
     LaunchedEffect(vehicleId) {
         canSetDefault = vehicleDao.countActive() > 0 || vehicleId == null
         if (vehicleId != null) {
@@ -346,6 +367,7 @@ fun VehicleEditScreen(
         if (bluetoothConnectGranted || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             bluetoothEnabled = BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
             bondedDevices = loadBondedBluetoothDevices(context)
+            refreshLinkedDeviceName(bondedDevices)
         }
     }
 
@@ -444,7 +466,7 @@ fun VehicleEditScreen(
                     )
                 }
                 Text(
-                    "Your default vehicle gets auto-tagged on every Quick Pin, Quick Track, and automatic parking save — until you set a different vehicle as default.",
+                    "Your default vehicle gets auto-tagged on every Quick Pin and Quick Track — until you set a different vehicle as default. A Bluetooth auto-park save always credits whichever linked vehicle's device actually disconnected, regardless of which one is default.",
                     color = SpotVaultColors.Muted,
                     fontSize = 12.sp,
                     lineHeight = 16.sp,
@@ -492,6 +514,10 @@ fun VehicleEditScreen(
                             } else {
                                 bluetoothEnabled = BluetoothAdapter.getDefaultAdapter()?.isEnabled == true
                                 bondedDevices = loadBondedBluetoothDevices(context)
+                                // Doubles as "sync this vehicle's linked name from the system" —
+                                // exactly the manual fallback for someone who renamed their device
+                                // and doesn't want to wait for the automatic sync elsewhere.
+                                refreshLinkedDeviceName(bondedDevices)
                                 // The inline empty-state message already explains this, but a
                                 // toast right when they tap Refresh — the moment they're actively
                                 // looking for an answer — is the "why is nothing showing up"
@@ -551,6 +577,7 @@ fun VehicleEditScreen(
                         )
                     )
                     if (isDefault) vehicleDao.setDefault(savedId)
+                    pruneAutoParkMacPrefsAfterVehicleChange(context, vehicleDao)
                     onSaved(savedId)
                     onBack()
                 }
@@ -566,18 +593,23 @@ fun VehicleEditScreen(
         }
 
         if (vehicleId != null && existing?.isArchived != true) {
-            SpotVaultOutlinedButton(
+            // Filled Teal, not an outline — still visibly secondary to Save Vehicle's Primary
+            // color above, but solid enough to actually read as a button rather than fine print.
+            SpotVaultButton(
                 onClick = {
                     scope.launch {
                         stopMotionWatchIfArmedFor(context, prefs, existing?.bluetoothMac)
                         archiveVehicle(vehicleDao, vehicleId)
+                        pruneAutoParkMacPrefsAfterVehicleChange(context, vehicleDao)
                         onBack()
                     }
                 },
                 modifier = Modifier.fillMaxWidth().height(42.dp),
                 shape = spotVaultButtonShape(),
-                border = androidx.compose.foundation.BorderStroke(1.dp, SpotVaultColors.Teal.copy(alpha = 0.5f)),
-                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = SpotVaultColors.Teal)
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = SpotVaultColors.Teal,
+                    contentColor = SpotVaultColors.OnTeal
+                )
             ) {
                 Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(16.dp))
                 Text("Archive vehicle", fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
@@ -608,6 +640,7 @@ fun VehicleEditScreen(
                     scope.launch {
                         stopMotionWatchIfArmedFor(context, prefs, existing?.bluetoothMac)
                         deleteVehicleKeepingHistory(vehicleDao, locationDao, vehicleId)
+                        pruneAutoParkMacPrefsAfterVehicleChange(context, vehicleDao)
                         showDeleteConfirm = false
                         onBack()
                     }
@@ -680,12 +713,16 @@ fun VehicleBluetoothDevicePicker(
             }
         }
     }
-    SpotVaultOutlinedButton(
+    SpotVaultButton(
         onClick = onRefresh,
-        modifier = Modifier.height(38.dp),
+        // heightIn(min=), not height() — same clip-at-large-text-scale fix as the Add Vehicle
+        // button above.
+        modifier = Modifier.heightIn(min = 38.dp),
         shape = spotVaultButtonShape(),
-        border = androidx.compose.foundation.BorderStroke(1.dp, SpotVaultColors.Teal.copy(alpha = 0.5f)),
-        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = SpotVaultColors.Teal)
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+            containerColor = SpotVaultColors.Teal,
+            contentColor = SpotVaultColors.OnTeal
+        )
     ) {
         Text("Refresh paired devices", fontSize = 13.sp)
     }
@@ -714,7 +751,8 @@ fun VehicleSpotBadge(vehicle: Vehicle?, modifier: Modifier = Modifier) {
             vehicle.name,
             fontSize = 12.sp,
             color = SpotVaultColors.Muted,
-            maxLines = 1
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
         )
     }
 }
@@ -732,9 +770,36 @@ fun loadBondedBluetoothDevices(context: Context): List<Pair<String, String>> {
     return adapter.bondedDevices
         ?.mapNotNull { device ->
             val mac = device.address ?: return@mapNotNull null
-            val name = device.name?.takeIf { it.isNotBlank() } ?: mac
-            mac to name
+            // A device renamed from Android's own Bluetooth settings (Settings > Connected
+            // devices > [device] > pencil icon) only ever changes its *alias* — the underlying
+            // hardware-advertised name (.name) never updates, which is why a rename there used to
+            // never show up here at all. .alias is API 30+; older devices only ever have .name.
+            val liveName = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) device.alias else null)
+                ?.takeIf { it.isNotBlank() }
+                ?: device.name?.takeIf { it.isNotBlank() }
+                ?: mac
+            mac to liveName
         }
         ?.sortedBy { it.second.lowercase() }
         ?: emptyList()
+}
+
+/** Keeps every linked vehicle's stored Bluetooth name in step with the paired device's current
+ * one — [loadBondedBluetoothDevices] already reads the live name correctly, but a vehicle's own
+ * [Vehicle.bluetoothName] is only ever captured once, at the moment it's linked, and nothing
+ * touched it again after that. Renaming the device later (or Android just changing what it
+ * advertises) left "Linked: <old name>" stuck indefinitely until the user re-linked it by hand.
+ * Silently no-ops with no bonded devices (no permission, Bluetooth off, or genuinely none paired)
+ * — same as [loadBondedBluetoothDevices] itself, this is a background refresh, not something
+ * worth surfacing an error for. */
+suspend fun syncVehicleBluetoothNames(context: Context, vehicleDao: VehicleDao) {
+    val liveNameByMac = loadBondedBluetoothDevices(context).associate { (mac, name) -> mac.uppercase() to name }
+    if (liveNameByMac.isEmpty()) return
+    vehicleDao.getActiveList().forEach { vehicle ->
+        val mac = vehicle.bluetoothMac?.takeIf { it.isNotBlank() } ?: return@forEach
+        val liveName = liveNameByMac[mac.uppercase()] ?: return@forEach
+        if (liveName != vehicle.bluetoothName) {
+            vehicleDao.update(vehicle.copy(bluetoothName = liveName))
+        }
+    }
 }

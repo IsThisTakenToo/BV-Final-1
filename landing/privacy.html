@@ -119,7 +119,7 @@
 
   <header class="page-header">
     <h1>Privacy Policy</h1>
-    <div class="meta">DropPin Vault &nbsp;•&nbsp; Effective August 9, 2026 &nbsp;•&nbsp; Developer: Erik Brown</div>
+    <div class="meta">DropPin Vault &nbsp;•&nbsp; Effective August 17, 2026 &nbsp;•&nbsp; Developer: Erik Brown</div>
   </header>
 
   <p>DropPin Vault ("the App") is built around a simple idea: the places you save belong on your device, not on someone else's server. This policy explains exactly what the App does and doesn't do with your information, in plain language.</p>
@@ -159,13 +159,19 @@
   <p>The App uses your device's location services to let you save where you are and navigate back to saved spots. Location processing for saving, navigating, and organizing spots happens on your device.</p>
   <p>One exception: to turn coordinates into a readable address (e.g. "123 Main St" instead of raw latitude/longitude), the App uses Android's built-in geocoding service, which — depending on your device — may send the coordinates to Google's geocoding servers to resolve an address. This is standard Android system behavior used by most location-aware apps, is governed by <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's own Privacy Policy</a>, and is not something we collect, log, or have access to ourselves.</p>
 
-  <h2>6. Camera & Photos</h2>
+  <h2>6. Sharing a Location Into the App</h2>
+  <p>When you share a place from Google Maps (or another maps app) into DropPin Vault — for example, using that app's own Share button and choosing DropPin Vault from the list — the shared text sometimes contains a shortened link (such as a <code>maps.app.goo.gl</code> link) rather than the coordinates directly. To find the real location behind it, the App makes a single, direct request from your device to that link's own server to follow it — the same thing that would happen if you tapped the link yourself in a browser. That request goes straight from your device to that service (typically Google's); it is not routed through, logged by, or visible to us.</p>
+
+  <h2>7. Camera & Photos</h2>
   <p>Photos you take or attach to a spot are saved to local storage on your device and referenced by the local database. They are never uploaded anywhere unless you've turned on Google Drive backup (see Section 3), in which case they travel the same direct-to-your-own-Drive path as everything else.</p>
 
-  <h2>7. On-Device Text Recognition</h2>
+  <h2>8. On-Device Text Recognition</h2>
   <p>The App can read text from photos (for example, parking garage level signs) using on-device text recognition. This processing happens entirely on your device using a bundled recognition model — no image or extracted text is sent to any server for this feature.</p>
 
-  <h2>8. Automatic Diagnostics & Usage Data</h2>
+  <h2>9. Voice Input (Dictation)</h2>
+  <p>Tapping the microphone icon on any text field hands off to your device's own default speech-recognition app — the same one used system-wide for dictation — to transcribe what you say into text. The App itself never records audio or has direct access to it; it only receives the transcribed text back once you're done speaking. Depending on your device and which speech-recognition app it uses, that transcription may happen entirely on-device or involve sending audio to that app's own servers (commonly Google's). Either way, this is standard Android system behavior governed by that app's own privacy practices, not something we collect, log, or have access to ourselves.</p>
+
+  <h2>10. Automatic Diagnostics & Usage Data</h2>
   <p>To keep the App stable, it includes Google Firebase Crashlytics and Firebase Analytics. In the interest of full transparency:</p>
   <ul>
     <li><strong>Crashlytics</strong> automatically collects crash reports if the App unexpectedly stops working — this can include a technical stack trace, your device model, OS version, and App version, sent to Google's Firebase servers so the underlying bug can be fixed.</li>
@@ -173,7 +179,7 @@
   </ul>
   <p>Neither of these tools is used for advertising. The App explicitly disables Android's advertising ID and Google's ad-attribution permissions, so this data cannot be linked to you for ad targeting, and we don't use it for that purpose. This diagnostic data is processed by Google under <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">Firebase's own privacy terms</a>, not collected or stored by us directly.</p>
 
-  <h2>9. What We Don't Do</h2>
+  <h2>11. What We Don't Do</h2>
   <ul>
     <li>We don't operate a server that stores your Vault data.</li>
     <li>We don't sell, rent, or share your data with advertisers or data brokers.</li>
@@ -181,7 +187,7 @@
     <li>We don't require an account to use the App's core features — Google sign-in is only ever needed for the optional Drive backup.</li>
   </ul>
 
-  <h2>10. Your Choices</h2>
+  <h2>12. Your Choices</h2>
   <table>
     <tr><th>To do this</th><th>Do this</th></tr>
     <tr><td>Delete all local Vault data</td><td>Settings → Data → Clear All Vault Data, or uninstall the App</td></tr>
@@ -191,17 +197,17 @@
     <tr><td>Turn off location, camera, or notification permissions</td><td>Your device's system App Settings</td></tr>
   </table>
 
-  <h2>11. Children's Privacy</h2>
+  <h2>13. Children's Privacy</h2>
   <p>The App is not directed at children under 13, and we do not knowingly collect personal information from children.</p>
 
-  <h2>12. Changes to This Policy</h2>
+  <h2>14. Changes to This Policy</h2>
   <p>If this policy changes in a meaningful way, we'll update the effective date at the top of this page. Continued use of the App after a change means you accept the updated policy.</p>
 
-  <h2>13. Contact</h2>
+  <h2>15. Contact</h2>
   <p>Questions about this policy or how the App handles data can be sent to <a href="mailto:DropPinVault@gmail.com">DropPinVault@gmail.com</a>.</p>
 
   <footer>
-    DropPin Vault — Privacy Policy — Effective August 9, 2026
+    DropPin Vault — Privacy Policy — Effective August 17, 2026
   </footer>
 
 </div>

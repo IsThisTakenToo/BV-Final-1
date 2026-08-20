@@ -77,6 +77,10 @@ fun WelcomeOnboardingScreen(
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(SpotVaultColors.Void, SpotVaultColors.Deep, SpotVaultColors.Surface)))
     ) {
+        // This is the very first screen a new user on a tablet sees — without this, the slide
+        // text/buttons below stretch full-bleed edge-to-edge instead of capping/centering like
+        // every other full-screen flow in the app already does (see AdaptiveTabletContainer).
+        AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
         when (step) {
             OnboardingStep.DRIVE -> {
                 DriveConnectStep(
@@ -101,7 +105,13 @@ fun WelcomeOnboardingScreen(
                     HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
                         val slide = WelcomeSlides[page]
                         Column(
-                            modifier = Modifier.fillMaxSize(),
+                            // Same trap DriveConnectStep already guards against with this exact
+                            // fix: a short/landscape window (a real short-height phone, or any
+                            // phone simply rotated — this app has no orientation lock) can leave
+                            // less height than the image+title+body stack needs, and without
+                            // scroll that overflows into the Next/Get Started button below
+                            // instead of just clipping cleanly.
+                            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
@@ -161,6 +171,7 @@ fun WelcomeOnboardingScreen(
                 }
             }
         }
+        } // close AdaptiveTabletContainer content
     }
 }
 

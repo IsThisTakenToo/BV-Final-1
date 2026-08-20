@@ -22,10 +22,11 @@ object VaultFavoritesRenderer {
         heightPx: Int
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         val pad = 8f * density
         val plateRect = RectF(pad, pad, w - pad, h * 0.52f)
         PremiumWidgetRenderer.drawNoPhotoSpotPlaceholder(canvas, context, plateRect, theme, density)

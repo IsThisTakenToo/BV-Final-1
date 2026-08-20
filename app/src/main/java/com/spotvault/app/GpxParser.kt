@@ -15,6 +15,14 @@ import java.util.TimeZone
  */
 object GpxParser {
 
+    /** Hard cap so a huge Garmin/Gaia export cannot OOM mid-parse or flood the vault. */
+    const val MAX_IMPORT_WAYPOINTS = 1000
+
+    data class ImportResult(
+        val imported: Int,
+        val truncated: Boolean
+    )
+
     private val ISO8601_PATTERNS = listOf(
         "yyyy-MM-dd'T'HH:mm:ss'Z'",
         "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
@@ -23,19 +31,25 @@ object GpxParser {
     )
 
     /** Parse GPX XML text into [LocationSpot] rows ready for [LocationDao.insertSpot]. */
-    fun parseGpx(xml: String): List<LocationSpot> {
+    fun parseGpx(xml: String, maxWaypoints: Int = MAX_IMPORT_WAYPOINTS): List<LocationSpot> {
         if (xml.isBlank()) return emptyList()
-        return parseGpx(xml.byteInputStream(Charsets.UTF_8))
+        return parseGpxResult(xml.byteInputStream(Charsets.UTF_8), maxWaypoints).spots
     }
 
-    /** Parse GPX from an [InputStream] using [XmlPullParser]. */
-    fun parseGpx(inputStream: InputStream): List<LocationSpot> {
+    /** Parse GPX from an [InputStream] using [XmlPullParser]. Stops once [maxWaypoints] is hit. */
+    fun parseGpx(inputStream: InputStream, maxWaypoints: Int = MAX_IMPORT_WAYPOINTS): List<LocationSpot> =
+        parseGpxResult(inputStream, maxWaypoints).spots
+
+    private data class ParseResult(val spots: List<LocationSpot>, val truncated: Boolean)
+
+    private fun parseGpxResult(inputStream: InputStream, maxWaypoints: Int): ParseResult {
         val parser = android.util.Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
         parser.setInput(inputStream, null)
 
         val waypoints = mutableListOf<LocationSpot>()
         var eventType = parser.eventType
+        var truncated = false
 
         var lat: Double? = null
         var lng: Double? = null
@@ -47,6 +61,10 @@ object GpxParser {
         var inWaypoint = false
 
         fun flushWaypoint() {
+            if (waypoints.size >= maxWaypoints) {
+                truncated = true
+                return
+            }
             val wLat = lat ?: return
             val wLng = lng ?: return
             waypoints.add(
@@ -66,6 +84,7 @@ object GpxParser {
                     isVisited = false
                 )
             )
+            if (waypoints.size >= maxWaypoints) truncated = true
         }
 
         fun resetWaypointFields() {
@@ -78,7 +97,7 @@ object GpxParser {
             time = null
         }
 
-        while (eventType != XmlPullParser.END_DOCUMENT) {
+        parseLoop@ while (eventType != XmlPullParser.END_DOCUMENT) {
             when (eventType) {
                 // Deliberately excludes trkpt — a recorded GPS track log can contain thousands of
                 // points logged automatically every few seconds (a single hike or drive), and
@@ -86,6 +105,10 @@ object GpxParser {
                 // way to undo it. wpt/rtept are actual placed waypoints, not a raw track log.
                 XmlPullParser.START_TAG -> when (localName(parser)) {
                     "wpt", "rtept" -> {
+                        if (waypoints.size >= maxWaypoints) {
+                            truncated = true
+                            break@parseLoop
+                        }
                         inWaypoint = true
                         lat = parser.getAttributeValue(null, "lat")?.toDoubleOrNull()
                         lng = parser.getAttributeValue(null, "lon")?.toDoubleOrNull()
@@ -101,27 +124,28 @@ object GpxParser {
                         flushWaypoint()
                         resetWaypointFields()
                         inWaypoint = false
+                        if (truncated) break@parseLoop
                     }
                 }
             }
             eventType = parser.next()
         }
 
-        return waypoints
+        return ParseResult(waypoints, truncated)
     }
 
-    /** Parse GPX from a SAF [Uri] and insert waypoints. Returns count imported. */
-    suspend fun importSpotsFromUri(context: Context, dao: LocationDao, uri: Uri): Int {
-        val spots = context.contentResolver.openInputStream(uri)?.use { stream ->
-            parseGpx(stream)
+    /** Parse GPX from a SAF [Uri] and insert waypoints. Caps at [MAX_IMPORT_WAYPOINTS]. */
+    suspend fun importSpotsFromUri(context: Context, dao: LocationDao, uri: Uri): ImportResult {
+        val parsed = context.contentResolver.openInputStream(uri)?.use { stream ->
+            parseGpxResult(stream, MAX_IMPORT_WAYPOINTS)
         } ?: throw IllegalStateException("Unable to open input stream for GPX import.")
 
         var imported = 0
-        spots.forEach { spot ->
+        parsed.spots.forEach { spot ->
             dao.insertSpot(spot)
             imported++
         }
-        return imported
+        return ImportResult(imported = imported, truncated = parsed.truncated)
     }
 
     private fun parseGpxTime(raw: String?): Long {

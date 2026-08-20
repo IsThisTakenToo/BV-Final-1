@@ -55,6 +55,11 @@ data class PremiumWidgetState(
     val theme: GlanceWidgetTheme,
     val isPremium: Boolean,
     val isTracking: Boolean,
+    /** When true, this widget renders [PremiumAppLockedContent] instead of any real tracking/
+     * recent-spot content — a home-screen widget has no authentication of its own, so showing a
+     * tracked spot's photo/address (or the Recent list) here would leak exactly what App Lock
+     * exists to hide, with no unlock required to see it. */
+    val appLockEnabled: Boolean = false,
     /** Newest first (DB order) — [PremiumDefaultContent] reverses this for display so the most
      * recent entry lands at the bottom of the list, closest to the button cluster. */
     val recentSpots: List<PremiumHistoryEntry>,
@@ -94,6 +99,11 @@ class PremiumGlanceWidget : GlanceAppWidget() {
             val themeCache = prefs[WidgetGlanceThemeKeys.THEME_CACHE] ?: ""
             val isPremium = prefs[KEY_IS_PREMIUM] ?: isPremiumUnlocked(initialPrefs)
             val isTracking = prefs[KEY_IS_TRACKING] ?: ActiveTrackingHelper.isActive(context)
+            // Read live, not cached through Glance prefs like the tracking snapshot fields below —
+            // this is a simple, rarely-changed toggle, not something that needs a torn-read-safe
+            // snapshot the way photo/address/lat/lng (captured together for one tracking session)
+            // do.
+            val appLockEnabled = initialPrefs.getBoolean(APP_LOCK_ENABLED_PREF, false)
             val autoParkEnabled = prefs[KEY_AUTO_PARK_ENABLED] ?: isAutoParkEnabled(initialPrefs)
             val motionEnabled = prefs[KEY_MOTION_ENABLED] ?: isMotionAutoParkEnabled(initialPrefs)
             val trackingPhotoPath = prefs[KEY_TRACKING_PHOTO_PATH] ?: (if (isTracking) initialPrefs.getString("photo_path", "") ?: "" else "")
@@ -111,21 +121,29 @@ class PremiumGlanceWidget : GlanceAppWidget() {
 
             val recentSpotsState = produceState(
                 initialValue = emptyList<PremiumHistoryEntry>(),
-                key1 = revision,
-                key2 = isPremium,
-                key3 = isTracking
+                revision, isPremium, isTracking, appLockEnabled
             ) {
-                if (isPremium && !isTracking) {
+                if (isPremium && !isTracking && !appLockEnabled) {
+                    // A thrown exception here (disk I/O hiccup, transient Room error) would
+                    // otherwise propagate out of provideGlance and crash-loop the widget into
+                    // "Problem loading widget" — falling back to an empty list just means this
+                    // refresh shows no recent spots instead, and the next successful refresh
+                    // repaints normally.
                     value = withContext(Dispatchers.IO) {
-                        val db = AppDatabase.getDatabase(context)
-                        val spots = db.locationDao().getRecentVaultSpots(PREMIUM_HISTORY_LIMIT)
-                        val vehicleDao = db.vehicleDao()
-                        val vehicleNames = mutableMapOf<Int, String?>()
-                        spots.map { spot ->
-                            val vehicleName = spot.vehicleId?.let { id ->
-                                vehicleNames.getOrPut(id) { vehicleDao.getById(id)?.name }
+                        try {
+                            val db = AppDatabase.getDatabase(context)
+                            val spots = db.locationDao().getRecentVaultSpots(PREMIUM_HISTORY_LIMIT)
+                            val vehicleDao = db.vehicleDao()
+                            val vehicleNames = mutableMapOf<Int, String?>()
+                            spots.map { spot ->
+                                val vehicleName = spot.vehicleId?.let { id ->
+                                    vehicleNames.getOrPut(id) { vehicleDao.getById(id)?.name }
+                                }
+                                PremiumHistoryEntry(spot, vehicleName)
                             }
-                            PremiumHistoryEntry(spot, vehicleName)
+                        } catch (e: Exception) {
+                            android.util.Log.e("PremiumGlanceWidget", "Failed to load recent spots", e)
+                            emptyList()
                         }
                     }
                 } else {
@@ -151,6 +169,7 @@ class PremiumGlanceWidget : GlanceAppWidget() {
                 theme = theme,
                 isPremium = isPremium,
                 isTracking = isTracking,
+                appLockEnabled = appLockEnabled,
                 recentSpots = recentSpotsState.value,
                 autoParkEnabled = autoParkEnabled,
                 motionEnabled = motionEnabled,
@@ -187,7 +206,8 @@ class PremiumGlanceWidget : GlanceAppWidget() {
             }
             val isPremium = isPremiumUnlocked(prefs)
             val isTracking = ActiveTrackingHelper.isActive(context)
-            val recent = if (isPremium && !isTracking) {
+            val appLockEnabled = prefs.getBoolean(APP_LOCK_ENABLED_PREF, false)
+            val recent = if (isPremium && !isTracking && !appLockEnabled) {
                 withContext(Dispatchers.IO) {
                     val db = AppDatabase.getDatabase(context)
                     val spots = db.locationDao().getRecentVaultSpots(PREMIUM_HISTORY_LIMIT)
@@ -208,6 +228,7 @@ class PremiumGlanceWidget : GlanceAppWidget() {
                 theme = theme,
                 isPremium = isPremium,
                 isTracking = isTracking,
+                appLockEnabled = appLockEnabled,
                 recentSpots = recent,
                 autoParkEnabled = isAutoParkEnabled(prefs),
                 motionEnabled = isMotionAutoParkEnabled(prefs),
@@ -236,15 +257,22 @@ private val PremiumSectionLabelHeight = 24.dp
 private val PremiumPhotoMinHeight = 72.dp
 private val PremiumPhotoMaxHeight = 320.dp
 
-// Tracking screen's action cluster: Compass + Show Map share a row, sized clearly smaller than
-// Found and Navigate below (their own full-width rows, Found on top, Navigate under it) so Found/
-// Navigate read as the prominent actions — but not so extreme a gap that either end looks
-// stretched-oversized or squeezed-tiny. Deliberately its own smaller constant rather than reusing
-// the 96dp PremiumActionHeight (that one's tuned for a single row of 4, not a stack of 2).
+// Tracking screen's action cluster: two rows of two — Compass + Show Map on top, Found +
+// Navigate (the two actions that actually end a tracking session) below, each pair sharing its
+// row at equal width via premiumActionSlot's defaultWeight(), same as every other 2-up row in
+// this widget. Found/Navigate used to each get their own full-width row instead — besides eating
+// far more vertical space than two half-width rows need, the bitmap those buttons render into was
+// sized via premiumSlotWidthPx(columns = 1), whose 56–180dp clamp (tuned for the narrow slots
+// columns=2/3/4 actually produce) let a full-width slot request a bitmap far narrower than the
+// box Glance actually laid the button out in; Image's ContentScale.FillBounds then stretched that
+// undersized bitmap out to fill the real width, which is what made the label read as "massively
+// stretched." Slotting Found/Navigate into the same columns=2 width Compass/Show Map already use
+// avoids the mismatch entirely, not just the vertical space. Deliberately its own smaller constant
+// rather than reusing the 96dp PremiumActionHeight (that one's tuned for a single row of 4).
 private val PremiumTrackingPrimaryHeight = 64.dp
 private val PremiumTrackingSubActionHeight = 56.dp
 private val PremiumTrackingClusterHeight =
-    PremiumTrackingSubActionHeight + 6.dp + PremiumTrackingPrimaryHeight + 6.dp + PremiumTrackingPrimaryHeight
+    PremiumTrackingSubActionHeight + 6.dp + PremiumTrackingPrimaryHeight
 
 /** Reads the widget's live *content* bounds — [LocalSize] minus [GlanceThemedBackground]'s own
  * 6dp-per-side inset — so every size calculation below reflects the area content actually gets
@@ -290,6 +318,7 @@ private fun PremiumWidgetContent(state: PremiumWidgetState) {
     GlanceThemedBackground(theme = state.theme) {
         when {
             !state.isPremium -> PremiumLockedContent(state.theme)
+            state.appLockEnabled -> PremiumAppLockedContent(state.theme)
             state.isTracking -> PremiumTrackingContent(state)
             else -> PremiumDefaultContent(state)
         }
@@ -306,23 +335,32 @@ private fun PremiumLockedContent(theme: GlanceWidgetTheme) {
 }
 
 @Composable
+private fun PremiumAppLockedContent(theme: GlanceWidgetTheme) {
+    AppLockedWidgetContent(
+        theme = theme,
+        widthDp = premiumWidgetWidthDp().coerceAtLeast(160f),
+        heightDp = premiumWidgetHeightDp().coerceAtLeast(120f)
+    )
+}
+
+@Composable
 private fun PremiumTrackingContent(state: PremiumWidgetState) {
     val context = LocalContext.current
     val subSlotWidthPx = premiumSlotWidthPx(columns = 2)
-    val fullSlotWidthPx = premiumSlotWidthPx(columns = 1)
     val widgetWidthPx = WidgetThemeHelper.dpToPx(context, premiumWidgetWidthDp())
     val heroHeight = premiumHeroHeight()
     val heroHeightPx = WidgetThemeHelper.dpToPx(context, heroHeight.value)
-    // White while tracking — Yin Yang is explicitly black & white already, so its own
-    // theme-computed colors are used instead of overriding them with a flat white.
+    // Was hardcoded to a flat white-on-primary/black-on-accent split regardless of theme — fine
+    // for a dark primary/bright accent pairing, but wrong the moment a theme's Primary is itself
+    // bright (e.g. a light green), where every other button on that same color (Snap, Quick Pin)
+    // already correctly renders a dark icon via this exact palette.onPrimary/onAccent contrast
+    // computation. Using it here too instead of white/black keeps Compass/Found in step with
+    // every other same-colored button in the theme, not just Yin Yang's.
     val white = android.graphics.Color.WHITE
-    val black = android.graphics.Color.BLACK
-    val foundFg = if (state.isYinYangTheme) state.theme.palette.onPrimary else white
-    val compassFg = if (state.isYinYangTheme) state.theme.palette.onPrimary else white
-    // Black icon + text on the accent (gold) fill, same as Pin/Quick Track on the home screen —
-    // not white, which read poorly against this bright a background.
-    val navigateFg = if (state.isYinYangTheme) state.theme.palette.onAccent else black
-    val mapFg = if (state.isYinYangTheme) state.theme.palette.onAccent else black
+    val foundFg = state.theme.palette.onPrimary
+    val compassFg = state.theme.palette.onPrimary
+    val navigateFg = state.theme.palette.onAccent
+    val mapFg = state.theme.palette.onAccent
     val logoColor = if (state.isYinYangTheme) state.theme.palette.onSurface else white
     Column(modifier = GlanceModifier.fillMaxWidth()) {
         if (state.trackingPhotoPath.isNotBlank()) {
@@ -422,44 +460,46 @@ private fun PremiumTrackingContent(state: PremiumWidgetState) {
                 buttonHeightDp = PremiumTrackingSubActionHeight,
                 expandVertically = false,
                 compactLabel = false,
-                onClick = actionStartActivity(showMapIntent(state.trackingLat, state.trackingLng, state.trackingAddress))
+                onClick = actionStartActivity(showMapIntent(context, state.trackingLat, state.trackingLng, state.trackingAddress))
             )
         }
         Spacer(modifier = GlanceModifier.height(6.dp))
-        // Found and Navigate get the prominent, full-width, thumb-friendly rows — these are the
-        // two actions that actually end a tracking session, so they get the most room.
-        GlanceThemedActionButton(
-            label = "Found",
-            theme = state.theme,
-            backgroundArgb = state.theme.palette.primary,
-            foregroundArgb = foundFg,
-            icon = WidgetThemeHelper.QuickActionIcon.FOUND,
-            modifier = GlanceModifier.fillMaxWidth().height(PremiumTrackingPrimaryHeight).padding(horizontal = 2.dp),
-            slotWidthPx = fullSlotWidthPx,
-            buttonHeightDp = PremiumTrackingPrimaryHeight,
-            expandVertically = false,
-            compactLabel = false,
-            // Icon beside the label instead of stacked-and-centered — stacked content in a very
-            // wide, short button left a small icon+label floating in a lot of empty space on
-            // either side, which is what read as "stretched."
-            labelEmphasis = true,
-            onClick = actionRunCallback<FoundActionCallback>()
-        )
-        Spacer(modifier = GlanceModifier.height(6.dp))
-        GlanceThemedActionButton(
-            label = "Navigate",
-            theme = state.theme,
-            backgroundArgb = state.theme.palette.accent,
-            foregroundArgb = navigateFg,
-            icon = WidgetThemeHelper.QuickActionIcon.NAVIGATE,
-            modifier = GlanceModifier.fillMaxWidth().height(PremiumTrackingPrimaryHeight).padding(horizontal = 2.dp),
-            slotWidthPx = fullSlotWidthPx,
-            buttonHeightDp = PremiumTrackingPrimaryHeight,
-            expandVertically = false,
-            compactLabel = false,
-            labelEmphasis = true,
-            onClick = actionStartActivity(relayIntent(context, QuickActionRelayActivity.ACTION_NAVIGATE))
-        )
+        // Found and Navigate — the two actions that actually end a tracking session — share a row
+        // at equal width, same as Compass/Show Map above rather than each claiming a full-width
+        // row of their own (see the comment on PremiumTrackingClusterHeight for why that also
+        // fixes the stretched-label bug, not just the vertical space).
+        Row(
+            modifier = GlanceModifier
+                .fillMaxWidth()
+                .height(PremiumTrackingPrimaryHeight)
+        ) {
+            GlanceThemedActionButton(
+                label = "Found",
+                theme = state.theme,
+                backgroundArgb = state.theme.palette.primary,
+                foregroundArgb = foundFg,
+                icon = WidgetThemeHelper.QuickActionIcon.FOUND,
+                modifier = premiumActionSlot(PremiumTrackingPrimaryHeight),
+                slotWidthPx = subSlotWidthPx,
+                buttonHeightDp = PremiumTrackingPrimaryHeight,
+                expandVertically = false,
+                compactLabel = false,
+                onClick = actionRunCallback<FoundActionCallback>()
+            )
+            GlanceThemedActionButton(
+                label = "Navigate",
+                theme = state.theme,
+                backgroundArgb = state.theme.palette.accent,
+                foregroundArgb = navigateFg,
+                icon = WidgetThemeHelper.QuickActionIcon.NAVIGATE,
+                modifier = premiumActionSlot(PremiumTrackingPrimaryHeight),
+                slotWidthPx = subSlotWidthPx,
+                buttonHeightDp = PremiumTrackingPrimaryHeight,
+                expandVertically = false,
+                compactLabel = false,
+                onClick = actionStartActivity(relayIntent(context, QuickActionRelayActivity.ACTION_NAVIGATE))
+            )
+        }
     }
 }
 
@@ -578,10 +618,10 @@ private fun PremiumDefaultContent(state: PremiumWidgetState) {
                 onThemeColor = state.theme.palette.onAccent,
                 icon = PremiumWidgetRenderer.ChipIcon.SHARE,
                 contentDescription = "Quick Share",
-                // This chip is always "active" (it's a plain button, not a real on/off toggle
-                // like BT Auto/Motion beside it), so the chip's normal "white icon when active"
-                // rule doesn't apply here — black reads far better on this gold accent fill.
-                iconColorOverrideArgb = android.graphics.Color.BLACK,
+                // No override needed anymore — renderToggleChipBitmap's "white icon when active"
+                // rule now uses onThemeColorArgb (state.theme.palette.onAccent, passed above)
+                // instead of a hardcoded white, so it already resolves to the theme-correct
+                // contrast color on its own, the same fix applied to Compass/Found/BT Auto/Motion.
                 onClick = actionStartActivity(relayIntent(context, QuickActionRelayActivity.ACTION_SHARE))
             )
             Spacer(modifier = GlanceModifier.width(20.dp))
@@ -784,7 +824,7 @@ private fun PremiumHistoryRow(
     val context = LocalContext.current
     val spot = entry.spot
     val heightPx = WidgetThemeHelper.dpToPx(context, renderHeightHint.value)
-    val bitmap = remember(spot.id, spot.timestamp, entry.vehicleName, theme.cacheKey(), rowWidthPx, heightPx, userLat, userLng, distanceUnit) {
+    val bitmap = remember(spot.id, spot.timestamp, spot.title, spot.address, spot.imagePath, entry.vehicleName, theme.cacheKey(), rowWidthPx, heightPx, userLat, userLng, distanceUnit) {
         PremiumWidgetRenderer.renderHistoryRowBitmap(context, entry, theme, rowWidthPx, heightPx, userLat, userLng, distanceUnit)
     }
     BoxClickable(
@@ -817,8 +857,15 @@ private fun BoxClickable(
 
 /** Same "geo:" pin-drop the in-app Show Map button uses — built directly from the tracked
  * spot's own coordinates rather than routing through a live-GPS-resolving relay activity, since
- * the coordinates we want to show are already known here. */
-private fun showMapIntent(lat: Double, lng: Double, address: String): Intent {
+ * the coordinates we want to show are already known here. With App Lock on, this must not hand
+ * the tracked location to an external maps app straight off the home screen with no unlock at
+ * all — same bypass TimerService's "Show Map" notification action guards against — so it routes
+ * through MainActivity's own App Lock gate instead, same as the Compass button beside it. */
+private fun showMapIntent(context: Context, lat: Double, lng: Double, address: String): Intent {
+    val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+    if (prefs.getBoolean(APP_LOCK_ENABLED_PREF, false)) {
+        return PremiumWidgetIntents.openMapsShow(context, lat, lng)
+    }
     val label = address.ifBlank { "Tracked Spot" }
     val uri = android.net.Uri.parse("geo:0,0?q=$lat,$lng(${android.net.Uri.encode(label)})")
     return Intent(Intent.ACTION_VIEW, uri).apply {
@@ -827,17 +874,7 @@ private fun showMapIntent(lat: Double, lng: Double, address: String): Intent {
 }
 
 private fun relayIntent(context: Context, action: String): Intent =
-    Intent(context, QuickActionRelayActivity::class.java).apply {
-        // Unique action + data — PendingIntent identity ignores extras.
-        this.action = "com.spotvault.app.widget.RELAY_$action"
-        data = android.net.Uri.parse("spotvault://widget/relay/$action")
-        putExtra(QuickActionRelayActivity.EXTRA_ACTION, action)
-        addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-        )
-    }
+    QuickActionRelayActivity.intentForAction(context, action)
 
 private fun RowScope.premiumActionSlot(height: Dp): GlanceModifier =
     GlanceModifier.defaultWeight().height(height).padding(horizontal = 2.dp)

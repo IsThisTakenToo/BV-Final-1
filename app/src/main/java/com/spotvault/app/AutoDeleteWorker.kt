@@ -104,24 +104,44 @@ fun AutoDeleteIntervalPickerDialog(
     )
 }
 
-/** Runs once a day; the chosen [AutoDeleteInterval] controls how far back spots are kept, not
- * how often this checks. Favorited and archived spots are never touched, matching the "keep
- * forever" convention already used by the app's other bulk-delete actions. Purged spots go through
- * the normal soft-delete path (Recently Deleted), not a hard delete — so turning this on can't
- * silently destroy something before the existing 30-day recovery window gets a chance. */
+/** Runs once a day. Soft-deletes old spots when Auto Delete is enabled (favorites/archived/
+ * wishlist never touched). Always hard-purges Recently Deleted older than 30 days so photo
+ * files don't linger forever for users who rarely open the app. Soft-delete still goes through
+ * Recently Deleted first — enabling Auto Delete can't silently destroy recovery. */
 class AutoDeleteWorker(private val context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("auto_delete_enabled", false)) return Result.success()
-
-        val interval = AutoDeleteInterval.fromId(prefs.getString("auto_delete_interval", AutoDeleteInterval.MONTH.id))
-        val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(interval.days)
 
         return try {
-            val dao = AppDatabase.getDatabase(context).locationDao()
-            val candidates = dao.getSpotsOlderThan(cutoff).filter { !it.isFavorite && !it.isWishlist && !it.isArchived && it.deletedAt == null }
-            candidates.forEach { dao.softDeleteSpot(it.id) }
-            prefs.edit().putLong("auto_delete_last_run", System.currentTimeMillis()).apply()
+            val db = AppDatabase.getDatabase(context)
+            val dao = db.locationDao()
+
+            // Hard-purge Recently Deleted older than 30 days even when Auto Delete is off —
+            // MainActivity.onCreate used to be the only place this ran, so widget-/BT-only users
+            // who rarely open the app kept deleted photo files on disk indefinitely.
+            val recentlyDeletedCutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(30)
+            val coverPaths = dao.getDeletedCoverPathsOlderThan(recentlyDeletedCutoff)
+            coverPaths.forEach { spot ->
+                if (spot.imagePath.isNotEmpty()) {
+                    runCatching { java.io.File(spot.imagePath).delete() }
+                }
+            }
+            dao.getExtraPhotoPathsDeletedOlderThan(recentlyDeletedCutoff).forEach { path ->
+                runCatching { java.io.File(path).delete() }
+            }
+            if (coverPaths.isNotEmpty()) {
+                dao.purgeDeletedOlderThan(recentlyDeletedCutoff)
+                db.tagDao().recomputeAllUsageCounts()
+            }
+
+            if (prefs.getBoolean("auto_delete_enabled", false)) {
+                val interval = AutoDeleteInterval.fromId(prefs.getString("auto_delete_interval", AutoDeleteInterval.MONTH.id))
+                val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(interval.days)
+                val candidateIds = dao.getAutoDeleteCandidateIds(cutoff)
+                candidateIds.forEach { dao.softDeleteSpot(it) }
+                prefs.edit().putLong("auto_delete_last_run", System.currentTimeMillis()).apply()
+            }
+
             Result.success()
         } catch (e: Exception) {
             Result.retry()
@@ -138,6 +158,10 @@ fun scheduleAutoDelete(context: Context) {
     )
 }
 
+/** Soft-delete is gated by the auto_delete_enabled pref inside [AutoDeleteWorker] — do not cancel
+ * the unique work itself, or the daily Recently Deleted hard-purge stops too. */
+@Suppress("UNUSED_PARAMETER")
 fun cancelAutoDelete(context: Context) {
-    WorkManager.getInstance(context).cancelUniqueWork("auto_delete")
+    // Intentionally left as a no-op for WorkManager cancellation. Kept so existing call sites
+    // that "turn Auto Delete off" still compile; the worker remains scheduled for the 30-day purge.
 }

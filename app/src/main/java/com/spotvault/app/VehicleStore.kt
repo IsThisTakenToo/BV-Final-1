@@ -100,6 +100,14 @@ suspend fun migrateLegacyCarVehicleIfNeeded(
             createdAt = System.currentTimeMillis()
         )
     )
+    // The migrated Vehicle row is now the sole source of truth for this MAC — left populated,
+    // these legacy prefs become a stale fallback AutoParkWorker's legacyVehicleFromPrefs() keeps
+    // matching against forever, including after the user later unlinks this exact vehicle's
+    // Bluetooth device (which only ever clears the Vehicle row's own bluetoothMac, never these).
+    // That resurrects auto-park detections for a device the user explicitly told the app to stop
+    // tracking. Clearing them the moment they've served their one-time migration purpose closes
+    // that permanently instead of trying to catch every possible future "unlink" call site.
+    prefs.edit().remove(AUTO_PARK_CAR_MAC_PREF).remove(AUTO_PARK_CAR_NAME_PREF).apply()
 }
 
 /** Resolves which vehicle a hands-off save (Quick Pin, Quick Track, Bluetooth auto-park, etc.)
@@ -169,12 +177,32 @@ suspend fun insertNewVehicle(vehicleDao: VehicleDao, vehicle: Vehicle): Int = wi
     rowId
 }
 
+/** After vehicle create/edit/delete, drop orphaned per-MAC auto-park prefs so SpotVaultPrefs
+ * doesn't accumulate forever across years of pairing changes. */
+suspend fun pruneAutoParkMacPrefsAfterVehicleChange(
+    context: Context,
+    vehicleDao: VehicleDao
+) = withContext(Dispatchers.IO) {
+    val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+    val activeMacs = vehicleDao.getActiveList().mapNotNull { it.bluetoothMac }
+    pruneStaleAutoParkMacPrefs(prefs, activeMacs)
+}
+
 suspend fun saveVehicle(vehicleDao: VehicleDao, vehicle: Vehicle): Int = withContext(Dispatchers.IO) {
     if (vehicle.id == 0) {
         insertNewVehicle(vehicleDao, vehicle)
     } else {
+        // Same self-healing archiveVehicle()/deleteVehicleKeepingHistory() already do when a
+        // default vehicle goes away — unchecking "Set as default" here is just as much a default
+        // vehicle going away, but this update path had no equivalent, so it silently left every
+        // future hands-off save (resolveVehicleForQuickSave) with no vehicle to tag at all.
+        val wasDefault = vehicleDao.getById(vehicle.id)?.isDefault == true
         vehicleDao.update(vehicle)
-        if (vehicle.isDefault) vehicleDao.setDefault(vehicle.id)
+        if (vehicle.isDefault) {
+            vehicleDao.setDefault(vehicle.id)
+        } else if (wasDefault) {
+            promoteDefaultVehicleIfNeeded(vehicleDao)
+        }
         vehicle.id
     }
 }

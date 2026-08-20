@@ -31,7 +31,7 @@ val GPX_IMPORT_MIME_TYPES = arrayOf(
 @Composable
 fun rememberGpxImportLauncher(
     dao: LocationDao,
-    onComplete: (Result<Int>?) -> Unit
+    onComplete: (Result<GpxParser.ImportResult>?) -> Unit
 ): ManagedActivityResultLauncher<Array<String>, Uri?> {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

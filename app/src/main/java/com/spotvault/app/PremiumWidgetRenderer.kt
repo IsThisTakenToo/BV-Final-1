@@ -2,6 +2,7 @@ package com.spotvault.app
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -58,10 +59,11 @@ object PremiumWidgetRenderer {
         iconColorOverrideArgb: Int? = null
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         val side = min(w, h) * 0.96f
         val left = (w - side) / 2f
         val top = (h - side) / 2f
@@ -143,7 +145,12 @@ object PremiumWidgetRenderer {
         )
         canvas.restore()
 
-        val iconColor = iconColorOverrideArgb ?: if (active) Color.WHITE else themeColorArgb
+        // Was Color.WHITE outright when active, ignoring onThemeColorArgb entirely — fine for a
+        // dark theme color (BT Auto/Motion's usual primary/accent) but wrong the instant that
+        // color is itself bright, where white-on-bright reads exactly as poorly as it did for
+        // Compass/Found on the tracking screen (same underlying bug, same fix: use the actual
+        // contrast-computed color instead of assuming white always works).
+        val iconColor = iconColorOverrideArgb ?: if (active) onThemeColorArgb else themeColorArgb
         val cx = left + side / 2f
         val cy = top + side / 2f
         val iconSize = side * 0.58f
@@ -256,10 +263,11 @@ object PremiumWidgetRenderer {
         distanceUnit: String = DEFAULT_DISTANCE_UNIT
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         val pad = 4f * density
         val thumb = (h - pad * 2f).coerceIn(28f * density, 140f * density)
 
@@ -409,10 +417,11 @@ object PremiumWidgetRenderer {
         if (photoPath.isBlank()) return null
         val source = loadScaledPhoto(photoPath, widthPx, heightPx) ?: return null
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         val radius = 14f * density
         val rect = RectF(0f, 0f, w, h)
         val clip = Path().apply { addRoundRect(rect, radius, radius, Path.Direction.CW) }
@@ -456,10 +465,11 @@ object PremiumWidgetRenderer {
         heightPx: Int
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         canvas.drawRoundRect(
             RectF(0f, 0f, w, h),
             16f * density,
@@ -489,6 +499,51 @@ object PremiumWidgetRenderer {
         return bitmap
     }
 
+    /** Shown instead of any real spot/photo content whenever App Lock is on — a home-screen
+     * widget renders with no authentication at all, so leaving a tracked spot's photo/address (or
+     * a Favorites/Tag Filter list) visible there would defeat App Lock as completely as the
+     * screenshot-blocking gap this app's Dialogs already had fixed for the exact same reason. */
+    fun renderAppLockedBitmap(
+        context: Context,
+        theme: GlanceWidgetTheme,
+        widthPx: Int,
+        heightPx: Int
+    ): Bitmap {
+        val density = context.resources.displayMetrics.density
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
+        canvas.drawRoundRect(
+            RectF(0f, 0f, w, h),
+            16f * density,
+            16f * density,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(
+                    0f, 0f, 0f, h,
+                    blendArgb(theme.palette.primary, theme.palette.surface, 0.35f),
+                    theme.palette.surface,
+                    Shader.TileMode.CLAMP
+                )
+            }
+        )
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = theme.palette.onSurface
+            textSize = 13f * density
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+        val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = theme.palette.muted
+            textSize = 9.5f * density
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText("🔒 App Locked", w / 2f, h * 0.42f, titlePaint)
+        canvas.drawText("Open the app to unlock", w / 2f, h * 0.58f, subPaint)
+        return bitmap
+    }
+
     fun renderSectionLabelBitmap(
         context: Context,
         label: String,
@@ -497,64 +552,93 @@ object PremiumWidgetRenderer {
         heightPx: Int
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
+        val text = label.uppercase()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = colorArgb
-            textSize = (heightPx * 0.68f).coerceIn(12f * density, 20f * density)
+            textSize = (safeH * 0.68f).coerceIn(12f * density, 20f * density)
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             letterSpacing = 0.06f
         }
-        canvas.drawText(label.uppercase(), 4f * density, heightPx - 5f * density, paint)
+        val horizontalPadding = 4f * density
+        val maxTextWidth = (safeW - horizontalPadding).coerceAtLeast(1f)
+        // Shrinks the font instead of letting a long label (several selected tags, a long custom
+        // vault name) silently run past the bitmap's right edge — Canvas.drawText doesn't wrap or
+        // ellipsize on its own, so anything past the bitmap bounds just gets clipped off.
+        while (paint.measureText(text) > maxTextWidth && paint.textSize > 8f * density) {
+            paint.textSize -= 1f * density
+        }
+        canvas.drawText(text, horizontalPadding, safeH - 5f * density, paint)
         return bitmap
     }
 
-    fun renderSortIconBitmap(context: Context, colorArgb: Int, sizePx: Int, isOldest: Boolean): Bitmap {
-        val bitmap = Bitmap.createBitmap(sizePx.coerceAtLeast(1), sizePx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+    /** Shared icon-plus-caption layout for the Tag Filter / Vault Favorites header's Sort and
+     * Open Vault buttons. These used to be bare 24dp glyphs — the sort icon's two states differed
+     * only by subtle bar-length changes, and the vault icon (a dial/aperture shape) didn't read as
+     * "open a list of things" — both were reported as unclear about what they actually did.
+     * Pairing each with a short caption spells that out instead of relying on the glyph alone. */
+    private fun renderIconCaptionBitmap(
+        context: Context,
+        colorArgb: Int,
+        widthPx: Int,
+        heightPx: Int,
+        caption: String,
+        drawIcon: (canvas: Canvas, cx: Float, cy: Float, size: Float, paint: Paint) -> Unit
+    ): Bitmap {
+        val density = context.resources.displayMetrics.density
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = colorArgb
-            strokeWidth = sizePx * 0.1f
-            strokeCap = Paint.Cap.ROUND
-        }
-        val cx = sizePx / 2f
-        val cy = sizePx / 2f
-        val w = sizePx * 0.5f
-        val h = sizePx * 0.4f
-        
-        if (isOldest) {
-            // Sort ascending (oldest first) — bars grow top-to-bottom, standard ascending glyph.
-            canvas.drawLine(cx - w/2, cy - h/2, cx, cy - h/2, paint)
-            canvas.drawLine(cx - w/2, cy, cx + w/4, cy, paint)
-            canvas.drawLine(cx - w/2, cy + h/2, cx + w/2, cy + h/2, paint)
-        } else {
-            // Sort descending (newest first) — bars shrink top-to-bottom, standard descending glyph.
-            canvas.drawLine(cx - w/2, cy - h/2, cx + w/2, cy - h/2, paint)
-            canvas.drawLine(cx - w/2, cy, cx + w/4, cy, paint)
-            canvas.drawLine(cx - w/2, cy + h/2, cx, cy + h/2, paint)
-        }
-        return bitmap
-    }
-
-    fun renderVaultIconBitmap(context: Context, colorArgb: Int, sizePx: Int): Bitmap {
-        val bitmap = Bitmap.createBitmap(sizePx.coerceAtLeast(1), sizePx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
+        val iconSize = h * 0.6f
+        val iconCx = iconSize / 2f + h * 0.04f
+        val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = colorArgb
             style = Paint.Style.STROKE
-            strokeWidth = sizePx * 0.08f
+            strokeWidth = iconSize * 0.14f
+            strokeCap = Paint.Cap.ROUND
         }
-        val cx = sizePx / 2f
-        val cy = sizePx / 2f
-        val r = sizePx * 0.35f
-        canvas.drawCircle(cx, cy, r, paint)
-        canvas.drawCircle(cx, cy, r * 0.4f, paint)
-        canvas.drawLine(cx, cy - r, cx, cy - r * 0.4f, paint)
-        canvas.drawLine(cx, cy + r, cx, cy + r * 0.4f, paint)
-        canvas.drawLine(cx - r, cy, cx - r * 0.4f, cy, paint)
-        canvas.drawLine(cx + r, cy, cx + r * 0.4f, cy, paint)
+        drawIcon(canvas, iconCx, h / 2f, iconSize, iconPaint)
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = colorArgb
+            textSize = (h * 0.4f).coerceIn(7f * density, 11f * density)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            letterSpacing = 0.02f
+        }
+        canvas.drawText(caption, iconCx + iconSize / 2f + 3f * density, h / 2f + textPaint.textSize * 0.34f, textPaint)
         return bitmap
     }
+
+    fun renderSortButtonBitmap(context: Context, colorArgb: Int, widthPx: Int, heightPx: Int, isOldest: Boolean): Bitmap =
+        renderIconCaptionBitmap(context, colorArgb, widthPx, heightPx, if (isOldest) "OLD" else "NEW") { canvas, cx, cy, size, paint ->
+            // A single unambiguous arrow — up for oldest-first, down for newest-first — instead
+            // of the old pair of glyphs that only differed by subtle bar-length changes.
+            val halfW = size * 0.3f
+            val halfH = size * 0.3f
+            if (isOldest) {
+                canvas.drawLine(cx, cy + halfH, cx, cy - halfH, paint)
+                canvas.drawLine(cx, cy - halfH, cx - halfW, cy - halfH + halfW, paint)
+                canvas.drawLine(cx, cy - halfH, cx + halfW, cy - halfH + halfW, paint)
+            } else {
+                canvas.drawLine(cx, cy - halfH, cx, cy + halfH, paint)
+                canvas.drawLine(cx, cy + halfH, cx - halfW, cy + halfH - halfW, paint)
+                canvas.drawLine(cx, cy + halfH, cx + halfW, cy + halfH - halfW, paint)
+            }
+        }
+
+    fun renderVaultButtonBitmap(context: Context, colorArgb: Int, widthPx: Int, heightPx: Int): Bitmap =
+        renderIconCaptionBitmap(context, colorArgb, widthPx, heightPx, "VAULT") { canvas, cx, cy, size, paint ->
+            val r = size * 0.32f
+            canvas.drawCircle(cx, cy, r, paint)
+            canvas.drawCircle(cx, cy, r * 0.4f, paint)
+            canvas.drawLine(cx, cy - r, cx, cy - r * 0.4f, paint)
+            canvas.drawLine(cx, cy + r, cx, cy + r * 0.4f, paint)
+            canvas.drawLine(cx - r, cy, cx - r * 0.4f, cy, paint)
+            canvas.drawLine(cx + r, cy, cx + r * 0.4f, cy, paint)
+        }
 
     /** Full-width "Open Vault" footer row — a clear, low-effort way in from the widget to the
      * full history, distinct from tapping an individual recent spot. */
@@ -565,10 +649,11 @@ object PremiumWidgetRenderer {
         heightPx: Int
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         val radius = (h * 0.4f).coerceAtMost(12f * density)
         val rect = RectF(0.75f, 0.75f, w - 0.75f, h - 0.75f)
         canvas.drawRoundRect(
@@ -638,10 +723,11 @@ object PremiumWidgetRenderer {
         overlayColorArgb: Int = Color.WHITE
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         val radius = 14f * density
         val rect = RectF(0f, 0f, w, h)
 
@@ -854,11 +940,10 @@ object PremiumWidgetRenderer {
     fun renderNoPhotoThumbnailBitmap(context: Context, widthPx: Int, heightPx: Int): Bitmap {
         val theme = GlanceThemeManager.load(context)
         val density = context.resources.displayMetrics.density
-        val w = widthPx.coerceAtLeast(1)
-        val h = heightPx.coerceAtLeast(1)
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx, maxEdgePx = 512, maxPixels = 262_144)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        drawNoPhotoSpotPlaceholder(canvas, context, RectF(0f, 0f, w.toFloat(), h.toFloat()), theme, density)
+        drawNoPhotoSpotPlaceholder(canvas, context, RectF(0f, 0f, safeW.toFloat(), safeH.toFloat()), theme, density)
         return bitmap
     }
 
@@ -893,6 +978,7 @@ object PremiumWidgetRenderer {
     private fun loadScaledPhoto(path: String, maxW: Int, maxH: Int): Bitmap? {
         val file = File(path)
         if (!file.exists()) return null
+        var bmp: Bitmap? = null
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(path, bounds)
@@ -902,7 +988,7 @@ object PremiumWidgetRenderer {
                 sample *= 2
             }
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-            var bmp = BitmapFactory.decodeFile(path, opts) ?: return null
+            bmp = BitmapFactory.decodeFile(path, opts) ?: return null
             val exif = ExifInterface(path)
             val orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
             val matrix = Matrix()
@@ -912,12 +998,13 @@ object PremiumWidgetRenderer {
                 ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
             }
             if (!matrix.isIdentity) {
-                val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
-                if (rotated != bmp) bmp.recycle()
+                val rotated = Bitmap.createBitmap(bmp!!, 0, 0, bmp!!.width, bmp!!.height, matrix, true)
+                if (rotated != bmp) bmp!!.recycle()
                 bmp = rotated
             }
             bmp
         } catch (_: Exception) {
+            bmp?.takeIf { !it.isRecycled }?.recycle()
             null
         }
     }
@@ -965,6 +1052,34 @@ fun PremiumLockedWidgetContent(theme: GlanceWidgetTheme, widthDp: Float, heightD
         Image(
             provider = ImageProvider(bitmap),
             contentDescription = "Unlock Premium Widget",
+            modifier = GlanceModifier.fillMaxSize(),
+            contentScale = ContentScale.FillBounds
+        )
+    }
+}
+
+/** Shared across every widget that can show real spot content (Premium, Vault Favorites, Tag
+ * Filter) — rendered instead of that content whenever App Lock is on, since a home-screen widget
+ * has no authentication of its own and would otherwise leak exactly what App Lock exists to hide.
+ * Tapping it opens the app, which puts the user straight onto AppLockScreen if not already
+ * unlocked — same as tapping anywhere else on any of these widgets already does. */
+@Composable
+fun AppLockedWidgetContent(theme: GlanceWidgetTheme, widthDp: Float, heightDp: Float) {
+    val context = LocalContext.current
+    val widthPx = WidgetThemeHelper.dpToPx(context, widthDp.coerceAtLeast(160f))
+    val heightPx = WidgetThemeHelper.dpToPx(context, heightDp.coerceAtLeast(120f))
+    val bitmap = remember(theme.cacheKey(), widthPx, heightPx) {
+        PremiumWidgetRenderer.renderAppLockedBitmap(context, theme, widthPx, heightPx)
+    }
+    Box(
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .clickable(actionStartActivity(Intent(context, MainActivity::class.java))),
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            provider = ImageProvider(bitmap),
+            contentDescription = "App Lock is on — open the app to view this widget",
             modifier = GlanceModifier.fillMaxSize(),
             contentScale = ContentScale.FillBounds
         )

@@ -45,8 +45,6 @@ private const val UNIQUE_WORK_NAME_PREFIX = "auto_park_bluetooth_disconnect"
  * about a minute of each other, so this fails fast rather than lingering. */
 private const val MAX_LOCATION_RETRY_ATTEMPTS = 3
 
-private const val AUTO_PARK_PENDING_SPOT_PREF_PREFIX = "auto_park_pending_spot_"
-
 /** Marks [spotId] as the most recent auto-park save for [mac] — read back by
  * [AutoParkReconnectCleanupWorker] the moment that same vehicle reconnects. No-op without a MAC
  * (the manual "Test Auto-Park Now" trigger has no disconnect/reconnect cycle to correlate
@@ -108,8 +106,10 @@ class AutoParkWorker(
             cachedLat to cachedLng
         } else {
             resolveCurrentLocation(context, prefs) ?: run {
+                // Never fall through to (0,0) — that used to write a real Vault pin in the Gulf
+                // of Guinea whenever GPS stayed unavailable after retries.
                 if (runAttemptCount < MAX_LOCATION_RETRY_ATTEMPTS) return Result.retry()
-                0.0 to 0.0
+                return outcomeResult(AUTO_PARK_OUTCOME_FAILED)
             }
         }
 
@@ -287,7 +287,20 @@ class AutoParkReconnectCleanupWorker(
             }
         }
         prefs.edit().remove(key).apply()
-        AppDatabase.getDatabase(context.applicationContext).locationDao().softDeleteSpot(spotId)
+        val dao = AppDatabase.getDatabase(context.applicationContext).locationDao()
+        val spot = dao.getSpotById(spotId)
+        dao.softDeleteSpot(spotId)
+        // Active Tracking mode starts TimerService for this spot — soft-delete alone left a live
+        // tracking notification for a pin that now sits in Recently Deleted (gas-station reconnect).
+        if (spot != null && prefs.getBoolean("is_pinned", false)) {
+            val pinnedLat = prefs.getCoord("lat")
+            val pinnedLng = prefs.getCoord("lng")
+            if (kotlin.math.abs(pinnedLat - spot.lat) < 1e-5 &&
+                kotlin.math.abs(pinnedLng - spot.lng) < 1e-5
+            ) {
+                ActiveTrackingHelper.clearActiveTracking(context.applicationContext)
+            }
+        }
         return Result.success()
     }
 }

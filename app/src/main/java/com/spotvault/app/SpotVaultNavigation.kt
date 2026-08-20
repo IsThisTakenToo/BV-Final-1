@@ -166,6 +166,31 @@ fun SpotVaultMainScaffold(
         }
     }
 
+    // Deliberately its own effect, not folded into initialNavRoute above — that one is keyed on
+    // the resolved route *string*, so a second share arriving while already past the first one
+    // (e.g. the user left the Vault tab in between) would resolve to the same "vault" value as
+    // before and silently never re-fire, since LaunchedEffect only restarts when its key actually
+    // changes. PendingSharedSpot.version is a counter precisely so every single share is a
+    // distinct key, guaranteeing this always re-navigates regardless of what the user did between
+    // shares or whether they'd already been sent to the Vault tab once before.
+    //
+    // Deliberately checks the current route BEFORE calling navigateMainTab, rather than always
+    // calling it — navigateMainTab's own "already on this tab" branch does popBackStack(HOME),
+    // which is the correct behavior for an actual user re-tapping the Vault icon (reset to the
+    // tab's root), but is exactly wrong here: the Favorites Hub / Add Spot form is normally still
+    // open and on-screen when a share arrives (that's the whole point — the user left FROM there
+    // to search in Maps), and popping to Home would tear down that entire open dialog instead of
+    // leaving it alone. Only navigate when the share woke the app up from genuinely outside the
+    // Vault tab.
+    LaunchedEffect(PendingSharedSpot.version.value) {
+        if (PendingSharedSpot.version.value > 0) {
+            val currentBase = SpotVaultRoutes.baseRoute(navController.currentBackStackEntry?.destination?.route)
+            if (currentBase != SpotVaultRoutes.VAULT) {
+                navController.navigateMainTab(SpotVaultRoutes.VAULT)
+            }
+        }
+    }
+
     LaunchedEffect(initialSpotId) {
         if (initialSpotId >= 0) {
             navController.navigateToSpotDetail(initialSpotId)
@@ -574,8 +599,12 @@ private fun SavedSpotDetailRoute(
         modifier = Modifier.fillMaxSize(),
         spotId = loaded.id,
         onNotesPersisted = { updatedNotes ->
+            val spotId = loaded.id
+            // Re-fetches rather than loaded.copy(...) — same staleness risk as the Edit dialog's
+            // onSave below, and the same fix.
             scope.launch(Dispatchers.IO) {
-                dao.updateSpot(loaded.copy(locationDetails = updatedNotes))
+                val current = dao.getSpotById(spotId) ?: return@launch
+                dao.updateSpot(current.copy(locationDetails = updatedNotes))
             }
             spot = loaded.copy(locationDetails = updatedNotes)
         },
@@ -602,7 +631,32 @@ private fun SavedSpotDetailRoute(
             currentVehicleId = loaded.vehicleId,
             onDismiss = { showEditDialog = false },
             onSave = { newTitle, newTimestamp, newNotes, newCity, newState, newVehicleId ->
-                val updated = loaded.copy(
+                val spotId = loaded.id
+                scope.launch(Dispatchers.IO) {
+                    // Re-fetches rather than reusing `loaded` for the actual write — loaded is a
+                    // one-time snapshot from when this screen opened (see the LaunchedEffect
+                    // above) and never refreshes on its own. A photo attached from this same
+                    // screen's own "Add Photo" button (FullScreenImageViewer shows it live via
+                    // its own observeSpotById query, but that never flows back into this outer
+                    // loaded/spot state) would otherwise get silently erased the moment Edit was
+                    // saved — copy()-ing the stale `loaded` here would write its still-blank
+                    // imagePath straight back over the one just attached. The optimistic local
+                    // update below still starts from `loaded` — that's fine, it only drives
+                    // fields this screen itself displays directly, not imagePath, which always
+                    // comes from FullScreenImageViewer's own live value regardless of this one.
+                    val current = dao.getSpotById(spotId) ?: return@launch
+                    dao.updateSpot(
+                        current.copy(
+                            title = newTitle,
+                            timestamp = newTimestamp,
+                            locationDetails = newNotes,
+                            city = newCity,
+                            state = newState,
+                            vehicleId = newVehicleId
+                        )
+                    )
+                }
+                spot = loaded.copy(
                     title = newTitle,
                     timestamp = newTimestamp,
                     locationDetails = newNotes,
@@ -610,10 +664,6 @@ private fun SavedSpotDetailRoute(
                     state = newState,
                     vehicleId = newVehicleId
                 )
-                scope.launch(Dispatchers.IO) {
-                    dao.updateSpot(updated)
-                }
-                spot = updated
                 showEditDialog = false
             }
         )
@@ -628,8 +678,8 @@ private fun ActiveSpotDetailRoute(
     onFoundClick: () -> Unit,
     onShareRequest: (ShareSpotPayload) -> Unit
 ) {
-    val lat = prefs.getFloat("lat", 0f).toDouble()
-    val lng = prefs.getFloat("lng", 0f).toDouble()
+    val lat = prefs.getCoord("lat")
+    val lng = prefs.getCoord("lng")
     FullScreenImageViewer(
         imagePath = prefs.getString("photo_path", "") ?: "",
         ocrText = "",

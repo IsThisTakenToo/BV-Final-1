@@ -19,6 +19,10 @@
     <exclude domain="database" path="spotvault_database-wal" />
     <exclude domain="database" path="spotvault_database-shm" />
     <exclude domain="file" path="images/" />
+    <!-- Import/restore photos land here (VaultBackupManager.backupImagesDir), not images/ —
+         without this exclude, Auto Backup could restore imported vault photos onto another
+         device while the DB/prefs stay excluded, defeating App Lock and leaving a partial vault. -->
+    <exclude domain="file" path="vault_images/" />
     <exclude domain="file" path="exports/" />
     <exclude domain="sharedpref" path="SpotVaultPrefs.xml" />
 </full-backup-content>

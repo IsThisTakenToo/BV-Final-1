@@ -72,17 +72,7 @@ class EverydayQuickActionsWidgetReceiver : GlanceAppWidgetReceiver() {
 }
 
 private fun relayIntent(context: Context, action: String): Intent =
-    Intent(context, QuickActionRelayActivity::class.java).apply {
-        // Unique action + data — PendingIntent identity ignores extras.
-        this.action = "com.spotvault.app.widget.RELAY_$action"
-        data = android.net.Uri.parse("spotvault://widget/relay/$action")
-        putExtra(QuickActionRelayActivity.EXTRA_ACTION, action)
-        addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-        )
-    }
+    QuickActionRelayActivity.intentForAction(context, action)
 
 private val WidgetGap = 6.dp
 private val WidgetBackgroundInset = 12.dp // matches GlanceThemedBackground's 6dp-per-side padding

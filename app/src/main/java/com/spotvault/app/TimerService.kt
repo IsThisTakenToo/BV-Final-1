@@ -9,7 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.os.CountDownTimer
@@ -20,12 +19,83 @@ import android.Manifest
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.io.File
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+
+/** Keep pinned-notification note payload small — full notes live in Room, not prefs/binder. */
+private const val PINNED_NOTIFICATION_NOTES_MAX_CHARS = 400
+
+/** TIMER_ALERT channel id, varying by every setting that changes what the channel actually needs
+ * to do — a channel's sound/vibration is locked in the moment Android first creates it and never
+ * updates for an existing id on reinstall or a later settings change, so a distinct id per
+ * configuration (same trick already used for the sound URI below) is the only way toggling either
+ * one actually takes effect. Shared by MainActivity.createNotificationChannel() (creates it) and
+ * TimerService.fireTenMinuteAlert() (posts to it) — both must compute the exact same id, or the
+ * notification silently fails to post to a channel that was never created. */
+fun timerAlertChannelId(prefs: android.content.SharedPreferences): String {
+    val soundUriStr = prefs.getString("alarm_sound_uri", null)
+    val vibrationEnabled = prefs.getBoolean("vibration_enabled", true)
+    val baseId = "TIMER_ALERT"
+    return buildString {
+        append(baseId)
+        if (soundUriStr != null) append("_${soundUriStr.hashCode()}")
+        append(if (vibrationEnabled) "_v1" else "_v0")
+    }
+}
+
+/** Creates the current TIMER_ALERT channel (sound + vibration) and deletes the previous id. */
+fun ensureTimerAlertChannel(
+    manager: NotificationManager,
+    prefs: android.content.SharedPreferences
+) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val soundUriStr = prefs.getString("alarm_sound_uri", null)
+    val vibrationEnabled = prefs.getBoolean("vibration_enabled", true)
+    val channelId = timerAlertChannelId(prefs)
+
+    val alertChannel = android.app.NotificationChannel(
+        channelId,
+        "Timer Alert",
+        NotificationManager.IMPORTANCE_HIGH
+    )
+    val audioAttributes = android.media.AudioAttributes.Builder()
+        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_EVENT)
+        .build()
+
+    if (!soundUriStr.isNullOrEmpty()) {
+        alertChannel.setSound(android.net.Uri.parse(soundUriStr), audioAttributes)
+    } else {
+        alertChannel.setSound(
+            android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION),
+            audioAttributes
+        )
+    }
+    alertChannel.enableVibration(vibrationEnabled)
+    manager.createNotificationChannel(alertChannel)
+
+    val previousAlertChannelId = prefs.getString("timer_alert_channel_id", null)
+    if (!previousAlertChannelId.isNullOrEmpty() && previousAlertChannelId != channelId) {
+        runCatching { manager.deleteNotificationChannel(previousAlertChannelId) }
+    }
+    prefs.edit().putString("timer_alert_channel_id", channelId).apply()
+}
 
 class TimerService : Service() {
     private var mediaPlayer: MediaPlayer? = null
     private var countDownTimer: CountDownTimer? = null
     private lateinit var manager: NotificationManager
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var pendingNotificationRetry: Runnable? = null
+    private val retryHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+    // Reused across countdown ticks — buildNotification used to decode/rotate the same photo on
+    // every update (once a second in the last minute), which is both heap churn and main-thread
+    // I/O for the whole life of an active pin. Cached until the path changes or the service dies.
+    private var cachedNotificationBitmap: Bitmap? = null
+    private var cachedNotificationPhotoPath: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -52,6 +122,13 @@ class TimerService : Service() {
             setShowBadge(false)
         }
         manager.createNotificationChannel(silentChannel)
+
+        // Ten-minute early-warning posts here. MainActivity.createNotificationChannel() also
+        // creates/prunes this when the UI is open, but Boot / Watchdog / NotificationGuard can
+        // resume the FGS without ever touching MainActivity — without this, fireTenMinuteAlert
+        // would target a channel that does not exist yet.
+        val prefs = getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+        ensureTimerAlertChannel(manager, prefs)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -152,7 +229,13 @@ class TimerService : Service() {
                     "Time remaining: $minsLeft minutes"
                 }
 
-                val shouldUpdate = millisUntilFinished < 60000 || minsLeft != lastMinTick
+                val shouldUpdate = if (millisUntilFinished < 60000) {
+                    // Final minute: every 5s is enough for the countdown label and avoids
+                    // rebuilding a BigPicture notification 60 times on low-RAM phones.
+                    secsLeft % 5L == 0L || millisUntilFinished < 1500
+                } else {
+                    minsLeft != lastMinTick
+                }
                 if (shouldUpdate) {
                     lastMinTick = minsLeft
                     // Notification only — do NOT refresh Glance widgets on every tick.
@@ -182,9 +265,12 @@ class TimerService : Service() {
                     mediaPlayer = MediaPlayer.create(this@TimerService, uri)
                     mediaPlayer?.isLooping = true
                     mediaPlayer?.start()
-                    prefs.edit().putBoolean("is_alarm_ringing", true).apply()
+                    // Only claim the alarm is ringing when audio actually started — otherwise the
+                    // UI/resume path shows "Silence Alarm" / re-ring logic for a silent failure.
+                    prefs.edit().putBoolean("is_alarm_ringing", mediaPlayer?.isPlaying == true).apply()
                 } catch (e: Exception) {
                     e.printStackTrace()
+                    prefs.edit().putBoolean("is_alarm_ringing", false).apply()
                 }
 
                 postPinnedNotification(photoPath, text)
@@ -270,6 +356,13 @@ class TimerService : Service() {
     }
 
     private fun postPinnedNotification(photoPath: String, text: String, isRetry: Boolean = false) {
+        if (!canPostNotifications()) {
+            // Without POST_NOTIFICATIONS, startForeground fails and the guard/watchdog would
+            // restart this service in a loop. Keep the vault pin prefs; skip FGS until granted.
+            NotificationGuard.cancel(this)
+            stopSelf()
+            return
+        }
         val notification = buildNotification(photoPath, text)
         try {
             startForeground(NOTIFICATION_ID, notification)
@@ -279,23 +372,36 @@ class TimerService : Service() {
                 // Right after boot the system can still be settling (Play services, location
                 // providers, etc. not fully up yet) and briefly refuse a new foreground service;
                 // one short retry covers that instead of silently giving up until the user
-                // manually reopens the app.
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    postPinnedNotification(photoPath, text, isRetry = true)
-                }, 2000)
+                // manually reopens the app. Reference kept + cancelled on every teardown path so
+                // a "Found"/stop landing inside this 2s window can't have the retry fire on an
+                // already-dead service instance and resurrect the notification.
+                cancelPendingNotificationRetry()
+                val retry = Runnable { postPinnedNotification(photoPath, text, isRetry = true) }
+                pendingNotificationRetry = retry
+                retryHandler.postDelayed(retry, 2000)
             } else {
                 stopSelf()
             }
         }
     }
 
+    private fun cancelPendingNotificationRetry() {
+        pendingNotificationRetry?.let { retryHandler.removeCallbacks(it) }
+        pendingNotificationRetry = null
+    }
+
     private fun stopPinnedSession(prefs: android.content.SharedPreferences) {
+        cancelPendingNotificationRetry()
         prefs.edit().putBoolean("is_alarm_ringing", false).apply()
         countDownTimer?.cancel()
         countDownTimer = null
         mediaPlayer?.stop()
         mediaPlayer?.release()
         mediaPlayer = null
+        // Quiet-save / ACTION_STOP used to leave the 10-minute early-warning notification up
+        // after clearing the countdown — Found already cancels both IDs via ActiveTrackingHelper.
+        manager.cancel(TEN_MINUTE_ALERT_ID)
+        clearCachedNotificationBitmap()
         NotificationGuard.cancel(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -305,9 +411,7 @@ class TimerService : Service() {
         if (!canPostNotifications()) return
         val prefs = getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("timer_early_warning", true)) return
-        val soundUriStr = prefs.getString("alarm_sound_uri", null)
-        val baseId = "TIMER_ALERT"
-        val channelId = if (soundUriStr != null) "${baseId}_${soundUriStr.hashCode()}" else baseId
+        val channelId = timerAlertChannelId(prefs)
         val alert = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle("Vault Timer Alert")
@@ -318,43 +422,56 @@ class TimerService : Service() {
         manager.notify(TEN_MINUTE_ALERT_ID, alert)
     }
 
-    private fun buildNotification(photoPath: String, text: String): Notification {
-        var bitmap: Bitmap? = null
-        if (photoPath.isNotEmpty()) {
-            try {
-                val file = File(photoPath)
-                if (file.exists()) {
-                    val exif = ExifInterface(photoPath)
-                    val orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-                    val matrix = Matrix()
-                    when (orientation) {
-                        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                    }
-                    // Downsampled — this notification rebuilds on every countdown tick (once a
-                    // second in the final minute) for the whole life of an active tracking
-                    // session, so a full, uncompressed camera-resolution decode here churned tens
-                    // of MB of heap every tick. BigPictureStyle never displays this above a few
-                    // hundred dp anyway.
-                    val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeFile(photoPath, boundsOpts)
-                    var sample = 1
-                    val maxDim = 1024
-                    while (boundsOpts.outWidth / sample > maxDim || boundsOpts.outHeight / sample > maxDim) {
-                        sample *= 2
-                    }
-                    val original = BitmapFactory.decodeFile(photoPath, BitmapFactory.Options().apply { inSampleSize = sample })
-                    if (original != null) {
-                        val rotated = Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
-                        if (rotated !== original) original.recycle()
-                        bitmap = rotated
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+    private fun clearCachedNotificationBitmap() {
+        cachedNotificationBitmap?.recycle()
+        cachedNotificationBitmap = null
+        cachedNotificationPhotoPath = null
+    }
+
+    private fun notificationBitmapFor(photoPath: String): Bitmap? {
+        if (photoPath.isEmpty()) {
+            if (cachedNotificationPhotoPath != null) clearCachedNotificationBitmap()
+            return null
         }
+        if (photoPath == cachedNotificationPhotoPath) return cachedNotificationBitmap
+        clearCachedNotificationBitmap()
+        return try {
+            val file = File(photoPath)
+            if (!file.exists()) return null
+            val exif = ExifInterface(photoPath)
+            val orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            val matrix = Matrix()
+            when (orientation) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            }
+            // Downsampled — BigPictureStyle never displays this above a few hundred dp, and the
+            // notification rebuilds on every countdown tick in the final minute.
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(photoPath, boundsOpts)
+            var sample = 1
+            val maxDim = 1024
+            while (boundsOpts.outWidth / sample > maxDim || boundsOpts.outHeight / sample > maxDim) {
+                sample *= 2
+            }
+            val original = BitmapFactory.decodeFile(photoPath, BitmapFactory.Options().apply { inSampleSize = sample })
+                ?: return null
+            val rotated = Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
+            if (rotated !== original) original.recycle()
+            cachedNotificationBitmap = rotated
+            cachedNotificationPhotoPath = photoPath
+            rotated
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun buildNotification(photoPath: String, text: String): Notification {
+        lastNotificationPhotoPath = photoPath
+        lastNotificationText = text
+        val bitmap = notificationBitmapFor(photoPath)
 
         val clearIntent = Intent(this, ClearNotificationReceiver::class.java)
         val clearPendingIntent = PendingIntent.getBroadcast(
@@ -375,8 +492,8 @@ class TimerService : Service() {
         )
 
         val prefs = getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
-        val lat = prefs.getFloat("lat", 0f)
-        val lng = prefs.getFloat("lng", 0f)
+        val lat = prefs.getCoord("lat").toFloat()
+        val lng = prefs.getCoord("lng").toFloat()
         // With App Lock on, this action must not hand the tracked location straight to Maps from
         // a locked device — that's a real bypass of what App Lock is for. Route through
         // MainActivity's own gate instead (same as every other entry point); it already knows how
@@ -404,7 +521,31 @@ class TimerService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val locationDetails = prefs.getString("location_details", "") ?: ""
+        // Separate from "Navigate to" above — that one uses google.navigation:, which always
+        // launches straight into live turn-by-turn guidance the instant it's tapped, no preview or
+        // choice of app first. This mirrors the app's own "Show Map" buttons instead (geo:, same
+        // as PinnedStateView's Show Map / PremiumWidgetIntents.showMapIntent): just opens the pin
+        // in whatever maps app the user has, letting them look before choosing to navigate.
+        val showMapLabel = prefsSafeAddress(
+            prefs.getString("current_address", "")?.ifBlank { "Saved Spot" } ?: "Saved Spot"
+        )
+        // Same App Lock bypass "Navigate to" above already guards against — this must not hand
+        // the tracked location straight to an external maps app from a locked device either.
+        val showMapIntentTarget = if (prefs.getBoolean(APP_LOCK_ENABLED_PREF, false)) {
+            PremiumWidgetIntents.openMapsShow(this, lat.toDouble(), lng.toDouble())
+        } else {
+            val showMapUri = android.net.Uri.parse("geo:0,0?q=$lat,$lng(${android.net.Uri.encode(showMapLabel)})")
+            Intent(Intent.ACTION_VIEW, showMapUri)
+        }
+        val showMapPendingIntent = PendingIntent.getActivity(
+            this,
+            26,
+            showMapIntentTarget,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val locationDetails = (prefs.getString("location_details", "") ?: "")
+            .take(PINNED_NOTIFICATION_NOTES_MAX_CHARS)
 
         val repostIntent = Intent(this, TimerService::class.java).apply { action = ACTION_REPOST }
         val repostPendingIntent = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -445,6 +586,7 @@ class TimerService : Service() {
             .setDeleteIntent(repostPendingIntent)
             .addAction(android.R.drawable.ic_menu_delete, FOUND_BEACON_ACTION, clearPendingIntent)
             .addAction(android.R.drawable.ic_menu_directions, "Navigate to", mapPendingIntent)
+            .addAction(android.R.drawable.ic_menu_mapmode, "Show Map", showMapPendingIntent)
 
         if (text == "Vault timer expired!" && mediaPlayer != null && mediaPlayer?.isPlaying == true) {
             val silenceIntent = Intent(this, TimerService::class.java).apply { action = ACTION_SILENCE_ALARM }
@@ -503,22 +645,7 @@ class TimerService : Service() {
                     .setSummaryText(summaryText)
             )
         } else {
-            val drawable = ContextCompat.getDrawable(this, android.R.drawable.ic_menu_mylocation)
-            if (drawable != null) {
-                val fallbackBitmap = Bitmap.createBitmap(
-                    if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 400,
-                    if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 400,
-                    Bitmap.Config.ARGB_8888
-                )
-                val canvas = Canvas(fallbackBitmap)
-                canvas.drawColor(android.graphics.Color.LTGRAY)
-                drawable.setBounds(0, 0, canvas.width, canvas.height)
-                drawable.draw(canvas)
-                builder.setLargeIcon(fallbackBitmap)
-                builder.setStyle(NotificationCompat.BigTextStyle().bigText(summaryText))
-            } else {
-                builder.setStyle(NotificationCompat.BigTextStyle().bigText(summaryText))
-            }
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(summaryText))
         }
 
         val notification = builder.build()
@@ -531,11 +658,16 @@ class TimerService : Service() {
 
     private var cachedPinnedVehicleId: Int = -1
     private var cachedPinnedVehicle: Vehicle? = null
+    private var vehicleFetchInFlight = false
+    private var lastNotificationPhotoPath: String = ""
+    private var lastNotificationText: String = ""
 
     /** Notifications rebuild on every countdown tick (once a second) — without caching, that's a
      * blocking Room query on the main thread every second for the life of an active timer. The
      * pinned vehicle can't change mid-session, so it only needs to be (re)fetched when the id
-     * itself changes. */
+     * itself changes. On a cache miss this never blocks the caller (which can be running right
+     * before a time-boxed startForeground() call) — it kicks the fetch off async and returns null
+     * for this one build, then re-notifies with the same id/text once the vehicle lands. */
     private fun loadPinnedVehicle(prefs: android.content.SharedPreferences): Vehicle? {
         val id = prefs.getInt(PINNED_VEHICLE_ID_PREF, -1)
         if (id <= 0) {
@@ -544,12 +676,19 @@ class TimerService : Service() {
             return null
         }
         if (id == cachedPinnedVehicleId) return cachedPinnedVehicle
-        val vehicle = runBlocking {
-            AppDatabase.getDatabase(applicationContext).vehicleDao().getById(id)
+        if (!vehicleFetchInFlight) {
+            vehicleFetchInFlight = true
+            serviceScope.launch {
+                val vehicle = runCatching {
+                    AppDatabase.getDatabase(applicationContext).vehicleDao().getById(id)
+                }.getOrNull()
+                cachedPinnedVehicleId = id
+                cachedPinnedVehicle = vehicle
+                vehicleFetchInFlight = false
+                manager.notify(NOTIFICATION_ID, buildNotification(lastNotificationPhotoPath, lastNotificationText))
+            }
         }
-        cachedPinnedVehicleId = id
-        cachedPinnedVehicle = vehicle
-        return vehicle
+        return null
     }
 
     // Guaranteed last-chance cleanup regardless of *how* the service is stopped. The explicit
@@ -563,11 +702,14 @@ class TimerService : Service() {
     // that calls stopSelf()/stopService() directly) would otherwise leave the alarm playing
     // indefinitely with no way to silence it short of killing the whole app process.
     override fun onDestroy() {
+        cancelPendingNotificationRetry()
+        serviceScope.cancel()
         countDownTimer?.cancel()
         countDownTimer = null
         mediaPlayer?.stop()
         mediaPlayer?.release()
         mediaPlayer = null
+        clearCachedNotificationBitmap()
         super.onDestroy()
     }
 

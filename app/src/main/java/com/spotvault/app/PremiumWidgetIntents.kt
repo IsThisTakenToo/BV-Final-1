@@ -19,6 +19,20 @@ object PremiumWidgetIntents {
     const val ACTION_COMPASS = "compass"
     const val ACTION_VAULT = "vault"
     const val ACTION_NAVIGATE_MAPS = "navigate_maps"
+    const val ACTION_SHOW_MAP = "show_map"
+    const val ACTION_AUTOPARK_SETTINGS = "autopark_settings"
+
+    val KNOWN_ACTIONS = setOf(
+        ACTION_SNAP,
+        ACTION_PIN_ONLY,
+        ACTION_SHARE_PHOTO,
+        ACTION_PREMIUM,
+        ACTION_COMPASS,
+        ACTION_VAULT,
+        ACTION_NAVIGATE_MAPS,
+        ACTION_SHOW_MAP,
+        ACTION_AUTOPARK_SETTINGS
+    )
 
     fun openSpot(context: Context, spotId: Int): Intent =
         Intent(context, MainActivity::class.java).apply {
@@ -62,9 +76,31 @@ object PremiumWidgetIntents {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
 
+    /** Used instead of a direct-to-Maps PendingIntent when App Lock is on — see TimerService's
+     * "Show Map" notification action and PremiumGlanceWidget's "Show Map" button. Same reasoning
+     * as [openMapsNavigation]: routes through MainActivity's own App Lock gate instead of opening
+     * the tracked location in an external maps app straight from a locked device. */
+    fun openMapsShow(context: Context, lat: Double, lng: Double): Intent =
+        Intent(context, MainActivity::class.java).apply {
+            this.action = "com.spotvault.app.widget.ACTION_$ACTION_SHOW_MAP"
+            data = Uri.parse("spotvault://widget/action/$ACTION_SHOW_MAP")
+            putExtra(EXTRA_WIDGET_ACTION, ACTION_SHOW_MAP)
+            putExtra(EXTRA_COMPASS_LAT, lat)
+            putExtra(EXTRA_COMPASS_LNG, lng)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+
     fun openPremiumSettings(context: Context): Intent =
         widgetAction(context, ACTION_PREMIUM)
 
     fun openVault(context: Context): Intent =
         widgetAction(context, ACTION_VAULT)
+
+    /** Where Bluetooth Auto / Motion land when the widget toggle can't actually turn them on —
+     * missing a permission the widget itself has no way to prompt for (an ActionCallback isn't an
+     * Activity). Automatic Parking settings already has the full permission-request flow (location,
+     * Bluetooth, the background-location primer) built in and working; this reuses that instead of
+     * duplicating any of it here. */
+    fun openAutoParkSettings(context: Context): Intent =
+        widgetAction(context, ACTION_AUTOPARK_SETTINGS)
 }

@@ -1,7 +1,6 @@
 package com.spotvault.app
 
 import android.content.Context
-import android.content.Intent
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -19,7 +18,19 @@ class ToggleBluetoothActionCallback : ActionCallback {
         parameters: ActionParameters
     ) {
         val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
-        val enabled = !isAutoParkEnabled(prefs)
+        val wantsToEnable = !isAutoParkEnabled(prefs)
+        // Turning off never needs a permission check — only turning on does. An ActionCallback
+        // isn't an Activity, so it has no way to show the actual system permission dialog itself;
+        // this used to just flip the pref regardless, which showed the widget as "on" even on a
+        // device that had never granted location (or Bluetooth, on API 31+) — a toggle that lied
+        // about actually working. Automatic Parking settings already has the real permission-
+        // request flow; hand off to it instead of claiming success here.
+        if (wantsToEnable && !hasAutoParkPermissions(context)) {
+            WidgetFeedback.toast(context, "Bluetooth Auto needs permission — opening Automatic Parking…")
+            context.startActivity(PremiumWidgetIntents.openAutoParkSettings(context))
+            return
+        }
+        val enabled = wantsToEnable
         prefs.edit().putBoolean(AUTO_PARK_ENABLED_PREF, enabled).commit()
         WidgetThemeHelper.bumpWidgetRevision(prefs)
 
@@ -44,11 +55,30 @@ class ToggleMotionActionCallback : ActionCallback {
     ) {
         val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
         val wantsToEnable = !isMotionAutoParkEnabled(prefs)
-        val enabling = wantsToEnable && hasActivityRecognitionPermission(context)
+        // Same reasoning as ToggleBluetoothActionCallback above — used to silently no-op (toggle
+        // stayed off, only a toast said why) when Activity Recognition wasn't granted; that toast
+        // is easy to miss entirely from a home-screen tap. Opening Automatic Parking settings
+        // actually gets the user to a real permission prompt instead of leaving them to go dig up
+        // Settings themselves.
+        if (wantsToEnable && !hasActivityRecognitionPermission(context)) {
+            WidgetFeedback.toast(context, "Motion needs permission — opening Automatic Parking…")
+            context.startActivity(PremiumWidgetIntents.openAutoParkSettings(context))
+            return
+        }
+        val enabling = wantsToEnable
         prefs.edit().putBoolean(MOTION_AUTOPARK_ENABLED_PREF, enabling).commit()
         if (enabling) {
-            val mac = loadAutoParkCarMac(prefs)
-            if (mac != null) startMotionWatch(context, prefs, mac)
+            // Match home / Automatic Parking settings: arm every linked vehicle MAC (plus legacy
+            // single-MAC prefs), not only loadAutoParkCarMac — multi-vehicle installs otherwise
+            // stayed unarmed until the next ACL connect.
+            val db = AppDatabase.getDatabase(context)
+            val linkedMacs = db.vehicleDao().getAllList()
+                .asSequence()
+                .filter { !it.isArchived && !it.bluetoothMac.isNullOrBlank() }
+                .mapNotNull { it.bluetoothMac }
+                .toList()
+            linkedMacs.forEach { armMotionWatchIfAlreadyConnected(context, it) }
+            loadAutoParkCarMac(prefs)?.let { armMotionWatchIfAlreadyConnected(context, it) }
         } else {
             stopMotionWatch(context, prefs)
         }
@@ -60,9 +90,8 @@ class ToggleMotionActionCallback : ActionCallback {
         }
         PremiumGlanceWidget().update(context, glanceId)
         WidgetFeedback.tick(context)
-        when {
-            enabling -> WidgetFeedback.toast(context, "Motion on")
-            wantsToEnable && !enabling -> WidgetFeedback.toast(context, "Motion needs permission")
+        if (enabling) {
+            WidgetFeedback.toast(context, "Motion on")
         }
         WidgetThemeHelper.refreshAllWidgets(context)
     }
@@ -74,10 +103,10 @@ class FoundActionCallback : ActionCallback {
         glanceId: GlanceId,
         parameters: ActionParameters
     ) {
-        val intent = Intent(context, QuickActionRelayActivity::class.java).apply {
-            putExtra(QuickActionRelayActivity.EXTRA_ACTION, QuickActionRelayActivity.ACTION_FOUND)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent = QuickActionRelayActivity.intentForAction(
+            context,
+            QuickActionRelayActivity.ACTION_FOUND
+        )
         context.startActivity(intent)
     }
 }

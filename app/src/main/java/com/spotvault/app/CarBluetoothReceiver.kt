@@ -5,9 +5,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Binder
 import android.os.Build
+import android.os.Process
 
 private const val CONNECTED_AT_PREF_PREFIX = "bt_connected_at_"
+internal const val AUTO_PARK_PENDING_SPOT_PREF_PREFIX = "auto_park_pending_spot_"
 
 /** True if [mac] is currently marked connected in [CarBluetoothReceiver]'s own per-device
  * tracking — i.e. it reconnected some time after whatever disconnect triggered the caller's
@@ -17,6 +20,31 @@ private const val CONNECTED_AT_PREF_PREFIX = "bt_connected_at_"
  * this is the backstop for whenever it doesn't. */
 internal fun isMacCurrentlyConnected(prefs: SharedPreferences, mac: String): Boolean =
     prefs.contains(CONNECTED_AT_PREF_PREFIX + mac.uppercase())
+
+/**
+ * Drops per-MAC auto-park prefs whose MAC no longer belongs to any active vehicle — pairing
+ * changes over years otherwise leave `bt_connected_at_*` / `auto_park_pending_spot_*` keys
+ * accumulating forever in SpotVaultPrefs.
+ */
+fun pruneStaleAutoParkMacPrefs(prefs: SharedPreferences, activeMacs: Collection<String>) {
+    val keep = activeMacs.mapNotNull { it.takeIf { m -> m.isNotBlank() }?.uppercase() }.toSet()
+    val editor = prefs.edit()
+    var changed = false
+    prefs.all.keys.forEach { key ->
+        val mac = when {
+            key.startsWith(CONNECTED_AT_PREF_PREFIX) ->
+                key.removePrefix(CONNECTED_AT_PREF_PREFIX)
+            key.startsWith(AUTO_PARK_PENDING_SPOT_PREF_PREFIX) ->
+                key.removePrefix(AUTO_PARK_PENDING_SPOT_PREF_PREFIX)
+            else -> return@forEach
+        }
+        if (mac !in keep) {
+            editor.remove(key)
+            changed = true
+        }
+    }
+    if (changed) editor.apply()
+}
 
 // The minimum-hold-duration threshold itself now lives in AutoParkingStore
 // (loadBtDisconnectConfirmSeconds) — user-adjustable in Automatic Parking settings, 8s by
@@ -45,6 +73,10 @@ class CarBluetoothReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action
         if (action != BluetoothDevice.ACTION_ACL_DISCONNECTED && action != BluetoothDevice.ACTION_ACL_CONNECTED) return
+        // Exported so the system Bluetooth stack can deliver ACL events while the process is
+        // dead — but any app can also forge an explicit Intent with EXTRA_DEVICE. Reject
+        // non-system / non-Bluetooth senders so a third party can't enqueue Auto-Park saves.
+        if (!isTrustedBluetoothBroadcastSender(context)) return
 
         val appContext = context.applicationContext
         val prefs = appContext.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
@@ -90,6 +122,10 @@ class CarBluetoothReceiver : BroadcastReceiver() {
         if (adapterState == android.bluetooth.BluetoothAdapter.STATE_OFF ||
             adapterState == android.bluetooth.BluetoothAdapter.STATE_TURNING_OFF
         ) {
+            // Still drop this device's connect bookkeeping — leaving bt_connected_at_* behind on
+            // every adapter power-off accumulated forever across years of pairing with any
+            // peripheral while Auto Park was on. Do not enqueue a park save (that would false-fire).
+            prefs.edit().remove(connectedAtKey).apply()
             return
         }
 
@@ -131,6 +167,19 @@ class CarBluetoothReceiver : BroadcastReceiver() {
             null
         }
         enqueueAutoParkWork(appContext, mac, cachedLocation)
+    }
+}
+
+/** True when the delivering UID is the system, this app, or a package that owns Bluetooth. */
+private fun isTrustedBluetoothBroadcastSender(context: Context): Boolean {
+    val uid = Binder.getCallingUid()
+    if (uid == Process.SYSTEM_UID || uid == Process.myUid()) return true
+    val packages = context.packageManager.getPackagesForUid(uid) ?: return false
+    return packages.any { pkg ->
+        pkg == "com.android.bluetooth" ||
+            pkg.startsWith("com.android.bluetooth.") ||
+            pkg == "com.google.android.bluetooth" ||
+            pkg.endsWith(".bluetooth")
     }
 }
 

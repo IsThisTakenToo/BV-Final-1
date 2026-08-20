@@ -98,6 +98,21 @@ data class LocationWithTags(
     val tags: List<TagEntity>
 )
 
+/** Lightweight tag assignment row — avoids reloading every [LocationSpot] via @Relation just to
+ * build a spot→tags map for Vault filtering (the Vault already collects spots separately). */
+data class SpotTagAssignment(
+    val locationId: Int,
+    val tagId: Int,
+    val name: String,
+    val usageCount: Int
+)
+
+fun List<SpotTagAssignment>.toTagsBySpotId(): Map<Int, List<TagEntity>> =
+    groupBy { it.locationId }.mapValues { (_, rows) ->
+        rows.map { TagEntity(id = it.tagId, name = it.name, usageCount = it.usageCount) }
+            .distinctBy { it.id }
+    }
+
 @Entity(
     tableName = "spot_photos",
     foreignKeys = [
@@ -181,10 +196,240 @@ interface VehicleDao {
     suspend fun deleteAll()
 }
 
+/** Lightweight GROUP BY row for Location Browser state/city lists. */
+data class NamedCount(
+    val name: String,
+    val count: Int
+)
+
+/** Cover path for Auto Delete hard-purge — avoids loading full notes. */
+data class DeletedSpotCover(
+    val id: Int,
+    val imagePath: String
+)
+
+/** Coords-only row for smart dedup distance checks. */
+data class SpotCoords(
+    val id: Int,
+    val lat: Double,
+    val lng: Double
+)
+
+/** Fingerprint row: spot id ↔ tag name without loading full tag entities per spot. */
+data class SpotTagNameRow(
+    val locationId: Int,
+    val name: String
+)
+
+/** Dedup signature without loading notes — used during backup import merge checks. */
+data class SpotSignatureRow(
+    val timestamp: Long,
+    val lat: Double,
+    val lng: Double
+)
+
+/**
+ * Notes-free fingerprint projection — prefix/suffix + length catch notepad edits without
+ * holding every full 50k note body in RAM at once.
+ */
+data class SpotFingerprintRow(
+    val id: Int,
+    val imagePath: String,
+    val notesLength: Int,
+    val notesPrefix: String,
+    val notesSuffix: String,
+    val timestamp: Long,
+    val lat: Double,
+    val lng: Double,
+    val address: String,
+    val isFavorite: Boolean,
+    val title: String,
+    val isWishlist: Boolean,
+    val isVisited: Boolean,
+    val deletedAt: Long?,
+    val vehicleId: Int?,
+    val city: String,
+    val state: String,
+    val isArchived: Boolean,
+    val isPinned: Boolean
+)
+
 @Dao
 interface LocationDao {
     @Query("SELECT * FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 ORDER BY timestamp DESC")
     fun getAllHistory(): Flow<List<LocationSpot>>
+
+    /**
+     * Notes-stripped active vault rows for browse UI. Only a short `locationDetails` prefix is
+     * kept so list/edit previews still work without holding multi-KB notepads in RAM; full notes
+     * are loaded via [getSpotById] on save.
+     */
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+        ORDER BY timestamp DESC
+        """
+    )
+    suspend fun getActiveVaultSpotsForBrowse(): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getActiveVaultSpotsForBrowseCapped(limit: Int): List<LocationSpot>
+
+    /** Timestamps only — calendar month dots must not pull every spot row into RAM. */
+    @Query(
+        """
+        SELECT timestamp FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+        """
+    )
+    suspend fun getActiveVaultTimestamps(): List<Long>
+
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+          AND timestamp >= :dayStart AND timestamp < :dayEnd
+        ORDER BY timestamp DESC
+        LIMIT 3000
+        """
+    )
+    suspend fun getActiveVaultSpotsForDay(dayStart: Long, dayEnd: Long): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND isFavorite = 1
+        ORDER BY timestamp DESC
+        LIMIT 3000
+        """
+    )
+    suspend fun getFavoriteVaultSpotsForBrowse(): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END AS name,
+               COUNT(*) AS count
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+        GROUP BY CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END
+        ORDER BY name COLLATE NOCASE ASC
+        """
+    )
+    suspend fun getActiveStateCounts(): List<NamedCount>
+
+    @Query(
+        """
+        SELECT CASE WHEN length(trim(city)) = 0 THEN 'Unknown' ELSE city END AS name,
+               COUNT(*) AS count
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+          AND CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END = :state
+        GROUP BY CASE WHEN length(trim(city)) = 0 THEN 'Unknown' ELSE city END
+        ORDER BY name COLLATE NOCASE ASC
+        """
+    )
+    suspend fun getActiveCityCounts(state: String): List<NamedCount>
+
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+          AND CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END = :state
+          AND CASE WHEN length(trim(city)) = 0 THEN 'Unknown' ELSE city END = :city
+        ORDER BY timestamp DESC
+        LIMIT 3000
+        """
+    )
+    suspend fun getActiveVaultSpotsForCity(state: String, city: String): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT * FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0
+          AND city = '' AND state = ''
+          AND (lat != 0 OR lng != 0)
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getSpotsNeedingAddressResolution(limit: Int): List<LocationSpot>
+
+    @Query("SELECT COUNT(*) FROM location_history")
+    suspend fun countAllSpotsIncludingDeleted(): Int
+
+    @Query("SELECT timestamp, lat, lng FROM location_history")
+    suspend fun getAllSpotSignatureRows(): List<SpotSignatureRow>
+
+    @Query("SELECT id FROM location_history ORDER BY timestamp DESC")
+    suspend fun getAllSpotIdsOrdered(): List<Int>
+
+    @Query(
+        """
+        SELECT id, imagePath,
+               length(locationDetails) AS notesLength,
+               substr(locationDetails, 1, 64) AS notesPrefix,
+               CASE WHEN length(locationDetails) <= 64 THEN ''
+                    ELSE substr(locationDetails, length(locationDetails) - 63, 64) END AS notesSuffix,
+               timestamp, lat, lng, address, isFavorite, title, isWishlist, isVisited, deletedAt,
+               vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        ORDER BY id ASC
+        """
+    )
+    suspend fun getAllSpotFingerprintRows(): List<SpotFingerprintRow>
+
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getActiveVaultSpotsNewestPrefix(limit: Int): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+        ORDER BY timestamp ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getActiveVaultSpotsOldestPrefix(limit: Int): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND isPinned = 1
+        ORDER BY timestamp DESC
+        """
+    )
+    suspend fun getPinnedVaultSpotsForBrowse(): List<LocationSpot>
 
     /** Live single-spot observation — the full-screen viewer uses this so a photo attached from
      * its own "Add Photo" button (imagePath goes from blank to set) shows up immediately instead
@@ -205,6 +450,14 @@ interface LocationDao {
 
     @Query("SELECT * FROM location_history ORDER BY timestamp DESC")
     suspend fun getAllHistoryIncludingDeleted(): List<LocationSpot>
+
+    /** Cover JPEG paths only — used by orphan-photo sweep (avoids loading full spot rows + notes). */
+    @Query("SELECT imagePath FROM location_history WHERE length(imagePath) > 0")
+    suspend fun getAllCoverImagePaths(): List<String>
+
+    /** Cover paths for Clear All (active + soft-deleted; archived kept forever). */
+    @Query("SELECT imagePath FROM location_history WHERE isArchived = 0 AND length(imagePath) > 0")
+    suspend fun getCoverImagePathsForClearAll(): List<String>
 
     @Update
     suspend fun updateSpot(spot: LocationSpot)
@@ -247,8 +500,41 @@ interface LocationDao {
     )
     suspend fun getFavoriteSpots(): List<LocationSpot>
 
-    @Query("SELECT * FROM location_history WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    /** Widget-only bound — Glance cannot safely materialize unbounded favorite rows + thumbnails. */
+    @Query(
+        """
+        SELECT * FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isFavorite = 1 AND isWishlist = 0
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getFavoriteSpotsNewest(limit: Int): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT * FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isFavorite = 1 AND isWishlist = 0
+        ORDER BY timestamp ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getFavoriteSpotsOldest(limit: Int): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NOT NULL
+        ORDER BY deletedAt DESC
+        LIMIT 3000
+        """
+    )
     suspend fun getRecentlyDeleted(): List<LocationSpot>
+
+    @Query("SELECT COUNT(*) FROM location_history WHERE deletedAt IS NOT NULL")
+    suspend fun countRecentlyDeleted(): Int
 
     @Query("UPDATE location_history SET deletedAt = :now WHERE id = :spotId")
     suspend fun softDeleteSpot(spotId: Int, now: Long = System.currentTimeMillis())
@@ -256,12 +542,29 @@ interface LocationDao {
     @Query("UPDATE location_history SET deletedAt = NULL WHERE id = :spotId")
     suspend fun restoreSpot(spotId: Int)
 
+    /** Undo-safe restore — no-ops if the row was permanently purged or already restored. */
+    suspend fun restoreSpotIfSoftDeleted(spotId: Int): Boolean {
+        val spot = getSpotById(spotId) ?: return false
+        if (spot.deletedAt == null) return false
+        restoreSpot(spotId)
+        return true
+    }
+
     @Query("UPDATE location_history SET deletedAt = NULL WHERE deletedAt IS NOT NULL")
     suspend fun restoreAllDeleted()
 
     // Archived spots are hidden from the main Vault but kept forever (no auto-purge), unlike
     // deletedAt's "Recently Deleted" flow.
-    @Query("SELECT * FROM location_history WHERE isArchived = 1 ORDER BY timestamp DESC")
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE isArchived = 1
+        ORDER BY timestamp DESC
+        LIMIT 3000
+        """
+    )
     suspend fun getArchivedSpots(): List<LocationSpot>
 
     @Query("UPDATE location_history SET isArchived = 1 WHERE id = :spotId")
@@ -270,11 +573,33 @@ interface LocationDao {
     @Query("UPDATE location_history SET isArchived = 0 WHERE id = :spotId")
     suspend fun unarchiveSpot(spotId: Int)
 
+    /** Undo-safe unarchive — no-ops if the row was deleted forever or is no longer archived. */
+    suspend fun unarchiveSpotIfArchived(spotId: Int): Boolean {
+        val spot = getSpotById(spotId) ?: return false
+        if (!spot.isArchived) return false
+        unarchiveSpot(spotId)
+        return true
+    }
+
     @Query("UPDATE location_history SET isArchived = 0 WHERE isArchived = 1")
     suspend fun unarchiveAllSpots()
 
-    @Query("SELECT * FROM location_history WHERE deletedAt IS NOT NULL AND deletedAt < :cutoff")
-    suspend fun getDeletedOlderThan(cutoff: Long): List<LocationSpot>
+    @Query(
+        """
+        SELECT id, imagePath FROM location_history
+        WHERE deletedAt IS NOT NULL AND deletedAt < :cutoff
+        """
+    )
+    suspend fun getDeletedCoverPathsOlderThan(cutoff: Long): List<DeletedSpotCover>
+
+    @Query(
+        """
+        SELECT p.path FROM spot_photos AS p
+        INNER JOIN location_history AS s ON s.id = p.spotId
+        WHERE s.deletedAt IS NOT NULL AND s.deletedAt < :cutoff
+        """
+    )
+    suspend fun getExtraPhotoPathsDeletedOlderThan(cutoff: Long): List<String>
 
     @Query("DELETE FROM location_history WHERE deletedAt IS NOT NULL AND deletedAt < :cutoff")
     suspend fun purgeDeletedOlderThan(cutoff: Long)
@@ -285,11 +610,40 @@ interface LocationDao {
     @Query("UPDATE location_history SET isPinned = :pinned WHERE id = :spotId")
     suspend fun setPinned(spotId: Int, pinned: Boolean)
 
-    @Query("SELECT * FROM location_history WHERE timestamp < :timeThreshold")
-    suspend fun getSpotsOlderThan(timeThreshold: Long): List<LocationSpot>
+    /** Atomic flip — rapid taps before the Flow recomposes cannot apply the same polarity twice. */
+    @Query("UPDATE location_history SET isPinned = NOT isPinned WHERE id = :spotId")
+    suspend fun togglePinned(spotId: Int)
 
-    @Query("SELECT * FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND timestamp >= :sinceTimestamp ORDER BY timestamp DESC")
-    suspend fun getActiveSpotsSince(sinceTimestamp: Long): List<LocationSpot>
+    // A single-column UPDATE, not updateSpot(item.copy(isFavorite = ...)) — the swipe/card
+    // favorite toggle only ever had a possibly-stale in-memory LocationSpot to copy() from (the
+    // list's last recomposition), and copy()-ing a stale snapshot silently wrote every one of its
+    // other columns back too — including imagePath, which is exactly how a photo attached
+    // moments earlier could vanish again the next time someone tapped the favorite star.
+    @Query("UPDATE location_history SET isFavorite = :favorite WHERE id = :spotId")
+    suspend fun setFavorite(spotId: Int, favorite: Boolean)
+
+    @Query("UPDATE location_history SET isFavorite = NOT isFavorite WHERE id = :spotId")
+    suspend fun toggleFavorite(spotId: Int)
+
+    @Query(
+        """
+        SELECT id FROM location_history
+        WHERE timestamp < :cutoff
+          AND deletedAt IS NULL
+          AND isFavorite = 0
+          AND isWishlist = 0
+          AND isArchived = 0
+        """
+    )
+    suspend fun getAutoDeleteCandidateIds(cutoff: Long): List<Int>
+
+    @Query(
+        """
+        SELECT id, lat, lng FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND timestamp >= :sinceTimestamp
+        """
+    )
+    suspend fun getActiveSpotCoordsSince(sinceTimestamp: Long): List<SpotCoords>
 }
 
 @Dao
@@ -303,8 +657,31 @@ interface TagDao {
     fun getAllTags(): Flow<List<TagEntity>>
 
     @Transaction
-    @Query("SELECT * FROM location_history WHERE deletedAt IS NULL ORDER BY timestamp DESC")
+    @Query("SELECT * FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 ORDER BY timestamp DESC")
     fun getAllLocationsWithTags(): Flow<List<LocationWithTags>>
+
+    /** Active-vault tag assignments only — no embedded spot payload (see [SpotTagAssignment]). */
+    @Query(
+        """
+        SELECT ref.locationId AS locationId, tags.id AS tagId, tags.name AS name, tags.usageCount AS usageCount
+        FROM location_tag_cross_ref AS ref
+        INNER JOIN tags ON tags.id = ref.tagId
+        INNER JOIN location_history AS spot ON spot.id = ref.locationId
+        WHERE spot.deletedAt IS NULL AND spot.isArchived = 0 AND spot.isWishlist = 0
+        ORDER BY tags.name COLLATE NOCASE ASC
+        """
+    )
+    fun observeActiveSpotTagAssignments(): Flow<List<SpotTagAssignment>>
+
+    @Query(
+        """
+        SELECT ref.locationId AS locationId, tags.name AS name
+        FROM location_tag_cross_ref AS ref
+        INNER JOIN tags ON tags.id = ref.tagId
+        ORDER BY ref.locationId ASC, tags.name COLLATE NOCASE ASC
+        """
+    )
+    suspend fun getAllSpotTagNames(): List<SpotTagNameRow>
 
     /** One-shot spot list for the Tag Filter widget's selected tags — every spot carrying at
      * least one of [tagIds], deduplicated (DISTINCT) so a spot matching more than one selected
@@ -319,6 +696,28 @@ interface TagDao {
         """
     )
     suspend fun getSpotsForTags(tagIds: List<Int>): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT DISTINCT location_history.* FROM location_history
+        INNER JOIN location_tag_cross_ref ON location_history.id = location_tag_cross_ref.locationId
+        WHERE location_tag_cross_ref.tagId IN (:tagIds) AND location_history.deletedAt IS NULL AND location_history.isArchived = 0
+        ORDER BY location_history.timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getSpotsForTagsNewest(tagIds: List<Int>, limit: Int): List<LocationSpot>
+
+    @Query(
+        """
+        SELECT DISTINCT location_history.* FROM location_history
+        INNER JOIN location_tag_cross_ref ON location_history.id = location_tag_cross_ref.locationId
+        WHERE location_tag_cross_ref.tagId IN (:tagIds) AND location_history.deletedAt IS NULL AND location_history.isArchived = 0
+        ORDER BY location_history.timestamp ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getSpotsForTagsOldest(tagIds: List<Int>, limit: Int): List<LocationSpot>
 
     @Query("SELECT * FROM tags ORDER BY name COLLATE NOCASE ASC")
     suspend fun getAllTagsList(): List<TagEntity>
@@ -336,6 +735,18 @@ interface TagDao {
         """
     )
     fun getTagsForSpotFlow(spotId: Int): Flow<List<TagEntity>>
+
+    /** One-shot version of [getTagsForSpotFlow] — used by backup export, which runs outside
+     * Compose and just needs a single snapshot per spot, not an ongoing subscription. */
+    @Query(
+        """
+        SELECT tags.* FROM tags
+        INNER JOIN location_tag_cross_ref ON tags.id = location_tag_cross_ref.tagId
+        WHERE location_tag_cross_ref.locationId = :spotId
+        ORDER BY tags.name COLLATE NOCASE ASC
+        """
+    )
+    suspend fun getTagsForSpot(spotId: Int): List<TagEntity>
 
     /** Creates a tag with zero spots attached yet — used by "+ New Tag" entry points (the tag
      * filter sheet, the tag manager) where the user wants a tag to exist before assigning it to
@@ -450,6 +861,21 @@ interface SpotPhotoDao {
     @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC")
     suspend fun getForSpot(spotId: Int): List<SpotPhoto>
 
+    @Query("SELECT * FROM spot_photos ORDER BY spotId ASC, id ASC")
+    suspend fun getAllPhotos(): List<SpotPhoto>
+
+    @Query("SELECT path FROM spot_photos")
+    suspend fun getAllPhotoPaths(): List<String>
+
+    @Query(
+        """
+        SELECT p.path FROM spot_photos AS p
+        INNER JOIN location_history AS s ON s.id = p.spotId
+        WHERE s.isArchived = 0
+        """
+    )
+    suspend fun getPhotoPathsForClearAll(): List<String>
+
     @Insert
     suspend fun insert(photo: SpotPhoto): Long
 
@@ -462,7 +888,7 @@ interface SpotPhotoDao {
         LocationSpot::class, Vehicle::class, SpotPhoto::class,
         TagEntity::class, LocationTagCrossRef::class
     ],
-    version = 17,
+    version = 18,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -655,6 +1081,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_17_18 = object : androidx.room.migration.Migration(17, 18) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Browse filters always use deletedAt + isArchived + isWishlist + timestamp/pinned.
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_location_history_browse ON location_history(deletedAt, isArchived, isWishlist, timestamp)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_location_history_isPinned ON location_history(isPinned)"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             // The inner check matters: without it, two threads that both observe INSTANCE == null
             // before either enters the synchronized block would — once serialized by the lock —
@@ -667,7 +1105,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "spotvault_database"
-                ).addMigrations(MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
+                ).addMigrations(MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
                     // Destructive fallback only on a *downgrade* (schema version decreases —
                     // realistically only a dev/debug scenario, never an organic user update). A
                     // forward schema bump with no matching Migration now crashes loudly instead
@@ -691,7 +1129,10 @@ abstract class AppDatabase : RoomDatabase() {
                             // tag anywhere in the app has no reason to know that widget exists.
                             object : InvalidationTracker.Observer("location_history", "tags", "location_tag_cross_ref") {
                                 override fun onInvalidated(tables: Set<String>) {
-                                    WidgetThemeHelper.refreshAllWidgets(appContext)
+                                    // Debounced — Vault edits can invalidate these tables many
+                                    // times in one user action; the full widget refresh chain is
+                                    // expensive and doesn't need to restart on every write.
+                                    WidgetThemeHelper.refreshAllWidgetsDebounced(appContext)
                                 }
                             }
                         )

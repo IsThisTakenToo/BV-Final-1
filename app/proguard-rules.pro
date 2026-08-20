@@ -39,12 +39,6 @@
 -keep class com.spotvault.app.*Widget { *; }
 -keep class com.spotvault.app.PremiumGlanceWidget { *; }
 -keep class com.spotvault.app.PremiumGlanceWidgetReceiver { *; }
--keep class com.spotvault.app.SmallOutdoorWidget { *; }
--keep class com.spotvault.app.SmallOutdoorWidgetReceiver { *; }
--keep class com.spotvault.app.MediumOutdoorWidget { *; }
--keep class com.spotvault.app.MediumOutdoorWidgetReceiver { *; }
--keep class com.spotvault.app.BadassCommandCenterWidget { *; }
--keep class com.spotvault.app.BadassCommandCenterWidgetReceiver { *; }
 -keep class com.spotvault.app.WatchdogWorker { *; }
 
 # WorkManager
@@ -74,14 +68,6 @@
 -keep class androidx.credentials.playservices.** { *; }
 -keep class com.google.android.libraries.identity.googleid.** { *; }
 -dontwarn com.google.android.libraries.identity.googleid.**
-
-# OSMDroid (OpenStreetMap tiles + MapView)
--keep class org.osmdroid.** { *; }
--dontwarn org.osmdroid.**
-
-# OSMBonusPack (marker clustering, utilities)
--keep class org.osmdroid.bonuspack.** { *; }
--dontwarn org.osmdroid.bonuspack.**
 
 # BiometricPrompt
 -keep class androidx.biometric.** { *; }

@@ -4159,8 +4159,12 @@ fun VaultIconStylePicker(
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         val seasonallySortedVaultIconStyles = getSeasonallySortedItems(VaultIconStyles) { it.activeMonths }
+        // Same "gear" -> "maglock" migration already applied in MainActivity/PremiumGating — a
+        // raw comparison here would show no card highlighted for anyone whose stored id is still
+        // the retired one, same bug class already fixed for CompassStylePicker above.
+        val normalizedSelectedStyle = if (selectedStyle == "gear") "maglock" else selectedStyle
         seasonallySortedVaultIconStyles.forEach { (id, title, subtitle) ->
-            val isSelected = selectedStyle == id
+            val isSelected = normalizedSelectedStyle == id
             val locked = isLocked(id)
             Box(modifier = Modifier.width(108.dp)) {
             Column(

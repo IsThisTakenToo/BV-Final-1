@@ -77,17 +77,44 @@ enum class SplashStyle(val id: String, val label: String, val description: Strin
     }
 }
 
-fun SplashStyle.effectDurationMillis(): Long = when (this) {
-    SplashStyle.NONE -> 0L
-    SplashStyle.DEFAULT -> 0L
-    SplashStyle.SIGNAL_FORGE -> 1500L
-    SplashStyle.VAULT_DOOR -> 1520L
-    SplashStyle.RADAR -> 1480L
-    SplashStyle.TRIANGULATE -> 1500L
-    SplashStyle.SIGNAL_STORM -> 1520L
-    SplashStyle.VAULT_BLOOM -> 1550L
-    SplashStyle.HALLOWEEN -> 1380L
-    SplashStyle.CHRISTMAS -> 1380L
+fun SplashStyle.effectDurationMillis(): Long {
+    // Reduce Animations previously had zero effect here — every other animated system in the
+    // app (buttons, background patterns, the compass dial, and critically the Found celebration
+    // screen right next to this setting in Settings) shortens or freezes under this flag, but
+    // the launch splash's full 1.4-2.4s particle intro played in full on literally every cold
+    // launch regardless. Same flat, short cap FoundSplashScreens' celebration already uses under
+    // this setting — still visible, not the full effect. totalDisplayMillis() below calls this
+    // function too, so the outer "how long the splash stays up" delay shrinks along with it from
+    // this one place, no separate check needed there. Low-RAM devices get the same short window
+    // so Canvas-heavy styles don't stay on screen thrashing under memory pressure.
+    if ((ThemeState.reduceAnimations || ThemeState.lowRamDevice) &&
+        this != SplashStyle.NONE && this != SplashStyle.DEFAULT
+    ) {
+        return 900L
+    }
+    return when (this) {
+        SplashStyle.NONE -> 0L
+        SplashStyle.DEFAULT -> 0L
+        SplashStyle.SIGNAL_FORGE -> 1500L
+        SplashStyle.VAULT_DOOR -> 1520L
+        SplashStyle.RADAR -> 1480L
+        SplashStyle.TRIANGULATE -> 1500L
+        SplashStyle.SIGNAL_STORM -> 1520L
+        SplashStyle.VAULT_BLOOM -> 1550L
+        SplashStyle.HALLOWEEN -> 1380L
+        SplashStyle.CHRISTMAS -> 1380L
+    }
+}
+
+/** Scales dense Canvas loop counts under Reduce Animations / low-RAM — same style, fewer draws. */
+fun splashLoopCount(full: Int): Int {
+    val scale = when {
+        ThemeState.reduceAnimations -> 0.35f
+        ThemeState.lowRamDevice -> 0.5f
+        else -> 1f
+    }
+    if (scale >= 0.99f) return full
+    return (full * scale).toInt().coerceAtLeast(if (full <= 3) full else 3)
 }
 
 fun SplashStyle.totalDisplayMillis(): Long = when (this) {
@@ -432,7 +459,7 @@ private fun SignalForgeSplashEffect(progress: Float, modifier: Modifier = Modifi
             }
 
             if (helixPhase > 0.2f && strikePhase < 0.85f) {
-                for (p in 0 until 14) {
+                for (p in 0 until splashLoopCount(14)) {
                     val local = ((helixPhase - 0.2f - p * 0.03f) / 0.65f).coerceIn(0f, 1f)
                     if (local <= 0f) continue
                     val angle = (p * 25.7f + progress * 140f) * PI.toFloat() / 180f
@@ -457,7 +484,7 @@ private fun DrawScope.drawSplashForgeEmberField(
     primary: Color,
     accent: Color
 ) {
-    for (i in 0 until 28) {
+    for (i in 0 until splashLoopCount(28)) {
         val seed = i * 17.3f
         val rise = ((phase * 1.15f - (i % 7) * 0.04f)).coerceIn(0f, 1f)
         if (rise <= 0f) continue
@@ -543,7 +570,7 @@ private fun DrawScope.drawSplashForgeHelix(
         style = Stroke(width = 1.4f, cap = StrokeCap.Round)
     )
 
-    for (spark in 0 until 10) {
+    for (spark in 0 until splashLoopCount(10)) {
         val t = ((phase * 1.05f - spark * 0.07f)).coerceIn(0f, 1f)
         if (t <= 0.05f) continue
         val angle = (t * 720f * direction + progress * 52f * direction) * PI.toFloat() / 180f
@@ -753,7 +780,7 @@ private fun DrawScope.drawSplashForgeSparkShower(
     primary: Color,
     accent: Color
 ) {
-    for (i in 0 until 24) {
+    for (i in 0 until splashLoopCount(24)) {
         val delay = (i % 6) * 0.04f
         val local = ((phase - delay) / 0.88f).coerceIn(0f, 1f)
         if (local <= 0f) continue
@@ -968,7 +995,7 @@ private fun DrawScope.drawSplashVaultDoorFrame(
         center = center,
         style = Stroke(width = 2f)
     )
-    for (rivet in 0 until 12) {
+    for (rivet in 0 until splashLoopCount(12)) {
         rotate(rivet * 30f, pivot = center) {
             val rivetPos = center + Offset(0f, -doorRadius * 1.08f)
             drawCircle(
@@ -1047,7 +1074,7 @@ private fun DrawScope.drawSplashVaultDial(
             center = center,
             style = Stroke(width = 2.8f)
         )
-        for (tick in 0 until 24) {
+        for (tick in 0 until splashLoopCount(24)) {
             // Capping the threshold at phase * 0.85f (rather than just phase) left the last 3 of
             // 24 ticks permanently unlit even once the dial finished its sequence at phase = 1.
             val lit = tick / 24f <= phase
@@ -1105,7 +1132,7 @@ private fun DrawScope.drawSplashVaultBolts(
     primary: Color,
     accent: Color
 ) {
-    for (bolt in 0 until 8) {
+    for (bolt in 0 until splashLoopCount(8)) {
         val delay = bolt * 0.08f
         val local = splashSmoothStep(((phase - delay) / 0.78f).coerceIn(0f, 1f))
         if (local <= 0f) continue
@@ -1301,7 +1328,7 @@ private fun RadarSplashEffect(progress: Float, modifier: Modifier = Modifier) {
 
             if (sweepPhase > 0.15f && lockPhase < 0.9f) {
                 rotate(progress * 18f, pivot = center) {
-                    for (tick in 0 until 36) {
+                    for (tick in 0 until splashLoopCount(36)) {
                         val tickAngle = tick * 10f
                         rotate(tickAngle, pivot = center) {
                             val tickAlpha = sweepPhase * 0.35f * crtFlicker
@@ -1699,7 +1726,7 @@ private fun TriangulateSplashEffect(progress: Float, modifier: Modifier = Modifi
             }
 
             if (trianglePhase > 0.45f && lockPhase < 0.85f) {
-                for (node in 0 until 9) {
+                for (node in 0 until splashLoopCount(9)) {
                     val edgeT = ((trianglePhase - 0.45f) * 1.4f + node * 0.09f) % 1f
                     val edgeIndex = node % 3
                     val start = towers[edgeIndex]
@@ -1754,7 +1781,7 @@ private fun DrawScope.drawSplashTriangulateStarField(
     progress: Float,
     tint: Color
 ) {
-    for (i in 0 until 18) {
+    for (i in 0 until splashLoopCount(18)) {
         val seed = i * 23.7f
         val x = center.x + cos(seed) * spread * (0.25f + (i % 5) * 0.14f)
         val y = center.y + sin(seed * 1.3f) * spread * (0.22f + (i % 4) * 0.12f)
@@ -2067,7 +2094,7 @@ private fun SignalStormSplashEffect(progress: Float, modifier: Modifier = Modifi
                         flicker = stormFlicker
                     )
                 }
-                for (particle in 0 until 22) {
+                for (particle in 0 until splashLoopCount(22)) {
                     val seed = particle * 19.4f
                     val orbit = ionPhase * (1.05f + (particle % 4) * 0.08f)
                     val angle = (seed + progress * (140f + particle * 8f)) * PI.toFloat() / 180f
@@ -2155,7 +2182,7 @@ private fun SignalStormSplashEffect(progress: Float, modifier: Modifier = Modifi
                     )
                 }
 
-                for (spark in 0 until 20) {
+                for (spark in 0 until splashLoopCount(20)) {
                     val delay = (spark % 5) * 0.04f
                     val local = ((eruptPhase - delay) / 0.85f).coerceIn(0f, 1f)
                     if (local <= 0f) continue
@@ -2181,7 +2208,7 @@ private fun DrawScope.drawSplashStormStaticField(
     progress: Float,
     tint: Color
 ) {
-    for (line in 0 until 8) {
+    for (line in 0 until splashLoopCount(8)) {
         val y = center.y - extent + ((progress * 2.2f + line * 0.12f) % 1f) * extent * 2f
         drawLine(
             color = tint.copy(alpha = 0.07f * phase),
@@ -2414,7 +2441,7 @@ private fun VaultBloomSplashEffect(progress: Float, modifier: Modifier = Modifie
             }
 
             if (bloomPhase > 0f) {
-                for (i in 0 until 8) {
+                for (i in 0 until splashLoopCount(8)) {
                     val delay = i * 0.07f
                     val local = splashSmoothStep(((bloomPhase - delay) / 0.78f).coerceIn(0f, 1f))
                     if (local <= 0f) continue
@@ -2638,7 +2665,7 @@ private fun DrawScope.drawSplashBloomStamen(
     accent: Color,
     flicker: Float
 ) {
-    for (i in 0 until 8) {
+    for (i in 0 until splashLoopCount(8)) {
         val filament = splashSmoothStep(((phase - i * 0.05f) / 0.75f).coerceIn(0f, 1f))
         if (filament <= 0f) continue
         rotate(i * 45f, pivot = center) {
@@ -2690,7 +2717,7 @@ private fun DrawScope.drawSplashBloomPollenBurst(
             style = Stroke(width = (2.4f - ring * 0.5f).coerceAtLeast(1f))
         )
     }
-    for (mote in 0 until 24) {
+    for (mote in 0 until splashLoopCount(24)) {
         val delay = (mote % 6) * 0.04f
         val local = ((phase - delay) / 0.85f).coerceIn(0f, 1f)
         if (local <= 0f) continue
@@ -2743,7 +2770,7 @@ private fun DrawScope.drawSplashBloomBuzzTrail(
             style = Stroke(width = 3.2f, cap = StrokeCap.Round)
         )
     }
-    for (streak in 0 until 8) {
+    for (streak in 0 until splashLoopCount(8)) {
         val local = ((phase - streak * 0.06f) / 0.80f).coerceIn(0f, 1f)
         if (local <= 0f) continue
         val angle = (streak * 45f + progress * 140f) * PI.toFloat() / 180f
@@ -2761,7 +2788,7 @@ private fun DrawScope.drawSplashBloomBuzzTrail(
 
 private fun DrawScope.drawSplashHalloweenCobweb(origin: Offset, span: Float, alpha: Float, mirror: Boolean) {
     val baseAngle = if (mirror) 135f else 45f
-    for (spoke in 0 until 8) {
+    for (spoke in 0 until splashLoopCount(8)) {
         val angle = (baseAngle + spoke * 13f) * PI.toFloat() / 180f
         drawLine(
             color = Color.White.copy(alpha = alpha * (0.5f + spoke * 0.06f)),
@@ -2949,7 +2976,7 @@ private fun HalloweenSplashEffect(progress: Float, modifier: Modifier = Modifier
             if (portalPhase > 0f) {
                 rotate(progress * 115f, pivot = center) {
                     val candy = listOf(Color.White, Color(0xFFFF9100), Color(0xFFFFEB3B))
-                    for (seg in 0 until 14) {
+                    for (seg in 0 until splashLoopCount(14)) {
                         drawArc(
                             color = candy[seg % 3].copy(alpha = portalPhase * 0.92f),
                             startAngle = seg * (360f / 14f),
@@ -2964,7 +2991,7 @@ private fun HalloweenSplashEffect(progress: Float, modifier: Modifier = Modifier
             }
 
             if (ringPhase > 0f) {
-                for (ring in 0 until 8) {
+                for (ring in 0 until splashLoopCount(8)) {
                     val delay = ring * 0.065f
                     val local = ((ringPhase - delay) / 0.78f).coerceIn(0f, 1f)
                     if (local <= 0f) continue
@@ -2985,7 +3012,7 @@ private fun HalloweenSplashEffect(progress: Float, modifier: Modifier = Modifier
             }
 
             if (portalPhase > 0.10f) {
-                for (b in 0 until 10) {
+                for (b in 0 until splashLoopCount(10)) {
                     val local = ((portalPhase - 0.10f - b * 0.035f) / 0.62f).coerceIn(0f, 1f)
                     if (local <= 0f) continue
                     val angle = (b * 36f + progress * 220f) * PI.toFloat() / 180f
@@ -3075,7 +3102,7 @@ private fun DrawScope.drawSplashChristmasOrnamentPortal(center: Offset, radius: 
 }
 
 private fun DrawScope.drawSplashChristmasNorthStar(center: Offset, outerR: Float, rayPhase: Float, alpha: Float) {
-    for (ray in 0 until 8) {
+    for (ray in 0 until splashLoopCount(8)) {
         val rayLen = outerR * (0.6f + rayPhase * 0.85f)
         val angle = (ray * 45f - 90f) * PI.toFloat() / 180f
         drawLine(
@@ -3148,7 +3175,7 @@ private fun ChristmasSplashEffect(progress: Float, modifier: Modifier = Modifier
 
             if (portalPhase > 0f) {
                 rotate(progress * 110f, pivot = center) {
-                    for (seg in 0 until 14) {
+                    for (seg in 0 until splashLoopCount(14)) {
                         drawArc(
                             color = (if (seg % 2 == 0) Color(0xFFE0233D) else Color.White).copy(alpha = portalPhase * 0.92f),
                             startAngle = seg * (360f / 14f), sweepAngle = 360f / 14f, useCenter = false,
@@ -3189,7 +3216,7 @@ private fun ChristmasSplashEffect(progress: Float, modifier: Modifier = Modifier
             }
 
             for (layer in 0 until 3) {
-                for (s in 0 until 18) {
+                for (s in 0 until splashLoopCount(18)) {
                     val seed = s + layer * 80
                     val local = ((progress - (seed % 16) * 0.008f) / (0.9f + layer * 0.03f)).coerceIn(0f, 1f)
                     if (local <= 0f) continue

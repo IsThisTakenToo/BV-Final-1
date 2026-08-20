@@ -18,9 +18,7 @@ object ActiveTrackingHelper {
     fun pinnedCoordinates(context: Context): Pair<Double, Double>? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (!prefs.getBoolean("is_pinned", false)) return null
-        val lat = prefs.getFloat("lat", 0f).toDouble()
-        val lng = prefs.getFloat("lng", 0f).toDouble()
-        return lat to lng
+        return prefs.getCoord("lat") to prefs.getCoord("lng")
     }
 
     fun clearActiveTracking(context: Context, refreshWidgets: Boolean = true) {
@@ -103,4 +101,48 @@ object ActiveTrackingHelper {
             false
         }
     }
+}
+
+/**
+ * Active-tracking / motion coords used to be stored as Float (~meter error). Prefer a string
+ * double; still accept legacy float values so existing pins keep working.
+ */
+fun android.content.SharedPreferences.getCoord(key: String, default: Double = 0.0): Double {
+    getString(key, null)?.toDoubleOrNull()?.let { return it }
+    return try {
+        getFloat(key, default.toFloat()).toDouble()
+    } catch (_: ClassCastException) {
+        default
+    }
+}
+
+fun android.content.SharedPreferences.Editor.putCoord(key: String, value: Double): android.content.SharedPreferences.Editor {
+    remove(key)
+    return putString(key, value.toString())
+}
+
+/** Prefs/notification copy of notes — full notepad stays in Room only. */
+const val PINNED_PREFS_NOTES_MAX_CHARS = 800
+const val PINNED_PREFS_ADDRESS_MAX_CHARS = 400
+
+fun prefsSafeLocationDetails(notes: String): String = notes.take(PINNED_PREFS_NOTES_MAX_CHARS)
+
+fun prefsSafeAddress(address: String): String = address.take(PINNED_PREFS_ADDRESS_MAX_CHARS)
+
+/** Soft ceiling when copying a gallery pick into app storage before compress. */
+const val MAX_GALLERY_IMPORT_BYTES = 40L * 1024 * 1024
+
+fun java.io.InputStream.copyToLimited(out: java.io.OutputStream, maxBytes: Long): Long {
+    val buffer = ByteArray(64 * 1024)
+    var total = 0L
+    while (true) {
+        val read = read(buffer)
+        if (read < 0) break
+        total += read
+        if (total > maxBytes) {
+            throw java.io.IOException("Picked media exceeds the ${maxBytes / (1024 * 1024)} MB limit")
+        }
+        out.write(buffer, 0, read)
+    }
+    return total
 }

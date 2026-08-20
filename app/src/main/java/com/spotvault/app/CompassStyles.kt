@@ -134,29 +134,33 @@ fun VaultCompassDial(
     // compactPreview means this is a Settings-picker thumbnail, not the live compass screen —
     // freeze on a static frame there instead of subscribing to the infinite transition, same
     // fix as the other Appearance-screen preview swatches (background patterns, vault icon).
-    val pulsePhase = if (style == CompassStyle.BEACON_PULSE && !compactPreview) {
+    // State<Float>, not a `by`-delegated plain Float — reading .value only inside the Canvas
+    // draw block below (same fix, same reasoning as dialRotationDegrees/needleRotationDegrees
+    // above) instead of at this composable's own body scope. `by` here used to mean this whole
+    // composable — palette/style resolution included, not just the Canvas — recomposed on every
+    // single animation frame for as long as Beacon Pulse or Sci-Fi was selected, the exact bug
+    // the lambda-based dial/needle rotation already exists to avoid.
+    val pulsePhaseState = if (style == CompassStyle.BEACON_PULSE && !compactPreview) {
         val infinite = rememberInfiniteTransition(label = "compassPulse")
-        val phase by infinite.animateFloat(
+        infinite.animateFloat(
             initialValue = 0f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing), RepeatMode.Restart),
             label = "compassPulsePhase"
         )
-        phase
     } else {
-        0f
+        null
     }
-    val sweepPhase = if (style == CompassStyle.SCI_FI && !compactPreview) {
+    val sweepPhaseState = if (style == CompassStyle.SCI_FI && !compactPreview) {
         val infinite = rememberInfiniteTransition(label = "compassSweep")
-        val phase by infinite.animateFloat(
+        infinite.animateFloat(
             initialValue = 0f,
             targetValue = 360f,
             animationSpec = infiniteRepeatable(tween(4000, easing = LinearEasing), RepeatMode.Restart),
             label = "compassSweepPhase"
         )
-        phase
     } else {
-        0f
+        null
     }
 
     Canvas(modifier = modifier.padding(if (compactPreview) 8.dp else 18.dp)) {
@@ -164,6 +168,8 @@ fun VaultCompassDial(
         val radius = size.minDimension / 2f
         val dialDeg = dialRotationDegrees()
         val needleDeg = needleRotationDegrees()
+        val pulsePhase = pulsePhaseState?.value ?: 0f
+        val sweepPhase = sweepPhaseState?.value ?: 0f
 
         when (style) {
             CompassStyle.CLASSIC -> drawClassicCompass(center, radius, palette, dialDeg, needleDeg)
@@ -251,6 +257,18 @@ internal fun DrawScope.drawCardinalTicks(center: Offset, radius: Float, palette:
     }
 }
 
+// Reused across every call rather than allocated fresh per label — this runs every frame for as
+// long as the live compass screen (CompassNavigationScreen) is open and the heading is changing,
+// which for the app's core "find my car" flow can be the whole time a user is actually walking
+// with it open. Mutating one Paint's properties per label instead of `Paint().apply {}`-ing four
+// new ones every draw call removes real, measurable per-frame GC churn on the app's most
+// safety/UX-critical screen. Safe to share: Compose draw calls for a given frame run sequentially
+// on one thread, never concurrently.
+private val cardinalLabelPaint = android.graphics.Paint().apply {
+    textAlign = android.graphics.Paint.Align.CENTER
+    isAntiAlias = true
+}
+
 internal fun DrawScope.drawCardinalLabels(center: Offset, radius: Float, palette: CompassDialPalette) {
     val northSize = (radius * 0.24f).coerceIn(7.sp.toPx(), 18.sp.toPx())
     val otherSize = (radius * 0.19f).coerceIn(6.sp.toPx(), 14.sp.toPx())
@@ -265,14 +283,10 @@ internal fun DrawScope.drawCardinalLabels(center: Offset, radius: Float, palette
         val angleRad = Math.toRadians(angleDeg.toDouble())
         val pos = Offset(center.x + labelR * cos(angleRad).toFloat(), center.y + labelR * sin(angleRad).toFloat())
         drawContext.canvas.nativeCanvas.apply {
-            val paint = android.graphics.Paint().apply {
-                color = tint.toArgb()
-                textAlign = android.graphics.Paint.Align.CENTER
-                textSize = if (label == "N") northSize else otherSize
-                isFakeBoldText = label == "N"
-                isAntiAlias = true
-            }
-            drawText(label, pos.x, pos.y + paint.textSize * 0.35f, paint)
+            cardinalLabelPaint.color = tint.toArgb()
+            cardinalLabelPaint.textSize = if (label == "N") northSize else otherSize
+            cardinalLabelPaint.isFakeBoldText = label == "N"
+            drawText(label, pos.x, pos.y + cardinalLabelPaint.textSize * 0.35f, cardinalLabelPaint)
         }
     }
 }
@@ -1369,8 +1383,16 @@ fun CompassStylePicker(
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         val seasonallySortedStyles = getSeasonallySortedItems(CompassStyle.entries) { it.activeMonths }
+        // Normalized through fromId(), not a raw id == id comparison — same fix
+        // SplashStylePicker/FoundSplashStylePicker already have. CompassStyle.fromId() migrates
+        // retired ids ("wind_vane", "guide_star") to LASER_DOT, but a raw comparison here never
+        // matched that migrated id against anything in CompassStyle.entries, so anyone whose
+        // stored preference was still one of those retired ids (a pre-rename install, or a
+        // restored backup) saw no card highlighted at all here — even though the live compass
+        // screen itself renders Laser Dot correctly, since it calls fromId() internally.
+        val normalizedSelectedId = CompassStyle.fromId(selectedStyleId).id
         seasonallySortedStyles.forEach { style ->
-            val selected = style.id == selectedStyleId
+            val selected = style.id == normalizedSelectedId
             val locked = isLocked(style.id)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,

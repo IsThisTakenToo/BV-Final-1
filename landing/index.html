@@ -728,6 +728,12 @@ section{ position: relative; }
   font-size: var(--fs-sm);
   line-height: 1.65;
 }
+/* Odd card count (7) leaves the last one alone in the final row of the 2- and 3-column
+   layouts — spanning it full width closes the grid out cleanly instead of leaving empty
+   cells beside it, and doubles as a natural "closing highlight" for the newest feature. */
+.features-grid .feature:last-child{
+  grid-column: 1 / -1;
+}
 
 /* ================================================================
    INFO PANELS (what it does / why Google Drive)
@@ -1104,6 +1110,15 @@ footer{
           </div>
           <h3>Private By Default</h3>
           <p>Everything lives on your device first — no account required, no ads reading your movements. Want a safety net for a lost or broken phone? Optional backup to your own Google Drive is there when you want it, off when you don't.</p>
+        </article>
+
+        <article class="feature">
+          <span class="corner" aria-hidden="true"></span>
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 14.5 9l6 .8-4.3 4.1 1 6-5.2-2.9-5.2 2.9 1-6-4.3-4.1 6-.8L12 3.5Z"/></svg>
+          </div>
+          <h3>Favorites Hub</h3>
+          <p>Save a place you want to visit — even one you've never actually been to. Search it in Google Maps, tap Share, and pick DropPin Vault: the name and exact location come straight back, ready to drop into your Favorites.</p>
         </article>
       </div>
     </div>

@@ -57,6 +57,12 @@ object AppIconManager {
     fun currentIconId(prefs: SharedPreferences): String =
         premiumGatedId(prefs, AppIcon.fromId(prefs.getString(PREF_KEY, AppIcon.DEFAULT.id)).id, PremiumFreeTier.freeAppIconId)
 
+    /** The raw stored icon, ungated by entitlement — unlike [currentIconId], which reports
+     * Default for display purposes the instant premium is off even if a premium alias is still
+     * the one actually enabled. Used to detect that drift so it can be corrected for real. */
+    fun storedIcon(prefs: SharedPreferences): AppIcon =
+        AppIcon.fromId(prefs.getString(PREF_KEY, AppIcon.DEFAULT.id))
+
     /** Re-applies the launcher alias when a stored id no longer matches (e.g. gold → ember). */
     fun migrateLegacyIconIfNeeded(context: Context, prefs: SharedPreferences) {
         val raw = prefs.getString(PREF_KEY, null) ?: return

@@ -631,6 +631,8 @@ object ThemeState {
     var compassStyle by mutableStateOf("classic")
     var buttonStyle by mutableStateOf("classic")
     var reduceAnimations by mutableStateOf(false)
+    /** Set once at launch from ActivityManager.isLowRamDevice — splash particle budgets only. */
+    var lowRamDevice by mutableStateOf(false)
     var customPrimaryArgb by mutableIntStateOf(0xFF6B2FFF.toInt())
     var customAccentArgb by mutableIntStateOf(0xFF00F0FF.toInt())
     var textScale by mutableStateOf(1.15f)
@@ -741,24 +743,24 @@ val SettingsCategories = listOf(
         listOf("automatic parking", "auto park", "bluetooth", "car", "quiet zone", "background location", "motion", "fitness", "activity recognition", "walking")),
     SettingsCategoryMeta("vehicles", "Vehicles", "Manage vehicles, colors, and Bluetooth links", Icons.Default.DirectionsCar,
         listOf("vehicle", "vehicles", "car", "truck", "motorcycle", "default vehicle", "bluetooth")),
-    SettingsCategoryMeta("gps", "Location & Precision", "Accuracy, screen wake, distance units", Icons.Default.LocationOn,
+    SettingsCategoryMeta("gps", "Location & Precision", "Accuracy, screen wake, and distance units", Icons.Default.LocationOn,
         listOf("gps", "camera", "sharing", "accuracy", "screen on", "distance")),
-    SettingsCategoryMeta("quickpin", "Quick-Pin Behavior", "Tactical quick-save sheet and auto-naming", Icons.Default.PushPin,
+    SettingsCategoryMeta("quickpin", "Quick-Pin Behavior", "Configure one-tap saving and auto-naming rules", Icons.Default.PushPin,
         listOf("quick pin", "quick track", "auto close", "auto-close", "naming", "manage quick pins", "home screen", "widget", "instant pin", "instant track")),
-    SettingsCategoryMeta("vault", "Vault", "Snapshot stats, custom tags, save defaults, and vault behavior", Icons.Default.Inventory2,
+    SettingsCategoryMeta("vault", "Vault", "Snapshot stats, custom tags, and default save settings", Icons.Default.Inventory2,
         listOf("vault", "snapshot", "custom tag", "default tab", "delete confirm", "save defaults")),
-    SettingsCategoryMeta("appearance", "Appearance & Themes", "Colors, icons, fonts, and animation", Icons.Default.Palette,
+    SettingsCategoryMeta("appearance", "Appearance & Themes", "Colors, icons, fonts, and animations", Icons.Default.Palette,
         listOf("theme", "color", "red", "amber", "green", "contrast", "motion", "button style", "vault icon", "vault name", "font", "splash")),
     SettingsCategoryMeta("timer", "Sounds & Alerts", "Timer and notification behavior", Icons.Default.Notifications,
         listOf("timer", "notification", "alert", "expire", "sound", "haptic", "vibration", "vibrate", "feel", "pattern", "click", "feedback")),
     SettingsCategoryMeta("widgets", "Widgets & Home Screen", "Launcher widgets that mirror your vault", Icons.Default.Widgets,
         listOf("widget", "launcher", "refresh", "sync")),
-    SettingsCategoryMeta("premium", "Premium Unlocks", "Upgrade options available across the app", Icons.Default.Star,
+    SettingsCategoryMeta("premium", "Premium Unlocks", "Explore available upgrades and features", Icons.Default.Star,
         listOf("premium", "pro", "upgrade", "unlock")),
-    SettingsCategoryMeta("data", "Backup, Data & Privacy", "Export, import, and destructive actions", Icons.Default.Storage,
+    SettingsCategoryMeta("data", "Backup, Data & Privacy", "Export, import, and clear app data", Icons.Default.Storage,
         listOf("backup", "export", "import", "restore", "privacy", "delete all", "app lock", "biometric", "fingerprint", "face", "pin", "security", "lock", "gpx", "waypoint", "gps app", "garmin")),
     SettingsCategoryMeta("help", "Help & Guide", "How everything works, explained simply", Icons.AutoMirrored.Filled.HelpOutline,
         listOf("help", "guide", "how to", "tutorial", "faq", "explain", "quick pin", "widget", "vault")),
-    SettingsCategoryMeta("about", "About & Credits", "App version and open source icon credits", Icons.Default.Info,
+    SettingsCategoryMeta("about", "About & Credits", "App version and open-source icon credits", Icons.Default.Info,
         listOf("about", "credits", "license", "licenses", "version", "open source", "attribution", "font awesome", "tabler", "material"))
 )

@@ -3,7 +3,6 @@ package com.spotvault.app
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.quicksettings.Tile
@@ -51,15 +50,12 @@ class QuickTrackTileService : TileService() {
         val isTracking = prefs.getBoolean("is_pinned", false)
         val action = if (isTracking) QuickActionRelayActivity.ACTION_FOUND else QuickActionRelayActivity.ACTION_TRACK
 
-        val intent = Intent(this, QuickActionRelayActivity::class.java).apply {
-            putExtra(QuickActionRelayActivity.EXTRA_ACTION, action)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent = QuickActionRelayActivity.intentForAction(this, action)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val pendingIntent = PendingIntent.getActivity(
                 this,
-                0,
+                QuickActionRelayActivity.pendingIntentRequestCode(action),
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )

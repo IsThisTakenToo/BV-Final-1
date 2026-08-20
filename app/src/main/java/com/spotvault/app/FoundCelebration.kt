@@ -15,6 +15,9 @@ import android.widget.Toast
  */
 object FoundCelebration {
 
+    @Volatile
+    private var activeRingtone: android.media.Ringtone? = null
+
     fun play(context: Context, withToast: Boolean = true) {
         val app = context.applicationContext
         celebrateHaptic(app)
@@ -71,6 +74,10 @@ object FoundCelebration {
                     .build()
                 ringtone.isLooping = false
             }
+            // Stop any prior Found tone before starting another — rapid Found taps otherwise
+            // stacked Ringtone instances until GC, overlapping audio.
+            activeRingtone?.stop()
+            activeRingtone = ringtone
             ringtone.play()
         }
     }

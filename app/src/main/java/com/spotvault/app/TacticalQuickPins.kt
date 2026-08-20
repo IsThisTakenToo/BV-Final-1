@@ -411,6 +411,67 @@ private suspend fun buildGeocodedAddress(context: Context, lat: Double, lng: Dou
     return GeocodedAddress(full = addressStr, city = city, state = state)
 }
 
+/** Result of turning typed address text into coordinates — includes the geocoder's own formatted
+ * address/city/state (read straight off the same [android.location.Address] the coordinates came
+ * from) so a manually-added Favorite gets the same address/city/state fields a GPS-based save
+ * gets from [reverseGeocodeAddress], without a second round-trip call. */
+data class ForwardGeocodeResult(
+    val lat: Double,
+    val lng: Double,
+    val formattedAddress: String,
+    val city: String,
+    val state: String
+)
+
+/** Address text -> coordinates — the reverse of [reverseGeocodeAddress], and (as of this writing)
+ * the only place in the app that creates a spot from typed text instead of the device's current
+ * GPS fix (the Favorites Hub's "+ Add Spot" form). Same API-level branching as
+ * [reverseGeocodeAddress]: the real async GeocodeListener on 33+, the blocking call — pushed onto
+ * Dispatchers.IO since it's a blocking network call — pre-33. Returns null for a blank query, no
+ * geocoder backend on this device, no match, or a timeout. */
+suspend fun geocodeAddress(context: Context, addressText: String): ForwardGeocodeResult? {
+    val query = addressText.trim()
+    if (query.isEmpty()) return null
+    if (!android.location.Geocoder.isPresent()) return null
+    val geocoder = android.location.Geocoder(context, Locale.getDefault())
+
+    val address = withTimeoutOrNull(8_000L) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            kotlinx.coroutines.suspendCancellableCoroutine<android.location.Address?> { cont ->
+                try {
+                    geocoder.getFromLocationName(query, 1, object : android.location.Geocoder.GeocodeListener {
+                        override fun onGeocode(addresses: MutableList<android.location.Address>) {
+                            if (cont.isActive) cont.resume(addresses.firstOrNull())
+                        }
+                        override fun onError(errorMessage: String?) {
+                            if (cont.isActive) cont.resume(null)
+                        }
+                    })
+                } catch (e: Exception) {
+                    if (cont.isActive) cont.resume(null)
+                }
+            }
+        } else {
+            withContext(Dispatchers.IO) {
+                @Suppress("DEPRECATION")
+                try {
+                    geocoder.getFromLocationName(query, 1)?.firstOrNull()
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+    } ?: return null
+
+    val city = address.locality?.takeIf { it.isNotBlank() }
+        ?: address.subAdminArea?.takeIf { it.isNotBlank() }
+        ?: address.subLocality?.takeIf { it.isNotBlank() }
+        ?: ""
+    val state = address.adminArea ?: ""
+    val formatted = address.getAddressLine(0)?.takeIf { it.isNotBlank() } ?: query
+    return ForwardGeocodeResult(address.latitude, address.longitude, formatted, city, state)
+}
+
 private suspend fun fetchFirstAddress(context: Context, lat: Double, lng: Double): android.location.Address? {
     // Some devices (no Google Play services, some AOSP/China builds) have no geocoder backend at
     // all — isPresent() is a cheap synchronous check, so skip straight to the Lat/Lng fallback
@@ -611,8 +672,10 @@ suspend fun quietSaveTacticalPin(
     val mergeTarget = findDeduplicationMergeTarget(dao, prefs, lat, lng)
     val savedId: Int
     if (mergeTarget != null) {
+        val spotPhotoDao = AppDatabase.getDatabase(context.applicationContext).spotPhotoDao()
         savedId = mergeDeduplicatedSpot(
             dao = dao,
+            spotPhotoDao = spotPhotoDao,
             target = mergeTarget,
             newTimestamp = timestamp,
             newImagePath = photoPath,
@@ -684,9 +747,9 @@ suspend fun quickActiveTrackPin(
     prefs.edit()
         .putBoolean("is_pinned", true)
         .putString("photo_path", photoPath)
-        .putFloat("lat", lat.toFloat())
-        .putFloat("lng", lng.toFloat())
-        .putString("location_details", option.details)
+        .putCoord("lat", lat)
+        .putCoord("lng", lng)
+        .putString("location_details", prefsSafeLocationDetails(option.details))
         .putString("current_address", "Loading address...")
         .remove("timer_end_time")
         .also { editor -> applyPinnedVehiclePrefs(editor, pinnedVehicle) }
@@ -698,8 +761,10 @@ suspend fun quickActiveTrackPin(
     val mergeTarget = findDeduplicationMergeTarget(dao, prefs, lat, lng)
     val savedId: Int
     if (mergeTarget != null) {
+        val spotPhotoDao = AppDatabase.getDatabase(context.applicationContext).spotPhotoDao()
         val merged = mergeDeduplicatedSpot(
             dao = dao,
+            spotPhotoDao = spotPhotoDao,
             target = mergeTarget,
             newTimestamp = timestamp,
             newImagePath = photoPath,
@@ -711,8 +776,8 @@ suspend fun quickActiveTrackPin(
         // the live-tracking prefs now instead of leaving "Loading address..." stuck, since the
         // geocode below is skipped for merges.
         prefs.edit()
-            .putString("current_address", merged.address)
-            .putString("location_details", merged.locationDetails)
+            .putString("current_address", prefsSafeAddress(merged.address))
+            .putString("location_details", prefsSafeLocationDetails(merged.locationDetails))
             .apply()
     } else {
         val spot = buildQuickPinSpot(option, lat, lng, timestamp, resolvedVehicleId, photoPath)
@@ -757,8 +822,8 @@ suspend fun quickActiveTrackPin(
         if (mergeTarget == null) {
             val geocoded = reverseGeocodeAddress(context, lat, lng)
             prefs.edit()
-                .putString("current_address", geocoded.full)
-                .putString("location_details", option.details)
+                .putString("current_address", prefsSafeAddress(geocoded.full))
+                .putString("location_details", prefsSafeLocationDetails(option.details))
                 .apply()
             val spotToUpdate = dao.getSpotById(savedId)
             if (spotToUpdate != null) {

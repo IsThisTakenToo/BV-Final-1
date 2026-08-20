@@ -68,6 +68,10 @@ class TagFilterWidget : GlanceAppWidget() {
             val tagIds = (prefs[KEY_TAG_IDS] ?: emptySet()).mapNotNull { it.toIntOrNull() }
             val initialPrefs = remember { context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE) }
             val isPremium = isPremiumUnlocked(initialPrefs)
+            // A home-screen widget has no authentication of its own — listing every tagged spot's
+            // name here regardless of App Lock would leak exactly what App Lock exists to hide,
+            // with no unlock required to see it. See PremiumGlanceWidget's matching fix.
+            val appLockEnabled = initialPrefs.getBoolean(APP_LOCK_ENABLED_PREF, false)
 
             val theme = remember(revision, themeCache) {
                 try {
@@ -80,11 +84,19 @@ class TagFilterWidget : GlanceAppWidget() {
             // Names are resolved fresh from the tags table on every refresh rather than cached
             // alongside the ids — a tag rename would otherwise leave this widget showing a stale
             // label until reconfigured, exactly the kind of drift storing derived text invites.
-            val tagNamesState = produceState(initialValue = emptyList<String>(), key1 = tagIds, key2 = isPremium) {
-                value = if (isPremium && tagIds.isNotEmpty()) {
+            // Both produceState blocks below catch Room/IO failures rather than letting them
+            // propagate out of provideGlance — an uncaught exception here would crash-loop the
+            // widget into "Problem loading widget" instead of just showing an empty refresh.
+            val tagNamesState = produceState(initialValue = emptyList<String>(), tagIds, isPremium, appLockEnabled) {
+                value = if (isPremium && tagIds.isNotEmpty() && !appLockEnabled) {
                     withContext(Dispatchers.IO) {
-                        val tagDao = AppDatabase.getDatabase(context).tagDao()
-                        tagIds.mapNotNull { tagDao.getTagById(it)?.name }
+                        try {
+                            val tagDao = AppDatabase.getDatabase(context).tagDao()
+                            tagIds.mapNotNull { tagDao.getTagById(it)?.name }
+                        } catch (e: Exception) {
+                            android.util.Log.e("TagFilterWidget", "Failed to load tag names", e)
+                            emptyList()
+                        }
                     }
                 } else {
                     emptyList()
@@ -96,24 +108,31 @@ class TagFilterWidget : GlanceAppWidget() {
                 revision,
                 tagIds,
                 isPremium,
-                sortOrder
+                sortOrder,
+                appLockEnabled
             ) {
-                value = if (!isPremium || tagIds.isEmpty()) {
+                value = if (!isPremium || tagIds.isEmpty() || appLockEnabled) {
                     emptyList()
                 } else {
                     withContext(Dispatchers.IO) {
-                        val db = AppDatabase.getDatabase(context)
-                        val spots = db.tagDao().getSpotsForTags(tagIds).let { list ->
-                            if (sortOrder == "oldest") list.sortedBy { it.timestamp }
-                            else list.sortedByDescending { it.timestamp }
-                        }
-                        val vehicleDao = db.vehicleDao()
-                        val vehicleNames = mutableMapOf<Int, String?>()
-                        spots.map { spot ->
-                            val vehicleName = spot.vehicleId?.let { vid ->
-                                vehicleNames.getOrPut(vid) { vehicleDao.getById(vid)?.name }
+                        try {
+                            val db = AppDatabase.getDatabase(context)
+                            val spots = if (sortOrder == "oldest") {
+                                db.tagDao().getSpotsForTagsOldest(tagIds, WIDGET_SPOT_ROW_CAP)
+                            } else {
+                                db.tagDao().getSpotsForTagsNewest(tagIds, WIDGET_SPOT_ROW_CAP)
                             }
-                            TagWidgetEntry(spot, vehicleName)
+                            val vehicleDao = db.vehicleDao()
+                            val vehicleNames = mutableMapOf<Int, String?>()
+                            spots.map { spot ->
+                                val vehicleName = spot.vehicleId?.let { vid ->
+                                    vehicleNames.getOrPut(vid) { vehicleDao.getById(vid)?.name }
+                                }
+                                TagWidgetEntry(spot, vehicleName)
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("TagFilterWidget", "Failed to load tag entries", e)
+                            emptyList()
                         }
                     }
                 }
@@ -122,6 +141,14 @@ class TagFilterWidget : GlanceAppWidget() {
             if (!isPremium) {
                 GlanceThemedBackground(theme = theme) {
                     PremiumLockedWidgetContent(
+                        theme = theme,
+                        widthDp = tagFilterContentWidthDp().coerceAtLeast(160f),
+                        heightDp = tagFilterHeightDp().coerceAtLeast(120f)
+                    )
+                }
+            } else if (appLockEnabled) {
+                GlanceThemedBackground(theme = theme) {
+                    AppLockedWidgetContent(
                         theme = theme,
                         widthDp = tagFilterContentWidthDp().coerceAtLeast(160f),
                         heightDp = tagFilterHeightDp().coerceAtLeast(120f)
@@ -161,6 +188,9 @@ class ToggleTagFilterSortAction : androidx.glance.appwidget.action.ActionCallbac
 }
 
 private val TagFilterHeaderHeight = 24.dp
+private val TagFilterSortButtonWidth = 44.dp
+private val TagFilterVaultButtonWidth = 54.dp
+private val TagFilterHeaderButtonGap = 6.dp
 private val TagFilterRowHeight = 56.dp
 private val TagFilterRowMaxHeight = 150.dp
 private val TagFilterEmptyHeight = 140.dp
@@ -263,13 +293,15 @@ private fun TagFilterHeader(
 ) {
     val context = LocalContext.current
     val heightPx = WidgetThemeHelper.dpToPx(context, TagFilterHeaderHeight.value)
-    
-    val iconSizePx = WidgetThemeHelper.dpToPx(context, 24f)
-    // Row is [label][sort 24dp][Spacer 8dp][vault 24dp] — reserve exactly that 56dp, not a
+
+    val sortButtonWidthPx = WidgetThemeHelper.dpToPx(context, TagFilterSortButtonWidth.value)
+    val vaultButtonWidthPx = WidgetThemeHelper.dpToPx(context, TagFilterVaultButtonWidth.value)
+    val gapPx = WidgetThemeHelper.dpToPx(context, TagFilterHeaderButtonGap.value)
+    // Row is [label][sort button][gap][vault button] — reserve exactly that fixed width, not a
     // guessed value, or the label bitmap gets rendered at the wrong width and FillBounds
     // stretches it against the box Glance actually lays out.
-    val labelWidthPx = (widthPx - iconSizePx * 2 - WidgetThemeHelper.dpToPx(context, 8f)).coerceAtLeast(1)
-    
+    val labelWidthPx = (widthPx - sortButtonWidthPx - vaultButtonWidthPx - gapPx).coerceAtLeast(1)
+
     val labelBitmap = remember(theme.cacheKey(), label, labelWidthPx, heightPx) {
         PremiumWidgetRenderer.renderSectionLabelBitmap(
             context,
@@ -279,15 +311,15 @@ private fun TagFilterHeader(
             heightPx
         )
     }
-    
-    val sortBitmap = remember(theme.cacheKey(), sortOrder, iconSizePx) {
-        PremiumWidgetRenderer.renderSortIconBitmap(context, android.graphics.Color.WHITE, iconSizePx, sortOrder == "oldest")
+
+    val sortBitmap = remember(theme.cacheKey(), sortOrder, sortButtonWidthPx, heightPx) {
+        PremiumWidgetRenderer.renderSortButtonBitmap(context, android.graphics.Color.WHITE, sortButtonWidthPx, heightPx, sortOrder == "oldest")
     }
-    
-    val vaultBitmap = remember(theme.cacheKey(), iconSizePx) {
-        PremiumWidgetRenderer.renderVaultIconBitmap(context, android.graphics.Color.WHITE, iconSizePx)
+
+    val vaultBitmap = remember(theme.cacheKey(), vaultButtonWidthPx, heightPx) {
+        PremiumWidgetRenderer.renderVaultButtonBitmap(context, android.graphics.Color.WHITE, vaultButtonWidthPx, heightPx)
     }
-    
+
     androidx.glance.layout.Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
@@ -300,17 +332,17 @@ private fun TagFilterHeader(
         )
         Image(
             provider = ImageProvider(sortBitmap),
-            contentDescription = "Toggle Sort Order",
-            modifier = GlanceModifier.width(24.dp).height(24.dp).clickable(
+            contentDescription = if (sortOrder == "oldest") "Sorted oldest first, tap to sort newest first" else "Sorted newest first, tap to sort oldest first",
+            modifier = GlanceModifier.width(TagFilterSortButtonWidth).height(TagFilterHeaderHeight).clickable(
                 androidx.glance.appwidget.action.actionRunCallback<ToggleTagFilterSortAction>()
             ),
             contentScale = ContentScale.Fit
         )
-        androidx.glance.layout.Spacer(modifier = GlanceModifier.width(8.dp))
+        androidx.glance.layout.Spacer(modifier = GlanceModifier.width(TagFilterHeaderButtonGap))
         Image(
             provider = ImageProvider(vaultBitmap),
             contentDescription = "Open Vault",
-            modifier = GlanceModifier.width(24.dp).height(24.dp).clickable(
+            modifier = GlanceModifier.width(TagFilterVaultButtonWidth).height(TagFilterHeaderHeight).clickable(
                 actionStartActivity(PremiumWidgetIntents.openVault(context))
             ),
             contentScale = ContentScale.Fit
@@ -406,10 +438,11 @@ private object TagFilterRenderer {
         heightPx: Int
     ): Bitmap {
         val density = context.resources.displayMetrics.density
-        val bitmap = Bitmap.createBitmap(widthPx.coerceAtLeast(1), heightPx.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val w = widthPx.toFloat()
-        val h = heightPx.toFloat()
+        val w = safeW.toFloat()
+        val h = safeH.toFloat()
         val pad = 8f * density
         val plateRect = RectF(pad, pad, w - pad, h * 0.52f)
         PremiumWidgetRenderer.drawNoPhotoSpotPlaceholder(canvas, context, plateRect, theme, density)

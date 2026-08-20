@@ -72,6 +72,10 @@ class QuickActionRelayActivity : ComponentActivity() {
 
     private lateinit var relayPrefs: android.content.SharedPreferences
     private var outcomeState = mutableStateOf<RelayOutcome?>(null)
+    // Per-instance: true only for the one instance that actually claimed the shared
+    // actionInFlight guard, so a second (blocked) instance finishing early can't clear it out
+    // from under the real owner in its own onDestroy().
+    private var ownsActionInFlight = false
 
     private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) performTrack() else finishWith(RelayOutcome(false, "Notifications blocked", "Enable alerts in Settings to track from the widget."))
@@ -107,6 +111,7 @@ class QuickActionRelayActivity : ComponentActivity() {
             return
         }
         actionInFlight = true
+        ownsActionInFlight = true
 
         setContent {
             SpotVaultTheme {
@@ -140,8 +145,13 @@ class QuickActionRelayActivity : ComponentActivity() {
         super.onDestroy()
         // Cleared here rather than in finish() so this can't get stuck true if the Activity is
         // ever torn down some other way (the guard exists to block re-entrant taps, not to
-        // survive as a permanent lockout).
-        actionInFlight = false
+        // survive as a permanent lockout). Gated on ownsActionInFlight so a second, blocked
+        // instance — which finishes in onCreate() before ever claiming the flag — can't clear the
+        // real owner's still-in-progress guard out from under it and let a third rapid tap race in.
+        if (ownsActionInFlight) {
+            actionInFlight = false
+            ownsActionInFlight = false
+        }
     }
 
     private fun suppressTransitionAnimation() {
@@ -248,7 +258,6 @@ class QuickActionRelayActivity : ComponentActivity() {
                 shareLocation(
                     this@QuickActionRelayActivity,
                     lat, lng, address,
-                    notes = "",
                     imagePath = "",
                     includePhoto = false
                 )
@@ -312,6 +321,29 @@ class QuickActionRelayActivity : ComponentActivity() {
         const val ACTION_SHARE = "share"
         const val ACTION_FOUND = "found"
         const val ACTION_NAVIGATE = "navigate"
+
+        /** Unique action/data so PendingIntent.filterEquals distinguishes Pin vs Track vs Found
+         * (extras alone are ignored; FLAG_IMMUTABLE then cannot update the wrong cached intent). */
+        fun intentForAction(context: Context, action: String): Intent =
+            Intent(context, QuickActionRelayActivity::class.java).apply {
+                this.action = "com.spotvault.app.relay.ACTION_$action"
+                data = android.net.Uri.parse("spotvault://relay/$action")
+                putExtra(EXTRA_ACTION, action)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                )
+            }
+
+        fun pendingIntentRequestCode(action: String): Int = when (action) {
+            ACTION_PIN -> 101
+            ACTION_TRACK -> 102
+            ACTION_FOUND -> 103
+            ACTION_SHARE -> 104
+            ACTION_NAVIGATE -> 105
+            else -> 100
+        }
 
         // Only ever read/written from onCreate/onDestroy on the main thread, so a plain flag is
         // enough — this is a same-process re-entrancy guard, not a real concurrency primitive.

@@ -1,13 +1,21 @@
 package com.spotvault.app
 
+import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.saveable.listSaver
+import androidx.room.withTransaction
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,6 +43,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -45,6 +54,8 @@ import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -64,6 +75,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.AddAPhoto
@@ -79,6 +91,7 @@ import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.Sell
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -92,9 +105,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -113,6 +128,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -135,6 +151,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
@@ -162,11 +179,16 @@ fun calendarDayStart(timeMillis: Long): Long {
 fun vaultDateSection(timestamp: Long, now: Long = System.currentTimeMillis()): String {
     val spotDay = calendarDayStart(timestamp)
     val todayDay = calendarDayStart(now)
-    val oneDayMs = 86_400_000L
+    // Calendar day math, not a fixed 86400000ms — across DST that fixed delta is 23h or 25h and
+    // "Yesterday" / "This Week" bucketing silently drifts for a day.
+    val yesterdayDay = Calendar.getInstance().apply {
+        timeInMillis = todayDay
+        add(Calendar.DAY_OF_YEAR, -1)
+    }.timeInMillis
 
     when {
         spotDay == todayDay -> return "Today"
-        spotDay == todayDay - oneDayMs -> return "Yesterday"
+        spotDay == yesterdayDay -> return "Yesterday"
     }
 
     val weekStartDay = Calendar.getInstance().apply {
@@ -179,7 +201,7 @@ fun vaultDateSection(timestamp: Long, now: Long = System.currentTimeMillis()): S
         set(Calendar.MILLISECOND, 0)
     }.timeInMillis
 
-    if (spotDay >= weekStartDay && spotDay < todayDay - oneDayMs) return "This Week"
+    if (spotDay >= weekStartDay && spotDay < yesterdayDay) return "This Week"
 
     val monthStartDay = Calendar.getInstance().apply {
         timeInMillis = now
@@ -266,7 +288,12 @@ fun VaultSpotThumbnail(
 ) {
     val context = LocalContext.current
     val path = item.imagePath
-    val hasValidPhoto = path.isNotEmpty() && File(path).exists()
+    // remember(path) — File.exists() on every recomposition was sync main-thread I/O for every
+    // visible Vault thumb (and again whenever the parent refiltered), which scales poorly with a
+    // large vault. Coil still handles a missing file gracefully if the path goes stale mid-session.
+    val hasValidPhoto = remember(path) {
+        path.isNotEmpty() && runCatching { File(path).exists() }.getOrDefault(false)
+    }
 
     Box(
         modifier = modifier
@@ -301,7 +328,7 @@ fun VaultSpotThumbnail(
 @Composable
 fun VaultSpotSwipeContainer(
     item: LocationSpot,
-    onFavorite: () -> Unit,
+    onArchive: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
     gestureEnabled: Boolean = true,
@@ -311,7 +338,7 @@ fun VaultSpotSwipeContainer(
         confirmValueChange = { value ->
             when (value) {
                 SwipeToDismissBoxValue.StartToEnd -> {
-                    onFavorite()
+                    onArchive()
                     false
                 }
                 SwipeToDismissBoxValue.EndToStart -> {
@@ -331,7 +358,10 @@ fun VaultSpotSwipeContainer(
         backgroundContent = {
             val direction = dismissState.dismissDirection
             val color = when (direction) {
-                SwipeToDismissBoxValue.StartToEnd -> SpotVaultColors.PrimaryDeep
+                // Muted/secondary rather than a theme accent — archiving isn't the same class of
+                // action as Delete (still reversible, not attention-grabbing the way a destructive
+                // swipe should be), so it shouldn't compete visually with Delete's Danger color.
+                SwipeToDismissBoxValue.StartToEnd -> SpotVaultColors.Outline
                 SwipeToDismissBoxValue.EndToStart -> SpotVaultColors.Danger.copy(alpha = 0.9f)
                 else -> Color.Transparent
             }
@@ -349,9 +379,9 @@ fun VaultSpotSwipeContainer(
                 when (direction) {
                     SwipeToDismissBoxValue.StartToEnd -> {
                         Icon(
-                            imageVector = if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            contentDescription = "Favorite",
-                            tint = SpotVaultColors.Teal,
+                            Icons.Default.Archive,
+                            contentDescription = "Archive",
+                            tint = SpotVaultColors.OnSurface,
                             modifier = Modifier.padding(horizontal = 24.dp)
                         )
                     }
@@ -387,7 +417,9 @@ fun VaultHistorySpotCard(
     onSelectionChange: (Set<Int>) -> Unit,
     onSelectionModeActiveChange: (Boolean) -> Unit,
     coroutineScope: CoroutineScope,
-    dao: LocationDao
+    dao: LocationDao,
+    userLocation: Pair<Double, Double>? = null,
+    distanceUnit: String? = null
 ) {
     val context = LocalContext.current
     val categoryEmoji = vaultSpotCategoryEmoji(item)
@@ -545,8 +577,8 @@ fun VaultHistorySpotCard(
                     }
                     IconButton(
                         onClick = {
-                            val favorited = !item.isFavorite
-                            coroutineScope.launch(Dispatchers.IO) { dao.updateSpot(item.copy(isFavorite = favorited)) }
+                            val spotId = item.id
+                            coroutineScope.launch(Dispatchers.IO) { dao.toggleFavorite(spotId) }
                         },
                         modifier = Modifier.size(32.dp)
                     ) {
@@ -560,8 +592,7 @@ fun VaultHistorySpotCard(
                     IconButton(
                         onClick = {
                             val spotId = item.id
-                            val nowPinned = !item.isPinned
-                            coroutineScope.launch(Dispatchers.IO) { dao.setPinned(spotId, nowPinned) }
+                            coroutineScope.launch(Dispatchers.IO) { dao.togglePinned(spotId) }
                         },
                         modifier = Modifier.size(32.dp)
                     ) {
@@ -596,11 +627,21 @@ fun VaultHistorySpotCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.weight(1f))
-                    SpotDistanceLabel(
-                        spotLat = item.lat,
-                        spotLng = item.lng,
-                        prefs = prefs
-                    )
+                    if (distanceUnit != null) {
+                        SpotDistanceLabel(
+                            spotLat = item.lat,
+                            spotLng = item.lng,
+                            prefs = prefs,
+                            userLocation = userLocation,
+                            distanceUnit = distanceUnit
+                        )
+                    } else {
+                        SpotDistanceLabel(
+                            spotLat = item.lat,
+                            spotLng = item.lng,
+                            prefs = prefs
+                        )
+                    }
                 }
             }
         }
@@ -611,15 +652,24 @@ fun VaultHistorySpotCard(
             spotId = item.id,
             currentTitle = item.title,
             currentTimestamp = item.timestamp,
-            currentNotes = item.locationDetails,
+            currentNotes = rememberFullSpotNotes(dao, item.id, item.locationDetails),
             currentCity = item.city,
             currentState = item.state,
             currentVehicleId = item.vehicleId,
             onDismiss = { showEditDialog = false },
             onSave = { newTitle, newTimestamp, newNotes, newCity, newState, newVehicleId ->
+                val spotId = item.id
                 coroutineScope.launch(Dispatchers.IO) {
+                    // Re-fetches rather than item.copy(...) — item is a snapshot from whenever
+                    // this card last recomposed, which a fast enough sequence of actions (e.g.
+                    // attaching a photo, then opening Edit and saving before the list's Flow had
+                    // caught up) could beat. copy()-ing a stale snapshot would silently write its
+                    // old imagePath back over the new one, erasing a photo that had just been
+                    // added. Reading the current row immediately before the update closes that
+                    // window regardless of how stale item itself is by the time Save is tapped.
+                    val current = dao.getSpotById(spotId) ?: return@launch
                     dao.updateSpot(
-                        item.copy(
+                        current.copy(
                             title = newTitle,
                             timestamp = newTimestamp,
                             locationDetails = newNotes,
@@ -646,6 +696,16 @@ fun VaultHistorySpotCard(
             onDismiss = { showTagEditor = false }
         )
     }
+}
+
+@Composable
+private fun rememberFullSpotNotes(dao: LocationDao, spotId: Int, preview: String): String {
+    val notes by produceState(initialValue = preview, spotId) {
+        value = withContext(Dispatchers.IO) {
+            dao.getSpotById(spotId)?.locationDetails ?: preview
+        }
+    }
+    return notes
 }
 
 @Composable
@@ -801,25 +861,38 @@ fun SpotEditDialog(
                                     ) {
                                         Text(tag.name, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.Teal)
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = "Remove ${tag.name}",
-                                            tint = SpotVaultColors.Teal,
+                                        // Box-wrapped so the tappable area is meaningfully bigger
+                                        // than the 14dp icon itself (was the icon's own bare
+                                        // bounds — well under Android's touch-target guidance)
+                                        // without inflating the chip's own tight visual size.
+                                        Box(
                                             modifier = Modifier
-                                                .size(14.dp)
+                                                .size(32.dp)
                                                 .clickable {
                                                     tagCoroutineScope.launch(Dispatchers.IO) {
                                                         tagDao.removeTag(spotId, tag.id)
                                                     }
-                                                }
-                                        )
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Remove ${tag.name}",
+                                                tint = SpotVaultColors.Teal,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
-                        Row(
+                        // FlowRow, not Row — a long vehicle name (up to 40 chars) alongside the
+                        // "Add Tag" chip had nothing to stop it from pushing past the dialog's
+                        // own width, unlike every other chip row in this file (e.g. the tags
+                        // FlowRow right above this).
+                        FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -841,19 +914,34 @@ fun SpotEditDialog(
                                         .background(SpotVaultColors.Teal.copy(alpha = 0.18f))
                                         .border(1.dp, SpotVaultColors.Teal.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                                         .clickable { showVehiclePicker = true }
-                                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                                        .padding(start = 10.dp, top = 7.dp, bottom = 7.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("${vehicleIconEmoji(assignedVehicle.iconKey)} ${assignedVehicle.name}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.Teal)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Clear vehicle",
-                                        tint = SpotVaultColors.Teal,
-                                        modifier = Modifier
-                                            .size(14.dp)
-                                            .clickable { vehicleId = null }
+                                    Text(
+                                        "${vehicleIconEmoji(assignedVehicle.iconKey)} ${assignedVehicle.name}",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SpotVaultColors.Teal,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                     )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    // Box-wrapped so the tappable area is meaningfully bigger
+                                    // than the 14dp icon itself — same fix as the tag chips'
+                                    // remove button above.
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clickable { vehicleId = null },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Clear vehicle",
+                                            tint = SpotVaultColors.Teal,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
                                 }
                             } else {
                                 Row(
@@ -1292,7 +1380,7 @@ private fun VaultSpotOverflowMenuItems(
                     lat = item.lat,
                     lng = item.lng,
                     address = item.address,
-                    notes = item.locationDetails,
+                    title = vaultSpotDisplayTitle(item),
                     imagePath = item.imagePath
                 )
             )
@@ -1352,7 +1440,23 @@ private fun VaultSpotOverflowMenuItems(
             val spotId = item.id
             coroutineScope.launch(Dispatchers.IO) { dao.archiveSpot(spotId) }
             VaultUndoSnackbar.show("Spot archived") {
-                withContext(Dispatchers.IO) { dao.unarchiveSpot(spotId) }
+                withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
+            }
+        }
+    )
+    // Same instant-action-plus-Undo shape as Archive right above — softDeleteSpot is already
+    // fully reversible (it's exactly how Recently Deleted works), so there's nothing a blocking
+    // "are you sure?" dialog would protect against here that Undo doesn't already cover, and it
+    // makes single-spot delete completely discoverable instead of only reachable via swipe.
+    DropdownMenuItem(
+        text = { Text("Delete", color = SpotVaultColors.Danger) },
+        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = SpotVaultColors.Danger) },
+        onClick = {
+            onDismissMenu()
+            val spotId = item.id
+            coroutineScope.launch(Dispatchers.IO) { dao.softDeleteSpot(spotId) }
+            VaultUndoSnackbar.show("Spot deleted") {
+                withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
             }
         }
     )
@@ -1420,7 +1524,12 @@ private fun VaultTagFilterBar(
     onSelectedTagChange: (String?) -> Unit,
     activeVehicleLabel: String?,
     onClearVehicle: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // False for the main Vault screen (its own gold Star button in the header opens the Favorites
+    // Hub instead — see vaultHeaderRow in MainActivity.kt) and for FavoritesHubDialog's own use of
+    // VaultFilterableSpotList (every spot shown there already has isFavorite = true, so the chip
+    // would just be a dead toggle with nothing left to filter). True everywhere else.
+    showFavoritesChip: Boolean = true
 ) {
     Row(
         modifier = modifier
@@ -1446,18 +1555,20 @@ private fun VaultTagFilterBar(
             border = vaultSystemChipBorder(showPhotosOnly),
             shape = RoundedCornerShape(10.dp)
         )
-        VerticalDivider(
-            modifier = Modifier.height(20.dp),
-            color = SpotVaultColors.Outline.copy(alpha = 0.35f)
-        )
-        FilterChip(
-            selected = showFavoritesOnly,
-            onClick = { onShowFavoritesOnlyChange(!showFavoritesOnly) },
-            label = { Text("⭐ Favorites", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
-            colors = vaultTagChipColors(),
-            border = vaultTagChipBorder(showFavoritesOnly),
-            shape = RoundedCornerShape(10.dp)
-        )
+        if (showFavoritesChip) {
+            VerticalDivider(
+                modifier = Modifier.height(20.dp),
+                color = SpotVaultColors.Outline.copy(alpha = 0.35f)
+            )
+            FilterChip(
+                selected = showFavoritesOnly,
+                onClick = { onShowFavoritesOnlyChange(!showFavoritesOnly) },
+                label = { Text("⭐ Favorites", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                colors = vaultTagChipColors(),
+                border = vaultTagChipBorder(showFavoritesOnly),
+                shape = RoundedCornerShape(10.dp)
+            )
+        }
         topTags.forEach { tag ->
             val selected = selectedTag.equals(tag.name, ignoreCase = true)
             FilterChip(
@@ -2062,68 +2173,84 @@ fun VaultTagManagerDialog(
         onDismissRequest = onDismiss,
         title = { Text("Manage Tags", fontWeight = FontWeight.Bold, fontSize = 20.sp) },
         content = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+            val tagListMaxHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.55f).dp
+                .coerceIn(240.dp, 560.dp)
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = tagListMaxHeight),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    "Assign tags from any spot's ⋮ menu, or filter the Vault by tag from the filter icon.",
-                    color = SpotVaultColors.Muted,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                if (allTags.isEmpty()) {
+                item {
                     Text(
-                        "No tags yet — add one below, or tag a spot in the Vault.",
+                        "Assign tags from any spot's ⋮ menu, or filter the Vault by tag from the filter icon.",
                         color = SpotVaultColors.Muted,
-                        fontSize = 13.sp
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 4.dp)
                     )
-                } else {
-                    OutlinedTextField(
-                        value = tagSearch,
-                        onValueChange = { tagSearch = it },
-                        placeholder = { Text("Search tags…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = SpotVaultColors.Teal) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = spotEditFieldColors()
-                    )
-                    if (emptyTagCount > 0) {
-                        FilterChip(
-                            selected = showEmptyOnly,
-                            onClick = { showEmptyOnly = !showEmptyOnly },
-                            label = { Text("Show Empty ($emptyTagCount)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
-                            leadingIcon = if (showEmptyOnly) {
-                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                            } else null,
-                            colors = vaultTagChipColors(),
-                            border = vaultTagChipBorder(showEmptyOnly),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.padding(top = 4.dp)
+                }
+                if (allTags.isEmpty()) {
+                    item {
+                        Text(
+                            "No tags yet — add one below, or tag a spot in the Vault.",
+                            color = SpotVaultColors.Muted,
+                            fontSize = 13.sp
                         )
                     }
+                } else {
+                    item {
+                        OutlinedTextField(
+                            value = tagSearch,
+                            onValueChange = { tagSearch = it },
+                            placeholder = { Text("Search tags…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = SpotVaultColors.Teal) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = spotEditFieldColors()
+                        )
+                    }
+                    if (emptyTagCount > 0) {
+                        item {
+                            FilterChip(
+                                selected = showEmptyOnly,
+                                onClick = { showEmptyOnly = !showEmptyOnly },
+                                label = { Text("Show Empty ($emptyTagCount)", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                                leadingIcon = if (showEmptyOnly) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                } else null,
+                                colors = vaultTagChipColors(),
+                                border = vaultTagChipBorder(showEmptyOnly),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                    }
                     if (showEmptyOnly && visibleTags.isNotEmpty()) {
-                        TextButton(
-                            onClick = { pendingDeleteAllEmpty = true },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
-                            modifier = Modifier.padding(top = 2.dp)
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = null, tint = SpotVaultColors.Danger, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text("Delete All (${visibleTags.size})", color = SpotVaultColors.Danger, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        item {
+                            TextButton(
+                                onClick = { pendingDeleteAllEmpty = true },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = null, tint = SpotVaultColors.Danger, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("Delete All (${visibleTags.size})", color = SpotVaultColors.Danger, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                     if (visibleTags.isEmpty()) {
-                        Text(
-                            if (showEmptyOnly) "No unused tags — nice and tidy." else "No tags match \"$tagSearch\"",
-                            color = SpotVaultColors.Muted,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
+                        item {
+                            Text(
+                                if (showEmptyOnly) "No unused tags — nice and tidy." else "No tags match \"$tagSearch\"",
+                                color = SpotVaultColors.Muted,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                        }
                     }
                 }
-                visibleTags.forEach { tag ->
+                items(visibleTags, key = { it.id }) { tag ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2159,25 +2286,27 @@ fun VaultTagManagerDialog(
                         }
                     }
                 }
-                OutlinedTextField(
-                    value = newTagInput,
-                    onValueChange = { if (it.length <= 30) newTagInput = it },
-                    placeholder = { Text("New tag…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = spotEditFieldColors(),
-                    trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (newTagInput.isNotBlank()) {
-                                IconButton(onClick = { addTag() }) {
-                                    Icon(Icons.Default.Add, contentDescription = "Add tag", tint = SpotVaultColors.Teal)
+                item {
+                    OutlinedTextField(
+                        value = newTagInput,
+                        onValueChange = { if (it.length <= 30) newTagInput = it },
+                        placeholder = { Text("New tag…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = spotEditFieldColors(),
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (newTagInput.isNotBlank()) {
+                                    IconButton(onClick = { addTag() }) {
+                                        Icon(Icons.Default.Add, contentDescription = "Add tag", tint = SpotVaultColors.Teal)
+                                    }
                                 }
+                                VoiceMicButton(onResult = { newTagInput = it; addTag() }, prompt = "Speak a tag…")
                             }
-                            VoiceMicButton(onResult = { newTagInput = it; addTag() }, prompt = "Speak a tag…")
                         }
-                    }
-                )
+                    )
+                }
             }
         },
         confirmButton = {
@@ -2399,16 +2528,32 @@ fun VaultHistorySpotGridCard(
                 shape = RoundedCornerShape(16.dp)
             )
 
-            if (item.isFavorite) {
-                Icon(
-                    Icons.Default.Favorite,
-                    contentDescription = "Favorited",
-                    tint = SpotVaultColors.Danger,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(6.dp)
-                        .size(14.dp)
-                )
+            // Grid view had no way to favorite/unfavorite at all — this used to be a plain
+            // read-only Icon shown only when already favorited (no tap target, and invisible
+            // otherwise), even though the list card right next to it in this same file has a
+            // working favorite toggle. Now a real IconButton, always visible, same as the list
+            // card's — backed by a translucent scrim since it sits directly over a photo
+            // thumbnail rather than a solid card background.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .background(SpotVaultColors.Surface.copy(alpha = 0.85f), CircleShape)
+            ) {
+                IconButton(
+                    onClick = {
+                        val spotId = item.id
+                        coroutineScope.launch(Dispatchers.IO) { dao.toggleFavorite(spotId) }
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (item.isFavorite) "Remove Favorite" else "Add Favorite",
+                        tint = if (item.isFavorite) SpotVaultColors.Danger else SpotVaultColors.Muted,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
             }
 
             Box(
@@ -2501,15 +2646,24 @@ fun VaultHistorySpotGridCard(
             spotId = item.id,
             currentTitle = item.title,
             currentTimestamp = item.timestamp,
-            currentNotes = item.locationDetails,
+            currentNotes = rememberFullSpotNotes(dao, item.id, item.locationDetails),
             currentCity = item.city,
             currentState = item.state,
             currentVehicleId = item.vehicleId,
             onDismiss = { showEditDialog = false },
             onSave = { newTitle, newTimestamp, newNotes, newCity, newState, newVehicleId ->
+                val spotId = item.id
                 coroutineScope.launch(Dispatchers.IO) {
+                    // Re-fetches rather than item.copy(...) — item is a snapshot from whenever
+                    // this card last recomposed, which a fast enough sequence of actions (e.g.
+                    // attaching a photo, then opening Edit and saving before the list's Flow had
+                    // caught up) could beat. copy()-ing a stale snapshot would silently write its
+                    // old imagePath back over the new one, erasing a photo that had just been
+                    // added. Reading the current row immediately before the update closes that
+                    // window regardless of how stale item itself is by the time Save is tapped.
+                    val current = dao.getSpotById(spotId) ?: return@launch
                     dao.updateSpot(
-                        item.copy(
+                        current.copy(
                             title = newTitle,
                             timestamp = newTimestamp,
                             locationDetails = newNotes,
@@ -2612,15 +2766,17 @@ fun VaultSpotEntry(
     onViewSpot: (LocationSpot) -> Unit,
     onShareRequest: (ShareSpotPayload) -> Unit,
     onSelectionChange: (Set<Int>) -> Unit,
-    onSwipeFavorite: (LocationSpot) -> Unit,
+    onSwipeArchive: (LocationSpot) -> Unit,
     onSwipeDelete: (LocationSpot) -> Unit,
     coroutineScope: CoroutineScope,
     dao: LocationDao,
-    swipeGestureEnabled: Boolean = true
+    swipeGestureEnabled: Boolean = true,
+    userLocation: Pair<Double, Double>? = null,
+    distanceUnit: String? = null
 ) {
     VaultSpotSwipeContainer(
         item = item,
-        onFavorite = { onSwipeFavorite(item) },
+        onArchive = { onSwipeArchive(item) },
         onDelete = { onSwipeDelete(item) },
         gestureEnabled = swipeGestureEnabled,
         modifier = Modifier.fillMaxWidth()
@@ -2640,7 +2796,9 @@ fun VaultSpotEntry(
                 onSelectionChange = onSelectionChange,
                 onSelectionModeActiveChange = onSelectionModeActiveChange,
                 coroutineScope = coroutineScope,
-                dao = dao
+                dao = dao,
+                userLocation = userLocation,
+                distanceUnit = distanceUnit
             )
             VaultViewMode.GRID -> VaultHistorySpotGridCard(
                 item = item,
@@ -2664,7 +2822,6 @@ fun VaultSpotEntry(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HistoryVaultTabPage(
-    historyList: List<LocationSpot>,
     prefs: SharedPreferences,
     dao: LocationDao,
     isPinned: Boolean,
@@ -2695,10 +2852,6 @@ fun HistoryVaultTabPage(
     val context = LocalContext.current
     val userLocation = rememberUserLocationForDistance()
     val distanceUnit = rememberDistanceUnit(prefs)
-    val pinnedSpots = remember(historyList) {
-        historyList.filter { it.isPinned && it.deletedAt == null && !it.isArchived && !it.isWishlist }
-            .sortedByDescending { it.timestamp }
-    }
     val vehicleDao = remember { AppDatabase.getDatabase(context).vehicleDao() }
     val allVehicles by vehicleDao.observeAll().collectAsState(initial = emptyList())
     var showArchivedVehicles by remember { mutableStateOf(false) }
@@ -2708,14 +2861,41 @@ fun HistoryVaultTabPage(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val topTags by tagDao.getTopTags().collectAsState(initial = emptyList())
     val allTags by tagDao.getAllTags().collectAsState(initial = emptyList())
-    val locationsWithTags by tagDao.getAllLocationsWithTags().collectAsState(initial = emptyList())
-    val spotIdToTags = remember(locationsWithTags) {
-        locationsWithTags.associate { it.spot.id to it.tags }
-    }
-    var selectedTag by remember { mutableStateOf<String?>(null) }
+    val spotIdToTags = rememberVaultSpotIdToTags(tagDao)
+    // rememberSaveable, not remember, for everything below the user actively picks — matches
+    // the identical filter state in VaultFilterableSpotList (Favorites Hub/Calendar/Location
+    // Browser), which already survives rotation the same way. This tab was the one place still
+    // silently dropping the selection back to Off on a config change.
+    var selectedTag by rememberSaveable { mutableStateOf<String?>(null) }
     var showTagFilterSheet by remember { mutableStateOf(false) }
-    var nearMeFilter by remember { mutableStateOf(VaultNearMeFilter.OFF) }
-    var showPhotosOnly by remember { mutableStateOf(false) }
+    var nearMeFilter by rememberSaveable(
+        stateSaver = androidx.compose.runtime.saveable.Saver(
+            save = { it.name },
+            restore = { VaultNearMeFilter.valueOf(it) }
+        )
+    ) { mutableStateOf(VaultNearMeFilter.OFF) }
+    var showPhotosOnly by rememberSaveable { mutableStateOf(false) }
+
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val gridState = androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState()
+
+    // Windowed browse (notes stripped) — replaces collecting getAllHistory() into Compose.
+    val historyList = rememberVaultBrowseSpots(
+        dao = dao,
+        searchQuery = searchQuery,
+        sortBy = sortBy,
+        nearMeFilter = nearMeFilter,
+        selectedTag = selectedTag,
+        showFavoritesOnly = showFavoritesOnly,
+        selectedVehicleId = selectedVehicleId,
+        listState = listState,
+        gridState = gridState,
+        vaultViewMode = vaultViewMode
+    )
+    val pinnedSpots = remember(historyList) {
+        historyList.filter { it.isPinned && it.deletedAt == null && !it.isArchived && !it.isWishlist }
+            .sortedByDescending { it.timestamp }
+    }
 
     LaunchedEffect(selectedItems) {
         if (selectedItems.isEmpty()) selectionModeActive = false
@@ -2745,40 +2925,19 @@ fun HistoryVaultTabPage(
         }
     }
 
-    val filteredList = remember(
-        historyList,
-        searchQuery,
-        showFavoritesOnly,
-        sortBy,
-        selectedVehicleId,
-        userLocation,
-        selectedTag,
-        spotIdToTags,
-        vehicleById,
-        nearMeFilter,
-        showPhotosOnly
-    ) {
-        val base = filterAndSortVaultSpots(
-            spots = historyList,
-            searchQuery = searchQuery,
-            showFavoritesOnly = showFavoritesOnly,
-            vehicleId = selectedVehicleId,
-            sortBy = sortBy,
-            userLocation = userLocation,
-            tagsBySpotId = spotIdToTags,
-            vehicleNameById = vehicleById.mapValues { it.value.name },
-            nearMeFilter = nearMeFilter,
-            showPhotosOnly = showPhotosOnly
-        )
-        val tag = selectedTag
-        if (tag == null) {
-            base
-        } else {
-            base.filter { spot ->
-                spotIdToTags[spot.id]?.any { it.name.equals(tag, ignoreCase = true) } == true
-            }
-        }
-    }
+    val filteredList = rememberFilteredVaultSpots(
+        spots = historyList,
+        searchQuery = searchQuery,
+        showFavoritesOnly = showFavoritesOnly,
+        vehicleId = selectedVehicleId,
+        sortBy = sortBy,
+        userLocation = userLocation,
+        tagsBySpotId = spotIdToTags,
+        vehicleNameById = vehicleById.mapValues { it.value.name },
+        nearMeFilter = nearMeFilter,
+        showPhotosOnly = showPhotosOnly,
+        selectedTag = selectedTag
+    )
 
     // NEWEST/OLDEST are themselves date-based, so bucketing by date section (each bucket already
     // ordered newest/oldest-first within itself) matches what the sort menu promises. CLOSEST and
@@ -2813,9 +2972,11 @@ fun HistoryVaultTabPage(
         }
     }
 
-    val onSwipeFavorite: (LocationSpot) -> Unit = { spot ->
-        coroutineScope.launch(Dispatchers.IO) {
-            dao.updateSpot(spot.copy(isFavorite = !spot.isFavorite))
+    val onSwipeArchive: (LocationSpot) -> Unit = { spot ->
+        val spotId = spot.id
+        coroutineScope.launch(Dispatchers.IO) { dao.archiveSpot(spotId) }
+        VaultUndoSnackbar.show("Spot archived") {
+            withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
         }
     }
 
@@ -2826,8 +2987,6 @@ fun HistoryVaultTabPage(
     // fast fling has an unambiguous velocity/direction and never shows the problem, which
     // matches the reported "slow = jittery, fast = fine" pattern exactly. Disabling the swipe
     // gesture while a scroll is actually in progress removes the competition entirely.
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    val gridState = androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState()
     val isVaultScrolling = if (vaultViewMode == VaultViewMode.GRID) {
         gridState.isScrollInProgress
     } else {
@@ -2849,11 +3008,18 @@ fun HistoryVaultTabPage(
             onViewSpot = onViewSpot,
             onShareRequest = onShareRequest,
             onSelectionChange = onSelectedItemsChange,
-            onSwipeFavorite = onSwipeFavorite,
+            onSwipeArchive = onSwipeArchive,
             onSwipeDelete = onSwipeDeleteSpot,
             coroutineScope = coroutineScope,
             dao = dao,
-            swipeGestureEnabled = !isVaultScrolling
+            // Every other single-item action (the overflow menu, tap-to-view) is already
+            // suppressed in favor of the checkbox/bulk-action UI the moment selection mode is
+            // active — a swipe firing an immediate single-item archive/delete was the one
+            // exception, letting an accidental drag while trying to check a box silently act on
+            // an item outside the batch the user is actually building.
+            swipeGestureEnabled = !isVaultScrolling && !selectionModeActive,
+            userLocation = userLocation,
+            distanceUnit = distanceUnit
         )
     }
 
@@ -2893,7 +3059,11 @@ fun HistoryVaultTabPage(
                     activeVehicleLabel = allVehicles.firstOrNull { it.id == selectedVehicleId }
                         ?.let { "${vehicleIconEmoji(it.iconKey)} ${it.name}" },
                     onClearVehicle = { onSelectedVehicleIdChange(null) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    // The gold Star button in the header (vaultHeaderRow, MainActivity.kt) opens
+                    // the Favorites Hub now — the scrollable filter row doesn't need its own
+                    // Favorites chip duplicating that entry point.
+                    showFavoritesChip = false
                 )
             }
             if (pinnedSpots.isNotEmpty() && searchQuery.isEmpty()) {
@@ -2911,6 +3081,14 @@ fun HistoryVaultTabPage(
                     selectedCount = selectedItems.size,
                     historyList = historyList,
                     selectedItems = selectedItems,
+                    onSelectAll = {
+                        onSelectedItemsChange(
+                            sectionedSpots
+                                .filterNot { (title, _) -> title in collapsedSections }
+                                .flatMap { (_, sectionSpots) -> sectionSpots.map { it.id } }
+                                .toSet()
+                        )
+                    },
                     onShowDeleteConfirm = onShowDeleteConfirm
                 )
             }
@@ -2929,7 +3107,13 @@ fun HistoryVaultTabPage(
         } else if (vaultViewMode == VaultViewMode.GRID) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 LazyVerticalStaggeredGrid(
-                    columns = StaggeredGridCells.Fixed(2),
+                    // Adaptive, not Fixed(2) — a fixed column count looks right on a portrait
+                    // phone (where this was tuned) but stays stuck at 2 abnormally wide/short
+                    // cards on a phone rotated to landscape or on a tablet, both of which have
+                    // plenty of extra width this grid was never using. 160dp keeps exactly 2
+                    // columns at the phone-portrait widths this always ran at before, and grows
+                    // from there as real width becomes available.
+                    columns = StaggeredGridCells.Adaptive(minSize = 160.dp),
                     state = gridState,
                     modifier = Modifier
                         .fillMaxSize()
@@ -3169,7 +3353,9 @@ private fun VaultPinnedSpotCard(
     onUnpin: () -> Unit
 ) {
     val path = spot.imagePath
-    val hasValidPhoto = path.isNotEmpty() && File(path).exists()
+    val hasValidPhoto = remember(path) {
+        path.isNotEmpty() && runCatching { File(path).exists() }.getOrDefault(false)
+    }
     val shape = RoundedCornerShape(14.dp)
     val label = spot.title
 
@@ -3208,16 +3394,23 @@ private fun VaultPinnedSpotCard(
                     )
                 )
         )
-        Icon(
-            Icons.Default.VerticalAlignBottom,
-            contentDescription = "Remove from Active",
-            tint = Color.White.copy(alpha = 0.9f),
+        // Box-wrapped so the tappable area is meaningfully bigger than the 16dp icon itself —
+        // same touch-target fix as the tag/vehicle chip remove buttons.
+        Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(5.dp)
-                .size(16.dp)
-                .clickable(onClick = onUnpin)
-        )
+                .padding(2.dp)
+                .size(32.dp)
+                .clickable(onClick = onUnpin),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.VerticalAlignBottom,
+                contentDescription = "Remove from Active",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -3249,8 +3442,8 @@ private fun VaultPinnedSpotCard(
 private fun VaultActivePinBlock(prefs: SharedPreferences, context: android.content.Context) {
     val addr = prefs.getString("current_address", "") ?: ""
     val title = prefs.getString("location_details", "") ?: ""
-    val lat = prefs.getFloat("lat", 0f)
-    val lng = prefs.getFloat("lng", 0f)
+    val lat = prefs.getCoord("lat").toFloat()
+    val lng = prefs.getCoord("lng").toFloat()
 
     Text(
         "ACTIVE SPOT",
@@ -3471,6 +3664,10 @@ private fun VaultSelectionBar(
     selectedCount: Int,
     historyList: List<LocationSpot>,
     selectedItems: Set<Int>,
+    // Selects every spot currently visible on screen — i.e. everything under an expanded
+    // section, not every spot in the database — same logic each section header's own long-press
+    // already used, just exposed here as a discoverable button instead of only a hidden gesture.
+    onSelectAll: () -> Unit,
     onShowDeleteConfirm: () -> Unit
 ) {
     val context = LocalContext.current
@@ -3483,16 +3680,29 @@ private fun VaultSelectionBar(
     ) {
         Text("${selectedCount} Selected", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
         Row {
+            IconButton(onClick = onSelectAll) {
+                Icon(Icons.Default.SelectAll, contentDescription = "Select all visible", tint = SpotVaultColors.Teal)
+            }
             IconButton(
                 onClick = {
                     val itemsToExport = historyList.filter { selectedItems.contains(it.id) }
-                    val shareText = itemsToExport.joinToString("\n\n---\n\n") { item ->
-                        buildShareText(
-                            lat = item.lat,
-                            lng = item.lng,
-                            address = item.address,
-                            notes = item.locationDetails
-                        )
+                    val shareText = buildString {
+                        for ((index, item) in itemsToExport.withIndex()) {
+                            if (index > 0) append("\n\n---\n\n")
+                            append(
+                                buildShareText(
+                                    lat = item.lat,
+                                    lng = item.lng,
+                                    address = item.address,
+                                    title = vaultSpotDisplayTitle(item)
+                                )
+                            )
+                            // Binder TransactionTooLarge risk on large multi-select shares.
+                            if (length >= 16_384) {
+                                append("\n\n…(+${itemsToExport.size - index - 1} more)")
+                                break
+                            }
+                        }
                     }
                     val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                         type = "text/plain"
@@ -3617,15 +3827,26 @@ private fun VaultOverlayDialog(
         // .statusBarsPadding()/.navigationBarsPadding(), which could silently report 0 and let
         // this card get clipped by or drawn under the real system bars.
         val density = LocalDensity.current
-        val statusPad = with(density) { SystemBarInsets.statusBarPx.toDp() }
-        val navPad = with(density) { SystemBarInsets.navigationBarPx.toDp() }
+        // Same floor + hedge as the Pin/Snap save screen's own fix (see its comment on
+        // localNavBarPx): SystemBarInsets can be momentarily stale the instant this Dialog first
+        // composes, and third-party nav bar customizers (Nav Star and similar) draw their own bar
+        // as an accessibility overlay that never shows up in WindowInsets at all, on top of
+        // whichever real measurement wins. The coerceAtLeast(24.dp) + 24.dp gives every vault
+        // dialog built on this (Favorites Hub, Location Browser, Archived Spots, Tag Editor, etc.)
+        // the same guaranteed-minimum clearance regardless of phone/tablet or orientation, instead
+        // of trusting a single reading that can read 0.
+        val localNavBarPx = WindowInsets.navigationBars.getBottom(density)
+        val statusPad = with(density) { SystemBarInsets.statusBarPx.toDp() }.coerceAtLeast(24.dp)
+        val navPad = with(density) {
+            maxOf(SystemBarInsets.navigationBarPx, localNavBarPx).toDp()
+        }.coerceAtLeast(24.dp) + 24.dp
         // Left/right — a camera cutout or a gesture-nav swipe-exclusion zone that sits on the top/
         // bottom edge in portrait moves to a *side* edge in landscape. Without this, the card below
         // was centered only within a box that had already silently lost real width to the cutout on
         // one side, which reads as "shoved toward the opposite corner" rather than simply centered
         // in a slightly narrower space.
-        val leftPad = with(density) { SystemBarInsets.leftPx.toDp() }
-        val rightPad = with(density) { SystemBarInsets.rightPx.toDp() }
+        val leftPad = with(density) { SystemBarInsets.leftPx.toDp() }.coerceAtLeast(8.dp)
+        val rightPad = with(density) { SystemBarInsets.rightPx.toDp() }.coerceAtLeast(8.dp)
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -3637,7 +3858,9 @@ private fun VaultOverlayDialog(
                 .imePadding()
                 .padding(
                     top = statusPad + 24.dp,
-                    bottom = navPad + 24.dp,
+                    // navPad already carries its own +24dp buffer above, baked in the same way
+                    // the Pin/Snap screen bakes it into navPad directly rather than adding it twice.
+                    bottom = navPad,
                     start = leftPad + 16.dp,
                     end = rightPad + 16.dp
                 ),
@@ -3669,24 +3892,24 @@ private fun VaultOverlayDialog(
             ) {
                 content()
             }
+            // This Dialog renders in its own raised window, on top of the main Activity window
+            // the app-root VaultUndoSnackbarHost lives in — without a host scoped to this window
+            // too, an Undo action taken from inside here (delete/archive on Favorites Hub,
+            // Location Browser, etc.) would show correctly but be completely hidden behind this
+            // dialog's own opaque surface. See VaultUndoSnackbar's own doc comment.
+            VaultUndoSnackbarHost()
         }
     }
 }
 
 @Composable
 fun VaultCalendarDialog(
-    historySpots: List<LocationSpot>,
+    spotDayStarts: Set<Long>,
+    monthsWithSpots: Set<Int>,
     onDismiss: () -> Unit,
     onDaySelected: (Long) -> Unit
 ) {
-    val spotDays = remember(historySpots) { vaultSpotDayStarts(historySpots) }
-    val monthsWithSpots = remember(historySpots) {
-        val cal = Calendar.getInstance()
-        historySpots.filter { !it.isWishlist }.mapTo(mutableSetOf()) { spot ->
-            cal.timeInMillis = spot.timestamp
-            cal.get(Calendar.YEAR) * 100 + cal.get(Calendar.MONTH)
-        }
-    }
+    val spotDays = spotDayStarts
     val todayStart = remember { calendarDayStart(System.currentTimeMillis()) }
     val monthFormatter = remember { SimpleDateFormat("MMMM yyyy", Locale.getDefault()) }
     val weekDayLabels = remember {
@@ -4120,7 +4343,15 @@ fun VaultFilterableSpotList(
     coroutineScope: CoroutineScope,
     modifier: Modifier = Modifier,
     emptyTitle: String = "No spots here yet",
-    emptySubtitle: String = "Nothing saved matches yet."
+    emptySubtitle: String = "Nothing saved matches yet.",
+    // FavoritesHubDialog passes true — baseSpots there is already isFavorite-only, so the chip
+    // would just be a dead toggle with nothing left to filter.
+    hideFavoritesFilter: Boolean = false,
+    // FavoritesHubDialog also floats its own "+ Add Spot" FAB in this list's bottom-right corner
+    // (outside this composable, in the Box that hosts both) — with no reserved space for it, the
+    // empty-state message ended up centered right underneath it, its last line covered outright.
+    // Zero everywhere else, since nothing else stacks a FAB over this list.
+    contentBottomPadding: Dp = 0.dp
 ) {
     val context = LocalContext.current
     val userLocation = rememberUserLocationForDistance()
@@ -4133,10 +4364,7 @@ fun VaultFilterableSpotList(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val topTags by tagDao.getTopTags().collectAsState(initial = emptyList())
     val allTags by tagDao.getAllTags().collectAsState(initial = emptyList())
-    val locationsWithTags by tagDao.getAllLocationsWithTags().collectAsState(initial = emptyList())
-    val spotIdToTags = remember(locationsWithTags) {
-        locationsWithTags.associate { it.spot.id to it.tags }
-    }
+    val spotIdToTags = rememberVaultSpotIdToTags(tagDao)
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var sortBy by rememberSaveable { mutableStateOf(VaultSortOption.NEWEST) }
@@ -4165,29 +4393,19 @@ fun VaultFilterableSpotList(
         }
     }
 
-    val filteredList = remember(
-        baseSpots, searchQuery, showFavoritesOnly, sortBy, selectedVehicleId,
-        userLocation, selectedTag, spotIdToTags, vehicleById, nearMeFilter, showPhotosOnly
-    ) {
-        val base = filterAndSortVaultSpots(
-            spots = baseSpots,
-            searchQuery = searchQuery,
-            showFavoritesOnly = showFavoritesOnly,
-            vehicleId = selectedVehicleId,
-            sortBy = sortBy,
-            userLocation = userLocation,
-            tagsBySpotId = spotIdToTags,
-            vehicleNameById = vehicleById.mapValues { it.value.name },
-            nearMeFilter = nearMeFilter,
-            showPhotosOnly = showPhotosOnly
-        )
-        val tag = selectedTag
-        if (tag == null) {
-            base
-        } else {
-            base.filter { spot -> spotIdToTags[spot.id]?.any { it.name.equals(tag, ignoreCase = true) } == true }
-        }
-    }
+    val filteredList = rememberFilteredVaultSpots(
+        spots = baseSpots,
+        searchQuery = searchQuery,
+        showFavoritesOnly = showFavoritesOnly,
+        vehicleId = selectedVehicleId,
+        sortBy = sortBy,
+        userLocation = userLocation,
+        tagsBySpotId = spotIdToTags,
+        vehicleNameById = vehicleById.mapValues { it.value.name },
+        nearMeFilter = nearMeFilter,
+        showPhotosOnly = showPhotosOnly,
+        selectedTag = selectedTag
+    )
 
     // Same "flat list for CLOSEST/ALPHABETICAL, date-bucketed otherwise" rule as the main Vault
     // — a spot 50 meters away shouldn't lose to one 40 miles away just because "Today" always
@@ -4212,9 +4430,11 @@ fun VaultFilterableSpotList(
         }
     }
 
-    val onSwipeFavorite: (LocationSpot) -> Unit = { spot ->
-        coroutineScope.launch(Dispatchers.IO) {
-            dao.updateSpot(spot.copy(isFavorite = !spot.isFavorite))
+    val onSwipeArchive: (LocationSpot) -> Unit = { spot ->
+        val spotId = spot.id
+        coroutineScope.launch(Dispatchers.IO) { dao.archiveSpot(spotId) }
+        VaultUndoSnackbar.show("Spot archived") {
+            withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
         }
     }
 
@@ -4246,7 +4466,8 @@ fun VaultFilterableSpotList(
             activeVehicleLabel = allVehicles.firstOrNull { it.id == selectedVehicleId }
                 ?.let { "${vehicleIconEmoji(it.iconKey)} ${it.name}" },
             onClearVehicle = { selectedVehicleId = null },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            showFavoritesChip = !hideFavoritesFilter
         )
         if (selectedItems.isNotEmpty()) {
             Spacer(modifier = Modifier.height(6.dp))
@@ -4254,6 +4475,14 @@ fun VaultFilterableSpotList(
                 selectedCount = selectedItems.size,
                 historyList = baseSpots,
                 selectedItems = selectedItems,
+                onSelectAll = {
+                    onSelectedItemsChange(
+                        sectionedSpots
+                            .filterNot { (title, _) -> title in collapsedSections }
+                            .flatMap { (_, sectionSpots) -> sectionSpots.map { it.id } }
+                            .toSet()
+                    )
+                },
                 onShowDeleteConfirm = onShowDeleteConfirm
             )
         }
@@ -4266,7 +4495,7 @@ fun VaultFilterableSpotList(
                 selectedCategoryLabel = null,
                 title = if (baseSpots.isEmpty()) emptyTitle else "No matches",
                 subtitle = if (baseSpots.isEmpty()) emptySubtitle else "Try a different search, sort, or filter.",
-                modifier = Modifier.weight(1f, fill = false)
+                modifier = Modifier.weight(1f, fill = false).padding(bottom = contentBottomPadding)
             )
         } else {
             Box(modifier = Modifier.weight(1f, fill = false).fillMaxWidth()) {
@@ -4276,7 +4505,7 @@ fun VaultFilterableSpotList(
                         .fillMaxSize()
                         .padding(end = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 8.dp)
+                    contentPadding = PaddingValues(bottom = 8.dp + contentBottomPadding)
                 ) {
                     sectionedSpots.forEach { (sectionTitle, spots) ->
                         val isCollapsed = sectionTitle in collapsedSections
@@ -4318,11 +4547,15 @@ fun VaultFilterableSpotList(
                                     onViewSpot = onViewSpot,
                                     onShareRequest = onShareRequest,
                                     onSelectionChange = onSelectedItemsChange,
-                                    onSwipeFavorite = onSwipeFavorite,
+                                    onSwipeArchive = onSwipeArchive,
                                     onSwipeDelete = onSwipeDeleteSpot,
                                     coroutineScope = coroutineScope,
                                     dao = dao,
-                                    swipeGestureEnabled = !listState.isScrollInProgress
+                                    // Same reasoning as the main Vault tab's identical fix — see
+                                    // its comment.
+                                    swipeGestureEnabled = !listState.isScrollInProgress && !selectionModeActive,
+                                    userLocation = userLocation,
+                                    distanceUnit = distanceUnit
                                 )
                             }
                         }
@@ -4406,7 +4639,7 @@ fun VaultFilterableSpotList(
 @Composable
 fun VaultCalendarDayResultsDialog(
     dayStartMillis: Long,
-    historySpots: List<LocationSpot>,
+    daySpots: List<LocationSpot>,
     prefs: SharedPreferences,
     dao: LocationDao,
     onDismiss: () -> Unit,
@@ -4418,9 +4651,6 @@ fun VaultCalendarDayResultsDialog(
     onShowDeleteConfirm: () -> Unit,
     coroutineScope: CoroutineScope
 ) {
-    val daySpots = remember(dayStartMillis, historySpots) {
-        historySpots.filter { !it.isWishlist && calendarDayStart(it.timestamp) == dayStartMillis }
-    }
     val dayLabel = remember(dayStartMillis) {
         SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.getDefault()).format(Date(dayStartMillis))
     }
@@ -4514,13 +4744,23 @@ fun RecentlyDeletedDialog(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val coroutineScope = rememberCoroutineScope()
     var deletedSpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
+    var tagsBySpotId by remember { mutableStateOf<Map<Int, List<TagEntity>>>(emptyMap()) }
     var spotPendingPermanentDelete by remember { mutableStateOf<LocationSpot?>(null) }
     var showRestoreAllConfirm by remember { mutableStateOf(false) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
     val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
 
     suspend fun refreshDeleted() {
-        deletedSpots = dao.getRecentlyDeleted()
+        val spots = withContext(Dispatchers.IO) { dao.getRecentlyDeleted() }
+        val tags = withContext(Dispatchers.IO) {
+            spots.associate { spot ->
+                spot.id to tagDao.getTagsForSpot(spot.id)
+            }
+        }
+        deletedSpots = spots
+        // One batch of one-shot queries when the dialog opens/refreshes — not a live Flow per
+        // LazyColumn row (each of those held an InvalidationTracker subscription while scrolling).
+        tagsBySpotId = tags
     }
 
     LaunchedEffect(Unit) {
@@ -4706,10 +4946,7 @@ fun RecentlyDeletedDialog(
                             spot.address.ifBlank { "Untitled spot" }
                         }
                         val deletedLabel = spot.deletedAt?.let { dateFormatter.format(Date(it)) } ?: ""
-                        // Same tags-per-spot lookup pattern the main Vault list uses — this dialog
-                        // never took a tagDao before, so tags (and the photo below) just silently
-                        // never rendered even when a deleted spot had both.
-                        val spotTags by remember(spot.id) { tagDao.getTagsForSpotFlow(spot.id) }.collectAsState(initial = emptyList())
+                        val spotTags = tagsBySpotId[spot.id].orEmpty()
                         ElevatedCard(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
@@ -4773,7 +5010,7 @@ fun RecentlyDeletedDialog(
                                     TextButton(
                                         onClick = {
                                             coroutineScope.launch(Dispatchers.IO) {
-                                                dao.restoreSpot(spot.id)
+                                                dao.restoreSpotIfSoftDeleted(spot.id)
                                                 refreshDeleted()
                                             }
                                         }
@@ -4797,6 +5034,738 @@ fun RecentlyDeletedDialog(
     }
 }
 
+/** Dedicated home for every starred spot. The "⭐ Favorites" chip on the main Vault screen used to
+ * just filter the existing list in place — favorites were only ever "a filter," with no way to
+ * add somewhere you want to go without first physically standing there and saving it live. This
+ * gives favorites their own screen (built on the exact same [VaultFilterableSpotList] every other
+ * narrowed-down Vault view already uses — same search/sort/swipe-to-favorite/overflow menu, so
+ * nothing about editing a favorite is different from editing any other spot) plus a "+ Add Spot"
+ * FAB that only exists here — the one place in the app a spot can be created from a typed address
+ * instead of the device's current GPS fix. */
+@Composable
+fun FavoritesHubDialog(
+    favoriteSpots: List<LocationSpot>,
+    dao: LocationDao,
+    prefs: SharedPreferences,
+    onDismiss: () -> Unit,
+    onViewSpot: (LocationSpot) -> Unit,
+    onShareRequest: (ShareSpotPayload) -> Unit,
+    coroutineScope: CoroutineScope,
+    // Non-null exactly once, right after a share from Google Maps (or another app) resolves —
+    // see SharedMapsLink.kt. Auto-opens the Add Spot form pre-filled instead of making the user
+    // notice and tap the FAB themselves.
+    pendingSharedSpot: SharedSpotPayload? = null,
+    onPendingSharedSpotConsumed: () -> Unit = {}
+) {
+    var selectedItems by remember { mutableStateOf(setOf<Int>()) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showAddFavorite by remember { mutableStateOf(false) }
+
+    // Shared by the confirm dialog's own Delete button and the confirm_delete=false instant path
+    // below — soft-deletes then offers Undo, same as the main Vault's own delete handling.
+    fun deleteSpots(ids: Set<Int>) {
+        selectedItems = emptySet()
+        coroutineScope.launch(Dispatchers.IO) {
+            ids.forEach { dao.softDeleteSpot(it) }
+        }
+        VaultUndoSnackbar.show(if (ids.size == 1) "Spot deleted" else "${ids.size} spots deleted") {
+            withContext(Dispatchers.IO) { ids.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+        }
+    }
+
+    LaunchedEffect(pendingSharedSpot) {
+        if (pendingSharedSpot != null) showAddFavorite = true
+    }
+
+    VaultOverlayDialog(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "⭐ Favorites",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 18.sp,
+                    color = SpotVaultColors.Teal,
+                    letterSpacing = 0.5.sp
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.Muted)
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(modifier = Modifier.weight(1f, fill = false)) {
+                VaultFilterableSpotList(
+                    baseSpots = favoriteSpots,
+                    prefs = prefs,
+                    dao = dao,
+                    selectedItems = selectedItems,
+                    onSelectedItemsChange = { selectedItems = it },
+                    // Bulk delete from the top action bar always skips the confirmation modal —
+                    // same reasoning as the main Vault: soft-delete is already reversible via
+                    // Recently Deleted, and now Undo, so a blocking dialog for it is redundant.
+                    onShowDeleteConfirm = { deleteSpots(selectedItems) },
+                    onSwipeDeleteSpot = { spot ->
+                        // Single-spot swipe delete still respects the user's own "Confirm before
+                        // deleting" setting — only the bulk action above skips it unconditionally.
+                        if (prefs.getBoolean("confirm_delete", true)) {
+                            selectedItems = setOf(spot.id)
+                            showDeleteConfirm = true
+                        } else {
+                            deleteSpots(setOf(spot.id))
+                        }
+                    },
+                    onShareRequest = onShareRequest,
+                    onViewSpot = onViewSpot,
+                    coroutineScope = coroutineScope,
+                    modifier = Modifier.fillMaxWidth(),
+                    emptyTitle = "No favorites yet",
+                    emptySubtitle = "Tap + below to save a place you want to visit, or star any saved spot from its own menu.",
+                    hideFavoritesFilter = true,
+                    // Clears the FAB below (56dp button + 16dp margin) — without this the empty
+                    // state's own centered text ended up right underneath it, its last line
+                    // covered outright.
+                    contentBottomPadding = 72.dp
+                )
+                FloatingActionButton(
+                    onClick = { showAddFavorite = true },
+                    containerColor = SpotVaultColors.Teal,
+                    contentColor = SpotVaultColors.OnTeal,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add Spot")
+                }
+            }
+        }
+    }
+
+    if (showAddFavorite) {
+        AddFavoriteSpotDialog(
+            dao = dao,
+            initialData = pendingSharedSpot,
+            onDismiss = {
+                showAddFavorite = false
+                if (pendingSharedSpot != null) onPendingSharedSpotConsumed()
+            },
+            // No post-save photo prompt — the form itself already has Camera/Gallery buttons, so
+            // there's nothing left for a follow-up VaultAddPhotoDialog to offer here.
+            onSaved = {}
+        )
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            containerColor = SpotVaultColors.Surface,
+            titleContentColor = SpotVaultColors.OnSurface,
+            textContentColor = SpotVaultColors.Muted,
+            title = { Text("Delete ${selectedItems.size} spot${if (selectedItems.size == 1) "" else "s"}?") },
+            text = { Text("These move to Recently Deleted and can be restored for a while before they're gone for good.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val toDelete = selectedItems
+                    showDeleteConfirm = false
+                    deleteSpots(toDelete)
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = SpotVaultColors.Teal) }
+            }
+        )
+    }
+}
+
+/** "+ Add Spot" form inside [FavoritesHubDialog] — the only place in the app a spot is created
+ * from a typed address instead of the device's current GPS fix. Tags reuse the exact same
+ * [SaveScreenTagField]/[SaveScreenTagPickerSheet] picker the normal Snap/Pin save screen uses for
+ * a not-yet-created spot, for the same reason: this spot has no id to attach tags to until after
+ * the insert, so both just collect plain tag names and the caller assigns them via TagDao once a
+ * real id exists. */
+/** Opens the user's own maps app on a plain-text place search — used by [AddFavoriteSpotDialog]'s
+ * "Search in Maps" fallback for queries the Android Geocoder can't resolve (named businesses
+ * especially). No specific app targeted (no setPackage()) — same reasoning as every other outbound
+ * maps intent in this app: locking it to Google Maps only narrows which devices this can succeed
+ * on, with no upside, and this app already supports sharing a result back in from any maps app,
+ * not just Google's. */
+private fun launchMapsSearch(context: Context, query: String): Boolean {
+    val uri = android.net.Uri.parse("geo:0,0?q=${android.net.Uri.encode(query)}")
+    return try {
+        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri))
+        true
+    } catch (e: android.content.ActivityNotFoundException) {
+        false
+    }
+}
+
+/** Whichever of the two ways [AddFavoriteSpotDialog] can end up with a location — resolved via
+ * [geocodeAddress] from typed text, or already known exactly from a Google Maps share — normalized
+ * to one shape so the save logic below only has to handle it once. */
+private data class ResolvedFavoriteLocation(
+    val lat: Double,
+    val lng: Double,
+    val address: String,
+    val city: String,
+    val state: String
+)
+
+@Composable
+private fun AddFavoriteSpotDialog(
+    dao: LocationDao,
+    onDismiss: () -> Unit,
+    onSaved: (LocationSpot) -> Unit,
+    // Prefill from a Google Maps share (see SharedMapsLink.kt) — null for the normal "+ Add Spot"
+    // FAB flow, where every field starts blank.
+    initialData: SharedSpotPayload? = null
+) {
+    val context = LocalContext.current
+    val db = remember { AppDatabase.getDatabase(context) }
+    val tagDao = remember { db.tagDao() }
+    val allTags by tagDao.getAllTags().collectAsState(initial = emptyList())
+    val coroutineScope = rememberCoroutineScope()
+
+    var title by remember { mutableStateOf(initialData?.title.orEmpty()) }
+    var addressText by remember { mutableStateOf(initialData?.addressHint.orEmpty()) }
+    var notes by remember { mutableStateOf(initialData?.notesText.orEmpty()) }
+    var selectedTags by remember { mutableStateOf(listOf<String>()) }
+    var isSaving by remember { mutableStateOf(false) }
+    var isResolving by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    // The one thing Save actually needs — set either straight from a shared Maps link's exact
+    // coordinates, or by explicitly tapping "Find Address" below (never automatically, and never
+    // as a side effect of Save itself: the Geocoder's best-guess match for an ambiguous query is
+    // wrong often enough that silently saving whatever it returned, with no chance to notice, was
+    // the actual problem here — Save now only ever commits a location the user has already seen
+    // confirmed on screen). Cleared the moment the address field is edited, since at that point
+    // the user is asking to resolve a different place, not confirm the one already found.
+    var resolvedCoordinates by remember {
+        mutableStateOf(initialData?.lat?.let { lat -> initialData.lng?.let { lng -> lat to lng } })
+    }
+    var resolvedAddressLabel by remember { mutableStateOf(initialData?.addressHint.orEmpty()) }
+    var resolvedCity by remember { mutableStateOf(initialData?.city.orEmpty()) }
+    var resolvedState by remember { mutableStateOf(initialData?.state.orEmpty()) }
+
+    // Carries over a photo attached before tapping "Search in Maps" — see PendingFavoritePhoto
+    // and dismissForMapsSearch below for how it survives that round trip through another app.
+    var photoPath by remember { mutableStateOf(initialData?.photoPath.orEmpty()) }
+    var isCapturingPhoto by remember { mutableStateOf(false) }
+    var showPhotoChooser by remember { mutableStateOf(false) }
+    val formLocked = isSaving || isResolving || isCapturingPhoto
+    val prefs = remember { context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE) }
+
+    // Camera capture, mirroring MainActivity's own pendingPhotoPath/AppLockGate pattern for
+    // pre-save photo capture (this spot doesn't have an id yet either) — the pending path is
+    // rememberSaveable so process death mid-camera still recovers the file into photoPath.
+    var pendingPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        AppLockGate.end()
+        val path = pendingPhotoPath
+        pendingPhotoPath = null
+        isCapturingPhoto = false
+        val file = path?.let { File(it) }
+        if (success && file != null && file.exists()) {
+            compressCapturedPhoto(file.absolutePath)
+            photoPath = file.absolutePath
+        } else {
+            runCatching { file?.delete() }
+            android.widget.Toast.makeText(context, "Photo canceled.", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun startCamera() {
+        val imagesDir = File(context.filesDir, "images").apply { mkdirs() }
+        val newFile = File(imagesDir, "favorite_${System.currentTimeMillis()}.jpg")
+        pendingPhotoPath = newFile.absolutePath
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", newFile)
+        try {
+            takePictureLauncher.launch(uri)
+        } catch (e: android.content.ActivityNotFoundException) {
+            // Mirrors takePictureLauncher's own cleanup — an immediate launch failure never
+            // reaches that callback, so this has to release AppLockGate itself.
+            pendingPhotoPath = null
+            isCapturingPhoto = false
+            AppLockGate.end()
+            android.widget.Toast.makeText(context, "No camera app found on this device.", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            startCamera()
+        } else {
+            AppLockGate.end()
+            isCapturingPhoto = false
+            val activity = context as? Activity
+            if (activity != null && isPermissionPermanentlyDenied(activity, prefs, Manifest.permission.CAMERA)) {
+                showPermissionSettingsDialog(activity, "Camera access is needed to attach a photo. Enable it for DropPin Vault in Settings.")
+            } else {
+                android.widget.Toast.makeText(context, "Camera permission is required to attach a photo.", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun requestCameraCapture() {
+        isCapturingPhoto = true
+        // Covers both the permission dialog and the camera capture that can follow it — either
+        // one taking the foreground while App Lock is on must not let AppLockScreen swap in and
+        // tear down this composable's pendingPhotoPath state mid-flight.
+        AppLockGate.begin()
+        val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (cameraGranted) {
+            startCamera()
+        } else {
+            markPermissionRequested(prefs, Manifest.permission.CAMERA)
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    // Gallery pick — no runtime permission needed (system Photo Picker), but still wrapped in
+    // AppLockGate since it's another external-app round trip holding onto this dialog's
+    // Compose-scoped state, same reasoning as the camera capture above.
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        AppLockGate.end()
+        isCapturingPhoto = false
+        if (uri != null) {
+            coroutineScope.launch(Dispatchers.IO) {
+                val imagesDir = File(context.filesDir, "images").apply { mkdirs() }
+                val destFile = File(imagesDir, "favorite_gallery_${System.currentTimeMillis()}.jpg")
+                val copied = try {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        destFile.outputStream().use { output ->
+                            input.copyToLimited(output, MAX_GALLERY_IMPORT_BYTES)
+                        }
+                    }
+                    destFile.exists() && destFile.length() > 0
+                } catch (e: Exception) {
+                    false
+                }
+                if (copied) {
+                    compressCapturedPhoto(destFile.absolutePath)
+                    withContext(Dispatchers.Main) { photoPath = destFile.absolutePath }
+                } else {
+                    runCatching { destFile.delete() }
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Couldn't add that photo. Try again.", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
+
+    fun launchGallery() {
+        isCapturingPhoto = true
+        AppLockGate.begin()
+        galleryLauncher.launch(
+            androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
+    }
+
+    // A photo captured/picked here but never saved (Cancel, back gesture, tapping outside) would
+    // otherwise sit on disk forever, referenced by nothing — Save is the only path that actually
+    // attaches it to a spot.
+    fun dismissAndCleanUp() {
+        if (photoPath.isNotBlank()) {
+            runCatching { File(photoPath).delete() }
+        }
+        onDismiss()
+    }
+
+    // "Search in Maps" closes this form too (see its own onClick below for why), but unlike a
+    // real Cancel the user hasn't abandoned anything — they're mid-task, just stepping out to
+    // find the address. Stashing rather than deleting means the photo comes back attached to the
+    // fresh dialog instance that reopens once they share the result back in, instead of getting
+    // wiped out by the cleanup above along with everything else that flow closes.
+    fun dismissForMapsSearch() {
+        if (photoPath.isNotBlank()) {
+            PendingFavoritePhoto.stash(photoPath)
+        }
+        onDismiss()
+    }
+
+    VaultOverlayDialog(onDismissRequest = { if (!formLocked) dismissAndCleanUp() }) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                "Add Favorite Spot",
+                fontWeight = FontWeight.Black,
+                fontSize = 18.sp,
+                color = SpotVaultColors.Teal,
+                letterSpacing = 0.5.sp
+            )
+            Column {
+                SpotEditSectionLabel("Title")
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    placeholder = { Text("Mom's House, Cabin…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
+                    singleLine = true,
+                    enabled = !formLocked,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = spotEditFieldColors(),
+                    trailingIcon = {
+                        VoiceMicButton(onResult = { spoken -> title = spoken }, prompt = "Dictate spot title…")
+                    }
+                )
+            }
+            Column {
+                SpotEditSectionLabel("Address to Search")
+                OutlinedTextField(
+                    value = addressText,
+                    onValueChange = { addressText = it; errorMessage = null; resolvedCoordinates = null; resolvedCity = ""; resolvedState = "" },
+                    placeholder = { Text("123 Main St, City, State", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
+                    singleLine = true,
+                    isError = errorMessage != null,
+                    enabled = !formLocked,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = spotEditFieldColors(),
+                    trailingIcon = {
+                        VoiceMicButton(
+                            onResult = { spoken -> addressText = spoken; errorMessage = null; resolvedCoordinates = null; resolvedCity = ""; resolvedState = "" },
+                            prompt = "Dictate address…"
+                        )
+                    }
+                )
+            }
+            if (resolvedCoordinates != null) {
+                Text(
+                    "📍 Confirmed: $resolvedAddressLabel — edit the address above to search a different place.",
+                    color = SpotVaultColors.Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Still useful for a real, well-formed address — Geocoder is fine at those.
+                    // What it's genuinely unreliable on is a bare business name ("Waffle House,"
+                    // which of many chain locations?), which is exactly what "Search in Maps"
+                    // beside it is for. Either way this only ever finds-and-shows a match; it
+                    // never saves anything itself — see the Save button below.
+                    TextButton(
+                        onClick = {
+                            val query = addressText.trim()
+                            if (query.isEmpty()) {
+                                errorMessage = "Enter an address to search."
+                                return@TextButton
+                            }
+                            if (!android.location.Geocoder.isPresent()) {
+                                errorMessage = "Address search isn't available on this device."
+                                return@TextButton
+                            }
+                            isResolving = true
+                            errorMessage = null
+                            coroutineScope.launch {
+                                val geocoded = withContext(Dispatchers.IO) { geocodeAddress(context, query) }
+                                isResolving = false
+                                if (geocoded == null) {
+                                    errorMessage = "Couldn't find that address — check it or try Search in Maps instead."
+                                } else {
+                                    resolvedCoordinates = geocoded.lat to geocoded.lng
+                                    resolvedAddressLabel = geocoded.formattedAddress
+                                    resolvedCity = geocoded.city
+                                    resolvedState = geocoded.state
+                                    addressText = geocoded.formattedAddress
+                                }
+                            }
+                        },
+                        enabled = !formLocked
+                    ) {
+                        if (isResolving) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = SpotVaultColors.Teal)
+                        } else {
+                            Icon(Icons.Default.Search, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Find Address", color = SpotVaultColors.Teal, fontSize = 13.sp)
+                    }
+                    TextButton(
+                        onClick = {
+                            val query = addressText.trim().ifBlank { title.trim() }
+                            if (query.isBlank()) {
+                                errorMessage = "Type a name or address above first."
+                                return@TextButton
+                            }
+                            // The user is about to leave the app entirely — without this, there's
+                            // nothing on screen telling them what to actually do once they're in
+                            // Maps, or how what they find there gets back into this form at all.
+                            android.widget.Toast.makeText(
+                                context,
+                                "Find your spot, then tap Share ➔ DropPin Vault to bring it back!",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                            if (!launchMapsSearch(context, query)) {
+                                android.widget.Toast.makeText(context, "No maps app found on this device.", android.widget.Toast.LENGTH_SHORT).show()
+                                return@TextButton
+                            }
+                            // Closes rather than staying open — title/addressText/etc. are seeded
+                            // once, from initialData, when this dialog first composes. Leaving it
+                            // open and just updating pendingSharedSpot on the way back wouldn't
+                            // re-seed anything; closing it means the share-back reopens a fresh
+                            // instance that does. dismissForMapsSearch (not dismissAndCleanUp)
+                            // stashes any photo already attached here so it comes back attached
+                            // to that fresh instance too, instead of getting deleted on the way out.
+                            dismissForMapsSearch()
+                        },
+                        enabled = !formLocked
+                    ) {
+                        Icon(Icons.Default.Map, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Search in Maps", color = SpotVaultColors.Teal, fontSize = 13.sp)
+                    }
+                }
+            }
+            // Tags and Photo side by side rather than each getting a full-width section of their
+            // own — mirrors how the real Snap/Pin save screen already pairs Tags with Vehicles in
+            // a weighted Row instead of stacking every "extra" field full width, and neither one
+            // actually needs the full card width to begin with.
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    SpotEditSectionLabel("Tags")
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        SaveScreenTagField(
+                            selectedTags = selectedTags,
+                            onSelectedTagsChange = { selectedTags = it },
+                            allTags = allTags,
+                            modifier = Modifier.wrapContentWidth()
+                        )
+                        SaveScreenSelectedTagsRow(
+                            selectedTags = selectedTags,
+                            onSelectedTagsChange = { selectedTags = it }
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    SpotEditSectionLabel("Photo")
+                    if (photoPath.isNotBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Image(
+                                painter = rememberAsyncImagePainter(
+                                    model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                        .data(photoPath)
+                                        .size(108, 108)
+                                        .crossfade(true)
+                                        .build()
+                                ),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            IconButton(
+                                onClick = {
+                                    runCatching { File(photoPath).delete() }
+                                    photoPath = ""
+                                },
+                                enabled = !formLocked,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Remove photo", tint = SpotVaultColors.Danger, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    } else {
+                        // One button instead of separate Camera/Gallery icons — tapping it asks
+                        // which source, same chooser VaultAddPhotoDialog already uses everywhere
+                        // else a photo gets attached, rather than a second, different pattern here.
+                        TextButton(
+                            onClick = { showPhotoChooser = true },
+                            enabled = !formLocked,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            if (isCapturingPhoto) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = SpotVaultColors.Teal)
+                            } else {
+                                Icon(Icons.Default.AddAPhoto, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Add Photo", color = SpotVaultColors.Teal, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+            Column {
+                SpotEditSectionLabel("Notes")
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    placeholder = { Text("Add notes…", color = SpotVaultColors.Muted.copy(alpha = 0.7f)) },
+                    minLines = 2,
+                    maxLines = 2,
+                    enabled = !formLocked,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = spotEditFieldColors(),
+                    trailingIcon = {
+                        VoiceMicButton(onResult = { spoken -> notes = spoken }, prompt = "Dictate notes…")
+                    }
+                )
+            }
+            if (errorMessage != null) {
+                Text(errorMessage.orEmpty(), color = SpotVaultColors.Danger, fontSize = 12.sp)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                SpotVaultOutlinedButton(
+                    onClick = { if (!formLocked) dismissAndCleanUp() },
+                    enabled = !formLocked,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = spotVaultButtonShape()
+                ) {
+                    Text("Cancel", fontWeight = FontWeight.SemiBold, color = SpotVaultColors.Muted)
+                }
+                SpotVaultButton(
+                    onClick = {
+                        val knownCoordinates = resolvedCoordinates
+                        // Deliberately does not fall back to geocoding here — Save only ever commits
+                        // a location the user has already seen confirmed on screen (via "Find Address"
+                        // or a Maps share), never one it silently resolves itself first. An ambiguous
+                        // typed query landing on the Geocoder's best-guess match, saved immediately
+                        // with no chance to notice it was wrong, was the actual bug this replaces.
+                        if (knownCoordinates == null) {
+                            errorMessage = "Find the address above (or Search in Maps) before saving."
+                            return@SpotVaultButton
+                        }
+                        val trimmedTitle = title.trim()
+                        val trimmedNotes = notes.trim()
+                        val resolvedAddress = resolvedAddressLabel.ifBlank { addressText.trim() }
+                        isSaving = true
+                        errorMessage = null
+                        coroutineScope.launch {
+                            val resolved = ResolvedFavoriteLocation(knownCoordinates.first, knownCoordinates.second, resolvedAddress, resolvedCity, resolvedState)
+                            // One transaction, not two separate DAO calls — without this, a coroutine
+                            // cancellation (leaving the dialog, process death) landing between the
+                            // insert and the tag-assignment loop left a favorite saved with none of
+                            // its chosen tags attached, silently, with nothing to indicate any of
+                            // them didn't take.
+                            val savedSpot = withContext(Dispatchers.IO) {
+                                db.withTransaction {
+                                    val newId = dao.insertSpotAndGetId(
+                                        LocationSpot(
+                                            imagePath = photoPath,
+                                            locationDetails = trimmedNotes,
+                                            timestamp = System.currentTimeMillis(),
+                                            lat = resolved.lat,
+                                            lng = resolved.lng,
+                                            address = resolved.address,
+                                            isFavorite = true,
+                                            title = trimmedTitle,
+                                            city = resolved.city,
+                                            state = resolved.state
+                                        )
+                                    ).toInt()
+                                    selectedTags.forEach { tagName -> tagDao.assignTag(newId, tagName) }
+                                    dao.getSpotById(newId)
+                                }
+                            }
+                            isSaving = false
+                            if (savedSpot != null) {
+                                onSaved(savedSpot)
+                            } else {
+                                // The insert itself succeeded (or the transaction would have thrown) —
+                                // this only means the immediate read-back after didn't find it, which
+                                // the dialog closing already can't un-happen, so a Toast is the only
+                                // way left to actually tell the user rather than setting error text
+                                // on a composable about to leave composition, which would never render.
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Saved, but couldn't reload it right away — check your Vault.",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            onDismiss()
+                        }
+                    },
+                    enabled = !formLocked,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = spotVaultButtonShape()
+                ) {
+                    if (isSaving) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = SpotVaultColors.ButtonLabel)
+                    } else {
+                        Text("Save", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+
+    // Same look as VaultAddPhotoDialog (the chooser every other "add a photo" entry point in the
+    // app already uses) — Take Photo / Add from Gallery / Cancel — just wired to this dialog's own
+    // pre-save capture functions above instead of VaultAddPhotoDialog's post-save, spot-id-based ones.
+    if (showPhotoChooser) {
+        VaultOverlayDialog(onDismissRequest = { showPhotoChooser = false }) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    "Add Photo",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 18.sp,
+                    color = SpotVaultColors.Teal,
+                    letterSpacing = 0.5.sp
+                )
+                Text(
+                    "Attach a photo to this spot.",
+                    fontSize = 13.sp,
+                    color = SpotVaultColors.Muted,
+                    lineHeight = 18.sp
+                )
+                SpotVaultButton(
+                    onClick = {
+                        showPhotoChooser = false
+                        requestCameraCapture()
+                    },
+                    shape = spotVaultButtonShape(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("Take Photo", fontWeight = FontWeight.Bold)
+                }
+                SpotVaultOutlinedButton(
+                    onClick = {
+                        showPhotoChooser = false
+                        launchGallery()
+                    },
+                    shape = spotVaultButtonShape(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Icon(Icons.Default.AddAPhoto, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("Add from Gallery", fontWeight = FontWeight.Bold)
+                }
+                TextButton(
+                    onClick = { showPhotoChooser = false },
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Text("Cancel", color = SpotVaultColors.Teal)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun ArchivedSpotsDialog(
     dao: LocationDao,
@@ -4807,13 +5776,21 @@ fun ArchivedSpotsDialog(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val coroutineScope = rememberCoroutineScope()
     var archivedSpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
+    var tagsBySpotId by remember { mutableStateOf<Map<Int, List<TagEntity>>>(emptyMap()) }
     var spotPendingPermanentDelete by remember { mutableStateOf<LocationSpot?>(null) }
     var showUnarchiveAllConfirm by remember { mutableStateOf(false) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
     val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
 
     suspend fun refreshArchived() {
-        archivedSpots = dao.getArchivedSpots()
+        val spots = withContext(Dispatchers.IO) { dao.getArchivedSpots() }
+        val tags = withContext(Dispatchers.IO) {
+            spots.associate { spot ->
+                spot.id to tagDao.getTagsForSpot(spot.id)
+            }
+        }
+        archivedSpots = spots
+        tagsBySpotId = tags
     }
 
     LaunchedEffect(Unit) {
@@ -4999,7 +5976,7 @@ fun ArchivedSpotsDialog(
                             spot.address.ifBlank { "Untitled spot" }
                         }
                         val savedLabel = dateFormatter.format(Date(spot.timestamp))
-                        val spotTags by remember(spot.id) { tagDao.getTagsForSpotFlow(spot.id) }.collectAsState(initial = emptyList())
+                        val spotTags = tagsBySpotId[spot.id].orEmpty()
                         ElevatedCard(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
@@ -5057,7 +6034,7 @@ fun ArchivedSpotsDialog(
                                     TextButton(
                                         onClick = {
                                             coroutineScope.launch(Dispatchers.IO) {
-                                                dao.unarchiveSpot(spot.id)
+                                                dao.unarchiveSpotIfArchived(spot.id)
                                                 refreshArchived()
                                             }
                                         }
@@ -5137,17 +6114,9 @@ internal fun spotLocationParts(spot: LocationSpot): SpotLocationParts {
  * touches rows still genuinely missing city/state, and self-limiting, since a spot drops out of
  * its own filter the moment it resolves. */
 suspend fun resolveStuckSpotAddresses(context: Context, dao: LocationDao) {
-    // Used to also require spot.address.isNotBlank() — meant to scope this to spots that already
-    // had *some* address text (the original "older columns didn't exist yet" migration case), but
-    // it accidentally excluded any spot that never got geocoded in the first place: GPX-imported
-    // waypoints (address is only ever the GPX <cmt> field, blank for most real GPX files) and any
-    // spot saved with auto-fetch-address off at the time. Those sat as "Unknown" in Browse by
-    // Location forever, since a blank address meant this function skipped them on every launch
-    // instead of ever attempting to resolve them. Blank city/state plus real coordinates is
-    // already the complete, correct signal on its own.
-    val needsResolution = dao.getAllHistoryIncludingDeleted().filter { spot ->
-        spot.lat != 0.0 && spot.lng != 0.0 && spot.city.isBlank() && spot.state.isBlank()
-    }
+    // Cap per launch so a vault with hundreds of stuck rows cannot storm the geocoder + Room
+    // invalidation tracker for minutes. Prefer active vault spots; deleted/archived can wait.
+    val needsResolution = dao.getSpotsNeedingAddressResolution(MAX_STUCK_ADDRESS_RESOLUTIONS_PER_LAUNCH)
     needsResolution.forEach { spot ->
         val geocoded = reverseGeocodeAddress(context, spot.lat, spot.lng)
         if (!geocoded.full.startsWith("Lat:")) {
@@ -5161,10 +6130,18 @@ suspend fun resolveStuckSpotAddresses(context: Context, dao: LocationDao) {
             } else {
                 spot.title
             }
-            dao.updateSpot(spot.copy(address = geocoded.full, city = geocoded.city, state = geocoded.state, title = newTitle))
+            // Re-fetches rather than spot.copy(...) — this loops over every stuck spot doing a
+            // real network geocode per iteration, easily slow enough for the user to edit (or
+            // attach a photo to) the exact spot this is currently resolving in the background.
+            // copy()-ing the snapshot taken at the top of this function would silently revert
+            // whatever they'd just changed.
+            val current = dao.getSpotById(spot.id) ?: return@forEach
+            dao.updateSpot(current.copy(address = geocoded.full, city = geocoded.city, state = geocoded.state, title = newTitle))
         }
     }
 }
+
+private const val MAX_STUCK_ADDRESS_RESOLUTIONS_PER_LAUNCH = 25
 
 private sealed class LocationBrowserLevel {
     data object States : LocationBrowserLevel()
@@ -5197,7 +6174,6 @@ private val LocationBrowserLevelSaver = listSaver<LocationBrowserLevel, String>(
  * steps back up one level instead of closing outright. */
 @Composable
 fun VaultLocationBrowserDialog(
-    historyList: List<LocationSpot>,
     dao: LocationDao,
     prefs: SharedPreferences,
     onDismiss: () -> Unit,
@@ -5209,19 +6185,47 @@ fun VaultLocationBrowserDialog(
     var selectedItems by remember { mutableStateOf(setOf<Int>()) }
     var selectionModeActive by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    val vaultEpoch = rememberVaultInvalidationEpoch()
 
-    val activeSpots = remember(historyList) { historyList.filter { !it.isWishlist } }
-    val partsById = remember(activeSpots) { activeSpots.associate { it.id to spotLocationParts(it) } }
+    var stateRows by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
+    var cityRows by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
+    var entrySpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
 
-    val context = LocalContext.current
-    val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
-    val allTags by tagDao.getAllTags().collectAsState(initial = emptyList())
-    val locationsWithTags by tagDao.getAllLocationsWithTags().collectAsState(initial = emptyList())
-    val spotIdToTags = remember(locationsWithTags) { locationsWithTags.associate { it.spot.id to it.tags } }
+    LaunchedEffect(level, vaultEpoch) {
+        when (val l = level) {
+            is LocationBrowserLevel.States -> {
+                stateRows = withContext(Dispatchers.IO) {
+                    dao.getActiveStateCounts().map { it.name to it.count }
+                }
+            }
+            is LocationBrowserLevel.Cities -> {
+                cityRows = withContext(Dispatchers.IO) {
+                    dao.getActiveCityCounts(l.state).map { it.name to it.count }
+                }
+            }
+            is LocationBrowserLevel.Entries -> {
+                entrySpots = withContext(Dispatchers.IO) {
+                    dao.getActiveVaultSpotsForCity(l.state, l.city)
+                }
+            }
+        }
+    }
 
     fun exitEntriesSelection() {
         selectedItems = emptySet()
         selectionModeActive = false
+    }
+
+    // Shared by the confirm dialog's own Delete button and the confirm_delete=false instant
+    // path below — soft-deletes then offers Undo, same as the main Vault's own delete handling.
+    fun deleteSpots(ids: Set<Int>) {
+        exitEntriesSelection()
+        coroutineScope.launch(Dispatchers.IO) {
+            ids.forEach { dao.softDeleteSpot(it) }
+        }
+        VaultUndoSnackbar.show(if (ids.size == 1) "Spot deleted" else "${ids.size} spots deleted") {
+            withContext(Dispatchers.IO) { ids.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+        }
     }
 
     fun stepBack() {
@@ -5277,48 +6281,49 @@ fun VaultLocationBrowserDialog(
 
             when (val l = level) {
                 is LocationBrowserLevel.States -> {
-                    val states = remember(activeSpots) {
-                        activeSpots.groupBy { partsById.getValue(it.id).state }
-                            .toSortedMap(compareBy { it.lowercase(Locale.getDefault()) })
-                    }
                     LocationBrowserRowList(
-                        rows = states.map { (state, spots) -> state to spots.size },
+                        rows = stateRows,
                         emptyMessage = "No saved spots yet.",
                         onRowClick = { state, _ -> level = LocationBrowserLevel.Cities(state) }
                     )
                 }
                 is LocationBrowserLevel.Cities -> {
-                    val cities = remember(activeSpots, l.state) {
-                        activeSpots.filter { partsById.getValue(it.id).state == l.state }
-                            .groupBy { partsById.getValue(it.id).city }
-                            .toSortedMap(compareBy { it.lowercase(Locale.getDefault()) })
-                    }
                     LocationBrowserRowList(
-                        rows = cities.map { (city, spots) -> city to spots.size },
+                        rows = cityRows,
                         emptyMessage = "No cities found.",
                         onRowClick = { city, _ -> level = LocationBrowserLevel.Entries(l.state, city) }
                     )
                 }
                 is LocationBrowserLevel.Entries -> {
-                    val entries = remember(activeSpots, l.state, l.city) {
-                        activeSpots.filter { val p = partsById.getValue(it.id); p.state == l.state && p.city == l.city }
-                    }
                     VaultFilterableSpotList(
-                        baseSpots = entries,
+                        baseSpots = entrySpots,
                         prefs = prefs,
                         dao = dao,
                         selectedItems = selectedItems,
                         onSelectedItemsChange = { selectedItems = it },
-                        onShowDeleteConfirm = { showDeleteConfirm = true },
+                        // Bulk delete from the top action bar always skips the confirmation modal
+                        // — same reasoning as the main Vault: soft-delete is already reversible via
+                        // Recently Deleted, and now Undo, so a blocking dialog for it is redundant.
+                        onShowDeleteConfirm = { deleteSpots(selectedItems) },
                         onSwipeDeleteSpot = { spot ->
-                            selectedItems = setOf(spot.id)
-                            showDeleteConfirm = true
+                            // Single-spot swipe delete still respects the user's own "Confirm
+                            // before deleting" setting — only bulk delete above skips it always.
+                            if (prefs.getBoolean("confirm_delete", true)) {
+                                selectedItems = setOf(spot.id)
+                                showDeleteConfirm = true
+                            } else {
+                                deleteSpots(setOf(spot.id))
+                            }
                         },
                         onShareRequest = onShareRequest,
-                        onViewSpot = { spot ->
-                            onDismiss()
-                            onViewSpot(spot)
-                        },
+                        // Deliberately doesn't call onDismiss() here — unlike the explicit Close
+                        // button and stepBack() above, opening a spot isn't the user leaving the
+                        // browser. showLocationBrowser and this composable's own `level` drill-down
+                        // are both rememberSaveable (see MainActivity.kt's HistoryDialogContent),
+                        // so leaving this dialog open just means it's still there, at the same
+                        // State/City drill-down, once the user backs out of spot detail — matching
+                        // how the Calendar day-results dialog already behaves.
+                        onViewSpot = onViewSpot,
                         coroutineScope = coroutineScope,
                         modifier = Modifier.weight(1f, fill = false),
                         emptyTitle = "No spots here yet",
@@ -5341,10 +6346,7 @@ fun VaultLocationBrowserDialog(
                 TextButton(onClick = {
                     val toDelete = selectedItems
                     showDeleteConfirm = false
-                    exitEntriesSelection()
-                    coroutineScope.launch(Dispatchers.IO) {
-                        toDelete.forEach { dao.softDeleteSpot(it) }
-                    }
+                    deleteSpots(toDelete)
                 }) {
                     Text("Delete", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                 }
@@ -5368,7 +6370,9 @@ private fun LocationBrowserRowList(
         return
     }
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    Box(modifier = Modifier.heightIn(max = 420.dp)) {
+    val maxListHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.5f).dp
+        .coerceIn(220.dp, 520.dp)
+    Box(modifier = Modifier.heightIn(max = maxListHeight)) {
         LazyColumn(
             state = listState,
             modifier = Modifier.padding(end = 6.dp),

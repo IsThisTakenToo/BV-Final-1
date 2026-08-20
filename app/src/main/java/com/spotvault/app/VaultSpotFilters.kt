@@ -1,5 +1,16 @@
 package com.spotvault.app
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /** Emoji badge for a saved spot — title-text hints only now that category is gone. */
@@ -147,6 +158,81 @@ private fun spotSortDistanceMeters(
 ): Double? {
     if (spot.lat == 0.0 && spot.lng == 0.0) return null
     return haversineDistanceMeters(user.first, user.second, spot.lat, spot.lng)
+}
+
+/** Shared Vault tag map — one lightweight Flow instead of @Relation reloading every spot. */
+@Composable
+fun rememberVaultSpotIdToTags(tagDao: TagDao): Map<Int, List<TagEntity>> {
+    val rows by tagDao.observeActiveSpotTagAssignments().collectAsState(initial = emptyList())
+    return remember(rows) { rows.toTagsBySpotId() }
+}
+
+/**
+ * Filter/sort off the composition critical path. Search is lightly debounced so typing does not
+ * re-scan thousands of spots on every keystroke; other inputs update immediately on Default.
+ */
+@Composable
+fun rememberFilteredVaultSpots(
+    spots: List<LocationSpot>,
+    searchQuery: String,
+    showFavoritesOnly: Boolean,
+    vehicleId: Int?,
+    sortBy: String,
+    userLocation: Pair<Double, Double>?,
+    tagsBySpotId: Map<Int, List<TagEntity>>,
+    vehicleNameById: Map<Int, String>,
+    nearMeFilter: VaultNearMeFilter,
+    showPhotosOnly: Boolean,
+    selectedTag: String?
+): List<LocationSpot> {
+    var debouncedSearch by remember { mutableStateOf(searchQuery) }
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isBlank()) {
+            debouncedSearch = ""
+        } else {
+            delay(80)
+            debouncedSearch = searchQuery
+        }
+    }
+
+    val filtered by produceState(
+        initialValue = emptyList(),
+        spots,
+        debouncedSearch,
+        showFavoritesOnly,
+        vehicleId,
+        sortBy,
+        userLocation,
+        tagsBySpotId,
+        vehicleNameById,
+        nearMeFilter,
+        showPhotosOnly,
+        selectedTag
+    ) {
+        value = withContext(Dispatchers.Default) {
+            val base = filterAndSortVaultSpots(
+                spots = spots,
+                searchQuery = debouncedSearch,
+                showFavoritesOnly = showFavoritesOnly,
+                vehicleId = vehicleId,
+                sortBy = sortBy,
+                userLocation = userLocation,
+                tagsBySpotId = tagsBySpotId,
+                vehicleNameById = vehicleNameById,
+                nearMeFilter = nearMeFilter,
+                showPhotosOnly = showPhotosOnly
+            )
+            val tag = selectedTag
+            if (tag == null) {
+                base
+            } else {
+                base.filter { spot ->
+                    tagsBySpotId[spot.id]?.any { it.name.equals(tag, ignoreCase = true) } == true
+                }
+            }
+        }
+    }
+    return filtered
 }
 
 // Category was removed entirely (data column, GPX/backup fields, search matching, widget

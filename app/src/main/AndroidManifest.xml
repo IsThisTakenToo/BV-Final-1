@@ -70,8 +70,29 @@
             android:exported="true"
             android:enableOnBackInvokedCallback="true"
             android:resizeableActivity="true"
+            android:launchMode="singleTask"
             android:icon="@mipmap/ic_launcher"
-            android:roundIcon="@mipmap/ic_launcher_round" />
+            android:roundIcon="@mipmap/ic_launcher_round">
+            <!-- singleTask, not the previous default ("standard") — the Add Favorite Spot form's
+                 "Search in Maps" button sends the user out to their maps app mid-form, expecting
+                 them to come straight back via its Share button. Under "standard" launch mode,
+                 that share-back would spin up a brand new MainActivity instance stacked on top of
+                 the still-alive original — losing whatever the user had already typed into the
+                 form and leaving a confusing duplicate behind it on the back stack. singleTask
+                 guarantees Android delivers the share back to the SAME already-running instance
+                 (via onNewIntent) instead, which is what actually makes this out-and-back loop
+                 usable rather than just theoretically working the first time. Doesn't change how
+                 MainActivity's own outbound picker/camera/Drive-OAuth flows behave — those use
+                 ActivityResultLauncher, which returns results to whichever instance launched them
+                 regardless of this app's own launchMode. -->
+            <!-- Lets "DropPin Vault" show up in the system Share sheet from Google Maps (or any
+                 other app sharing a place as plain text) — see SharedMapsLink.kt for parsing. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
 
         <!-- One of these is enabled at a time (see AppIconManager.kt) so the user can pick an
              alternate home-screen icon; all of them point at the same MainActivity. -->

@@ -100,6 +100,7 @@ import androidx.compose.material.icons.filled.AutoDelete
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Share
@@ -265,7 +266,7 @@ data class ShareSpotPayload(
     val lat: Double,
     val lng: Double,
     val address: String,
-    val notes: String,
+    val title: String = "",
     val imagePath: String = ""
 )
 
@@ -275,6 +276,9 @@ private const val KEY_TEMP_OCR_TEXT = "temp_ocr_text"
 private const val KEY_TEMP_PROMINENT_OCR_TEXT = "temp_prominent_ocr_text"
 private const val KEY_DIALOG_SESSION_KEY = "dialog_session_key"
 private const val KEY_SHOW_TIMER_DIALOG = "show_timer_dialog"
+private const val KEY_PENDING_GALLERY_SPOT_ID = "pending_gallery_spot_id"
+private const val KEY_PENDING_CAMERA_SPOT_ID = "pending_camera_spot_id"
+private const val KEY_PENDING_CAMERA_PHOTO_PATH = "pending_camera_photo_path"
 
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 class MainActivity : FragmentActivity() {
@@ -406,6 +410,12 @@ class MainActivity : FragmentActivity() {
             // the *next* Snap/Pin (even an unrelated one) into completing this stale tracked
             // quick pin instead of opening its own timer dialog.
             pendingTrackedQuickPinOption = null
+            // The camera app pre-touches/creates the FileProvider-granted destination file the
+            // moment it's launched, before the user ever takes a photo — a cancelled capture
+            // otherwise leaves that empty file stranded in filesDir/images/ forever, with nothing
+            // in the codebase that ever cleans it up.
+            photoFile?.delete()
+            photoFile = null
             Toast.makeText(this, "Photo cancelled.", Toast.LENGTH_SHORT).show()
         }
     }
@@ -427,10 +437,13 @@ class MainActivity : FragmentActivity() {
                     Toast.makeText(this@MainActivity, "Location unavailable — enable GPS to share.", Toast.LENGTH_SHORT).show()
                 } else {
                     val (lat, lng, address) = located
-                    shareLocation(this@MainActivity, lat, lng, address, notes = "", imagePath = file.absolutePath, includePhoto = true)
+                    shareLocation(this@MainActivity, lat, lng, address, imagePath = file.absolutePath, includePhoto = true)
                 }
             }
         } else {
+            // Same orphaned-file cleanup as the main takePictureLauncher — the destination file
+            // was already created by the camera app before a cancel could ever reach here.
+            file?.delete()
             Toast.makeText(this, "Photo canceled.", Toast.LENGTH_SHORT).show()
         }
     }
@@ -445,14 +458,19 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    private var pendingGalleryPhotoTarget: LocationSpot? = null
+    // Spot ids only — the full LocationSpot snapshot is reloaded on attach. Survives process
+    // death via onSaveInstanceState (gallery/camera round trips routinely kill the app under
+    // memory pressure on older phones and big-tablet multitasking).
+    private var pendingGalleryPhotoSpotId: Int = -1
+    private var pendingCameraPhotoSpotId: Int = -1
+    private var pendingCameraPhotoFile: File? = null
 
     private val galleryPhotoLauncher = registerForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        val spot = pendingGalleryPhotoTarget
-        pendingGalleryPhotoTarget = null
-        if (uri != null && spot != null) {
+        val spotId = pendingGalleryPhotoSpotId
+        pendingGalleryPhotoSpotId = -1
+        if (uri != null && spotId >= 0) {
             lifecycleScope.launch(Dispatchers.IO) {
                 val imagesDir = File(filesDir, "images").apply { mkdirs() }
                 val destFile = File(imagesDir, "gallery_${System.currentTimeMillis()}.jpg")
@@ -463,7 +481,9 @@ class MainActivity : FragmentActivity() {
                 // a permanently broken photo reference and no error shown either way.
                 val copied = try {
                     contentResolver.openInputStream(uri)?.use { input ->
-                        destFile.outputStream().use { output -> input.copyTo(output) }
+                        destFile.outputStream().use { output ->
+                            input.copyToLimited(output, MAX_GALLERY_IMPORT_BYTES)
+                        }
                     }
                     destFile.exists() && destFile.length() > 0
                 } catch (e: Exception) {
@@ -472,7 +492,7 @@ class MainActivity : FragmentActivity() {
                 }
                 if (copied) {
                     compressCapturedPhoto(destFile.absolutePath)
-                    attachPhotoToSpot(spot, destFile.absolutePath)
+                    attachPhotoToSpot(spotId, destFile.absolutePath)
                 } else {
                     runCatching { destFile.delete() }
                     withContext(Dispatchers.Main) {
@@ -484,7 +504,7 @@ class MainActivity : FragmentActivity() {
     }
 
     fun launchGalleryPickerForSpot(spot: LocationSpot) {
-        pendingGalleryPhotoTarget = spot
+        pendingGalleryPhotoSpotId = spot.id
         galleryPhotoLauncher.launch(
             androidx.activity.result.PickVisualMediaRequest(
                 ActivityResultContracts.PickVisualMedia.ImageOnly
@@ -492,22 +512,21 @@ class MainActivity : FragmentActivity() {
         )
     }
 
-    private var pendingCameraPhotoTarget: LocationSpot? = null
-    private var pendingCameraPhotoFile: File? = null
-
     private val addPhotoCameraLauncher = registerForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
-        val spot = pendingCameraPhotoTarget
+        val spotId = pendingCameraPhotoSpotId
         val file = pendingCameraPhotoFile
-        pendingCameraPhotoTarget = null
+        pendingCameraPhotoSpotId = -1
         pendingCameraPhotoFile = null
-        if (success && spot != null && file != null) {
+        if (success && spotId >= 0 && file != null) {
             lifecycleScope.launch(Dispatchers.IO) {
                 compressCapturedPhoto(file.absolutePath)
-                attachPhotoToSpot(spot, file.absolutePath)
+                attachPhotoToSpot(spotId, file.absolutePath)
             }
         } else if (!success) {
+            // Same orphaned-file cleanup as the main takePictureLauncher.
+            file?.delete()
             Toast.makeText(this, "Photo cancelled.", Toast.LENGTH_SHORT).show()
         }
     }
@@ -515,7 +534,7 @@ class MainActivity : FragmentActivity() {
     fun launchCameraForSpot(spot: LocationSpot) {
         val imagesDir = File(filesDir, "images").apply { mkdirs() }
         val newFile = File(imagesDir, "spot_photo_${System.currentTimeMillis()}.jpg")
-        pendingCameraPhotoTarget = spot
+        pendingCameraPhotoSpotId = spot.id
         pendingCameraPhotoFile = newFile
         val newUri = FileProvider.getUriForFile(this@MainActivity, "${packageName}.fileprovider", newFile)
         // Camera is optional hardware (see the manifest's <uses-feature required="false">) — a
@@ -525,7 +544,7 @@ class MainActivity : FragmentActivity() {
         try {
             addPhotoCameraLauncher.launch(newUri)
         } catch (e: android.content.ActivityNotFoundException) {
-            pendingCameraPhotoTarget = null
+            pendingCameraPhotoSpotId = -1
             pendingCameraPhotoFile = null
             Toast.makeText(this, "No camera app found on this device.", Toast.LENGTH_SHORT).show()
         }
@@ -533,12 +552,15 @@ class MainActivity : FragmentActivity() {
 
     /** First photo ever added becomes the spot's cover ([LocationSpot.imagePath]); every photo
      * after that is appended to [SpotPhoto] so the detail screen can show all of them. */
-    private suspend fun attachPhotoToSpot(spot: LocationSpot, absolutePath: String) {
+    private suspend fun attachPhotoToSpot(spotId: Int, absolutePath: String) {
         val db = AppDatabase.getDatabase(this@MainActivity)
-        if (spot.imagePath.isBlank()) {
-            db.locationDao().updateSpot(spot.copy(imagePath = absolutePath))
+        // Always re-fetch — camera/gallery round trips outlast other edits on the same spot.
+        // Stale imagePath would overwrite a newer cover; stale copy() would revert title/notes.
+        val current = db.locationDao().getSpotById(spotId) ?: return
+        if (current.imagePath.isBlank()) {
+            db.locationDao().updateSpot(current.copy(imagePath = absolutePath))
         } else {
-            db.spotPhotoDao().insert(SpotPhoto(spotId = spot.id, path = absolutePath))
+            db.spotPhotoDao().insert(SpotPhoto(spotId = spotId, path = absolutePath))
         }
     }
 
@@ -578,7 +600,7 @@ class MainActivity : FragmentActivity() {
         val result = withContext(Dispatchers.IO) {
             val saveResult = quietSaveTacticalPin(this@MainActivity, dao, prefs, option)
             if (saveResult is QuietSaveResult.Saved && photoPath.isNotEmpty()) {
-                val spot = dao.getHistoryList().find { it.id == saveResult.spotId }
+                val spot = dao.getSpotById(saveResult.spotId)
                 if (spot != null) {
                     dao.updateSpot(spot.copy(imagePath = photoPath, locationDetails = details))
                 }
@@ -715,6 +737,7 @@ class MainActivity : FragmentActivity() {
             AppIconManager.reconcileIconState(this@MainActivity, prefs)
         }
         ingestWidgetIntent(intent)
+        ingestSharedMapsIntent(intent)
         isPinned.value = prefs.getBoolean("is_pinned", false)
         ThemeState.currentTheme = loadColorThemeFromPrefs(prefs)
         ThemeState.vaultIconStyle = premiumGatedId(
@@ -748,6 +771,12 @@ class MainActivity : FragmentActivity() {
             PremiumFreeTier.freeBackgroundPatternId
         )
         ThemeState.dynamicColorEnabled = prefs.getBoolean("dynamic_color_enabled", false)
+        // Splash particle budgets read this — low-RAM phones and Android Go still get the same
+        // style, just fewer Canvas draws so cold launch doesn't thrash under memory pressure.
+        runCatching {
+            val am = getSystemService(android.app.ActivityManager::class.java)
+            ThemeState.lowRamDevice = am?.isLowRamDevice == true
+        }
         refreshDynamicColors(applicationContext)
         com.spotvault.app.SpotVaultColors.updateAmoled(prefs.getBoolean("amoled_black", false))
         isAppUnlocked.value = !prefs.getBoolean(APP_LOCK_ENABLED_PREF, false)
@@ -764,6 +793,13 @@ class MainActivity : FragmentActivity() {
             scheduleDriveAutoBackup(this)
         }
 
+        // Always keep the daily purge worker scheduled — it hard-purges Recently Deleted photos
+        // even when Auto Delete is off. UPDATE is idempotent.
+        scheduleAutoDelete(this)
+
+        // Drop a Search-in-Maps photo that was never consumed (process death / abandoned flow).
+        PendingFavoritePhoto.purgeIfStale()
+
         // Restores the Snap/Pin flow across a configuration change (rotation, dark/light system
         // switch, or a resizeableActivity="true" multi-window resize — there's no orientation
         // lock or configChanges override, so all of those recreate this Activity by default).
@@ -777,11 +813,18 @@ class MainActivity : FragmentActivity() {
             tempProminentOcrTextForDialog = state.getString(KEY_TEMP_PROMINENT_OCR_TEXT, "")
             dialogSessionKey = state.getLong(KEY_DIALOG_SESSION_KEY, 0L)
             showTimerDialog.value = state.getBoolean(KEY_SHOW_TIMER_DIALOG, false)
+            pendingGalleryPhotoSpotId = state.getInt(KEY_PENDING_GALLERY_SPOT_ID, -1)
+            pendingCameraPhotoSpotId = state.getInt(KEY_PENDING_CAMERA_SPOT_ID, -1)
+            state.getString(KEY_PENDING_CAMERA_PHOTO_PATH)?.let { path ->
+                pendingCameraPhotoFile = File(path)
+            }
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
             val db = AppDatabase.getDatabase(this@MainActivity)
             migrateLegacyCarVehicleIfNeeded(this@MainActivity, prefs, db.vehicleDao())
+            val activeMacs = db.vehicleDao().getActiveList().mapNotNull { it.bluetoothMac }
+            pruneStaleAutoParkMacPrefs(prefs, activeMacs)
         }
 
         // Every launch, not gated behind a one-time flag — a spot missing city/state (stuck on
@@ -799,18 +842,15 @@ class MainActivity : FragmentActivity() {
             val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(30)
             val db = AppDatabase.getDatabase(this@MainActivity)
             val dao = db.locationDao()
-            val spotPhotoDao = db.spotPhotoDao()
-            val toPurge = dao.getDeletedOlderThan(cutoff)
-            toPurge.forEach { spot ->
+            val coverPaths = dao.getDeletedCoverPathsOlderThan(cutoff)
+            coverPaths.forEach { spot ->
                 if (spot.imagePath.isNotEmpty()) {
                     runCatching { File(spot.imagePath).delete() }
                 }
-                // spot_photos rows cascade-delete with the spot below, but that only removes the
-                // DB rows — the actual image files on disk are only reachable here, before the
-                // purge, or they'd be orphaned forever.
-                spotPhotoDao.getForSpot(spot.id).forEach { photo ->
-                    runCatching { File(photo.path).delete() }
-                }
+            }
+            // Extra gallery files must be deleted before the purge cascades away spot_photos rows.
+            dao.getExtraPhotoPathsDeletedOlderThan(cutoff).forEach { path ->
+                runCatching { File(path).delete() }
             }
             dao.purgeDeletedOlderThan(cutoff)
             // Cascades away the cross-refs for every tag those spots carried, but nothing else
@@ -818,7 +858,7 @@ class MainActivity : FragmentActivity() {
             // count only ever climbs, never falls, on this exact auto-purge that runs on every
             // single app launch. See TagDao.recomputeAllUsageCounts's own doc for the full picture
             // (this is one of four call sites that needed it).
-            if (toPurge.isNotEmpty()) {
+            if (coverPaths.isNotEmpty()) {
                 db.tagDao().recomputeAllUsageCounts()
             }
         }
@@ -831,28 +871,55 @@ class MainActivity : FragmentActivity() {
                     runCatching { file.delete() }
                 }
             }
+            // Process-death mid Drive upload/restore can leave multi-MB zip temps in cacheDir.
+            cacheDir.listFiles()?.forEach { file ->
+                val name = file.name
+                if (file.isFile &&
+                    file.lastModified() < cutoff &&
+                    (name.startsWith("drive_") && name.endsWith(".zip") ||
+                        name.endsWith("_cmp.jpg"))
+                ) {
+                    runCatching { file.delete() }
+                }
+            }
         }
 
-        // Sweeps files/images/ for photos no spot (or spot_photos row) actually references —
-        // a capture whose save was interrupted (cancelled, a crash, or process death between the
-        // camera returning and the timer dialog's Save) leaves its JPEG on disk with nothing ever
-        // cleaning it up otherwise, a slow unbounded storage leak on exactly the low-storage
-        // devices most likely to have caused the interruption in the first place. 24h old is a
-        // safety margin so this can never race a capture that's still legitimately in progress
-        // (e.g. sitting in the timer dialog, not yet saved).
+        // Sweeps files/images/ and files/vault_images/ for photos no spot (or spot_photos row)
+        // actually references — a capture whose save was interrupted (cancelled, a crash, or
+        // process death between the camera returning and the timer dialog's Save) leaves its JPEG
+        // on disk with nothing ever cleaning it up otherwise, a slow unbounded storage leak on
+        // exactly the low-storage devices most likely to have caused the interruption in the
+        // first place. Import/restore writes into vault_images/ (see VaultBackupManager), so that
+        // directory needs the same sweep — images/ alone left failed-import orphans forever.
+        // 24h old is a safety margin so this can never race a capture that's still legitimately
+        // in progress (e.g. sitting in the timer dialog, not yet saved).
+        // Throttled to once per day — path-only queries are cheap, but cold-start IO on multi-year
+        // vaults still isn't free on low-RAM phones.
         lifecycleScope.launch(Dispatchers.IO) {
-            val imagesDir = File(filesDir, "images")
-            val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1)
-            val candidates = imagesDir.listFiles()?.filter { it.lastModified() < cutoff } ?: emptyList()
-            if (candidates.isEmpty()) return@launch
+            val lastSweep = prefs.getLong("orphan_photo_sweep_at", 0L)
+            val now = System.currentTimeMillis()
+            if (now - lastSweep < TimeUnit.DAYS.toMillis(1)) return@launch
+
+            val cutoff = now - TimeUnit.DAYS.toMillis(1)
+            val imageDirs = listOf(
+                File(filesDir, "images"),
+                File(filesDir, "vault_images")
+            )
+            val candidates = imageDirs.flatMap { dir ->
+                dir.listFiles()?.filter { it.isFile && it.lastModified() < cutoff }.orEmpty()
+            }
+            if (candidates.isEmpty()) {
+                prefs.edit().putLong("orphan_photo_sweep_at", now).apply()
+                return@launch
+            }
 
             val db = AppDatabase.getDatabase(this@MainActivity)
-            val allSpots = db.locationDao().getAllHistoryIncludingDeleted()
-            val spotPhotoDao = db.spotPhotoDao()
             val referencedPaths = buildSet {
-                allSpots.forEach { spot ->
-                    if (spot.imagePath.isNotEmpty()) add(File(spot.imagePath).absolutePath)
-                    spotPhotoDao.getForSpot(spot.id).forEach { photo -> add(File(photo.path).absolutePath) }
+                db.locationDao().getAllCoverImagePaths().forEach { path ->
+                    if (path.isNotEmpty()) add(File(path).absolutePath)
+                }
+                db.spotPhotoDao().getAllPhotoPaths().forEach { path ->
+                    if (path.isNotEmpty()) add(File(path).absolutePath)
                 }
                 photoFile?.absolutePath?.let { add(File(it).absolutePath) }
             }
@@ -861,6 +928,7 @@ class MainActivity : FragmentActivity() {
                     runCatching { file.delete() }
                 }
             }
+            prefs.edit().putLong("orphan_photo_sweep_at", now).apply()
         }
 
         if (prefs.getBoolean("widget_refresh_on_open", true)) {
@@ -875,7 +943,7 @@ class MainActivity : FragmentActivity() {
             CompositionLocalProvider(
                 LocalDensity provides Density(
                     density = baseDensity.density,
-                    fontScale = baseDensity.fontScale * ThemeState.textScale
+                    fontScale = (baseDensity.fontScale * ThemeState.textScale).coerceIn(0.85f, 1.6f)
                 )
             ) {
             // Measured once here, against the main Activity's own root view — the one window
@@ -983,11 +1051,16 @@ class MainActivity : FragmentActivity() {
                             when (pendingWidgetAction) {
                                 PremiumWidgetIntents.ACTION_PREMIUM -> SpotVaultRoutes.SETTINGS_PREMIUM
                                 PremiumWidgetIntents.ACTION_VAULT -> SpotVaultRoutes.VAULT
+                                PremiumWidgetIntents.ACTION_AUTOPARK_SETTINGS -> SpotVaultRoutes.SETTINGS_AUTOPARK
                                 else -> null
                             }
                         }
-                        val widgetCompassLat = remember(widgetVersion) { pendingWidgetCompassLat }
-                        val widgetCompassLng = remember(widgetVersion) { pendingWidgetCompassLng }
+                        val widgetCompassLat = remember(widgetVersion) {
+                            pendingWidgetCompassLat.also { pendingWidgetCompassLat = null }
+                        }
+                        val widgetCompassLng = remember(widgetVersion) {
+                            pendingWidgetCompassLng.also { pendingWidgetCompassLng = null }
+                        }
 
                         LaunchedEffect(widgetVersion, showSplash, showWelcome, isAppUnlocked.value) {
                             if (showSplash || showWelcome) return@LaunchedEffect
@@ -1014,25 +1087,42 @@ class MainActivity : FragmentActivity() {
                                 PremiumWidgetIntents.ACTION_VAULT -> {
                                     pendingWidgetAction = null
                                 }
+                                PremiumWidgetIntents.ACTION_AUTOPARK_SETTINGS -> {
+                                    pendingWidgetAction = null
+                                }
                                 PremiumWidgetIntents.ACTION_NAVIGATE_MAPS -> {
                                     pendingWidgetAction = null
-                                    // Same google.navigation walking-mode intent TimerService's
-                                    // "Navigate to" notification action used to fire directly —
-                                    // deferred to here, behind the App Lock gate this
-                                    // LaunchedEffect already sits behind, instead of handing the
-                                    // tracked location to Maps straight from a locked device.
-                                    val mapUri = android.net.Uri.parse(
-                                        "google.navigation:q=$widgetCompassLat,$widgetCompassLng&mode=w"
-                                    )
-                                    try {
-                                        // No setPackage() — see TimerService's identical fix for why
-                                        // locking this to Google Maps specifically only narrows
-                                        // which devices this can succeed on, with no upside.
-                                        startActivity(
-                                            android.content.Intent(android.content.Intent.ACTION_VIEW, mapUri)
+                                    val lat = widgetCompassLat
+                                    val lng = widgetCompassLng
+                                    if (lat != null && lng != null) {
+                                        val mapUri = android.net.Uri.parse(
+                                            "google.navigation:q=$lat,$lng&mode=w"
                                         )
-                                    } catch (e: android.content.ActivityNotFoundException) {
-                                        Toast.makeText(this@MainActivity, "No navigation app found.", Toast.LENGTH_SHORT).show()
+                                        try {
+                                            startActivity(
+                                                android.content.Intent(android.content.Intent.ACTION_VIEW, mapUri)
+                                            )
+                                        } catch (e: android.content.ActivityNotFoundException) {
+                                            Toast.makeText(this@MainActivity, "No navigation app found.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                                PremiumWidgetIntents.ACTION_SHOW_MAP -> {
+                                    pendingWidgetAction = null
+                                    val lat = widgetCompassLat
+                                    val lng = widgetCompassLng
+                                    if (lat != null && lng != null) {
+                                        val label = prefs.getString("current_address", "")?.ifBlank { "Saved Spot" } ?: "Saved Spot"
+                                        val showMapUri = android.net.Uri.parse(
+                                            "geo:0,0?q=$lat,$lng(${android.net.Uri.encode(label)})"
+                                        )
+                                        try {
+                                            startActivity(
+                                                android.content.Intent(android.content.Intent.ACTION_VIEW, showMapUri)
+                                            )
+                                        } catch (e: android.content.ActivityNotFoundException) {
+                                            Toast.makeText(this@MainActivity, "No maps app found.", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
                                 else -> Unit
@@ -1064,7 +1154,7 @@ class MainActivity : FragmentActivity() {
                                         payload.lat,
                                         payload.lng,
                                         payload.address,
-                                        payload.notes,
+                                        payload.title,
                                         payload.imagePath,
                                         includePhoto = hasPhoto
                                     )
@@ -1099,6 +1189,12 @@ class MainActivity : FragmentActivity() {
                                         isAppUnlocked.value = true
                                         shouldRequireUnlockOnResume = false
                                     }
+                                    // Widgets otherwise only repaint on their next natural trigger
+                                    // (a save, or the 30-minute periodic update) — turning App
+                                    // Lock ON should hide widget content immediately, not leave a
+                                    // tracked spot's photo/address sitting on the home screen for
+                                    // up to half an hour after the user just locked the app.
+                                    WidgetThemeHelper.refreshAllWidgets(this@MainActivity)
                                 },
                                 onRequestLocationPermission = {
                                     requestPermissionsLauncher.launch(
@@ -1220,10 +1316,15 @@ class MainActivity : FragmentActivity() {
         // change; without writing it out here there'd be nothing to restore from.
         photoFile?.absolutePath?.let { outState.putString(KEY_PHOTO_FILE_PATH, it) }
         photoUri?.toString()?.let { outState.putString(KEY_PHOTO_URI, it) }
-        outState.putString(KEY_TEMP_OCR_TEXT, tempOcrTextForDialog)
-        outState.putString(KEY_TEMP_PROMINENT_OCR_TEXT, tempProminentOcrTextForDialog)
+        outState.putString(KEY_TEMP_OCR_TEXT, tempOcrTextForDialog.take(2048))
+        outState.putString(KEY_TEMP_PROMINENT_OCR_TEXT, tempProminentOcrTextForDialog.take(2048))
         outState.putLong(KEY_DIALOG_SESSION_KEY, dialogSessionKey)
         outState.putBoolean(KEY_SHOW_TIMER_DIALOG, showTimerDialog.value)
+        outState.putInt(KEY_PENDING_GALLERY_SPOT_ID, pendingGalleryPhotoSpotId)
+        outState.putInt(KEY_PENDING_CAMERA_SPOT_ID, pendingCameraPhotoSpotId)
+        pendingCameraPhotoFile?.absolutePath?.let {
+            outState.putString(KEY_PENDING_CAMERA_PHOTO_PATH, it)
+        }
     }
 
     override fun onStop() {
@@ -1245,6 +1346,7 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         ingestWidgetIntent(intent)
+        ingestSharedMapsIntent(intent)
     }
 
     override fun onResume() {
@@ -1353,11 +1455,6 @@ class MainActivity : FragmentActivity() {
         }
 
         isShowingBiometricPrompt = true
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            if (isShowingBiometricPrompt) {
-                isShowingBiometricPrompt = false
-            }
-        }, 4000L)
         val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt(
             this,
@@ -1487,15 +1584,58 @@ class MainActivity : FragmentActivity() {
             changed = true
         }
         intent.getStringExtra(PremiumWidgetIntents.EXTRA_WIDGET_ACTION)?.let { action ->
-            pendingWidgetAction = action
-            changed = true
+            if (action in PremiumWidgetIntents.KNOWN_ACTIONS) {
+                pendingWidgetAction = action
+                changed = true
+            }
         }
         if (intent.hasExtra(PremiumWidgetIntents.EXTRA_COMPASS_LAT)) {
-            pendingWidgetCompassLat = intent.getDoubleExtra(PremiumWidgetIntents.EXTRA_COMPASS_LAT, 0.0)
-            pendingWidgetCompassLng = intent.getDoubleExtra(PremiumWidgetIntents.EXTRA_COMPASS_LNG, 0.0)
-            changed = true
+            val lat = intent.getDoubleExtra(PremiumWidgetIntents.EXTRA_COMPASS_LAT, Double.NaN)
+            val lng = intent.getDoubleExtra(PremiumWidgetIntents.EXTRA_COMPASS_LNG, Double.NaN)
+            if (lat.isFinite() && lng.isFinite() &&
+                lat in -90.0..90.0 && lng in -180.0..180.0
+            ) {
+                pendingWidgetCompassLat = lat
+                pendingWidgetCompassLng = lng
+                changed = true
+            }
         }
-        if (changed) widgetIntentVersion.value++
+        if (changed) {
+            widgetIntentVersion.value++
+            // singleTask keeps handing the same Intent back on recreate — clear one-shot extras
+            // the same way ingestSharedMapsIntent clears EXTRA_TEXT.
+            intent.removeExtra(PremiumWidgetIntents.EXTRA_SPOT_ID)
+            intent.removeExtra(PremiumWidgetIntents.EXTRA_WIDGET_ACTION)
+            intent.removeExtra(PremiumWidgetIntents.EXTRA_COMPASS_LAT)
+            intent.removeExtra(PremiumWidgetIntents.EXTRA_COMPASS_LNG)
+        }
+    }
+
+    /** Handles a Share-sheet ACTION_SEND from Google Maps (or anything else sharing a place as
+     * plain text) — hands the shared text off to PendingSharedSpot once it's been parsed and (if
+     * possible) resolved to real coordinates. SpotVaultMainScaffold watches
+     * PendingSharedSpot.version directly to navigate to the Vault tab (deliberately NOT routed
+     * through pendingWidgetAction/widgetIntentVersion the way widget deep-links are — that
+     * mechanism's navigation effect is keyed on the resolved route string, so a second share
+     * arriving after the user had already been sent to the Vault tab once before would resolve to
+     * the same "vault" value and silently never re-trigger). HistoryDialogContent separately
+     * watches the same version to actually open the Favorites Hub and consume the payload.
+     * Parsing/resolution runs on lifecycleScope rather than blocking here since resolving a
+     * shortened maps.app.goo.gl link needs a network round trip. */
+    private fun ingestSharedMapsIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND || intent.type != "text/plain") return
+        val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+            ?.take(16_384)
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+        // MainActivity is singleTask, so Android keeps handing this same Intent back from
+        // getIntent() on every future onCreate — a config change (rotation) or a background
+        // process restart would otherwise silently re-parse/re-geocode this text and reopen the
+        // Add Spot form all over again. Removing the extra here makes this a true one-shot.
+        intent.removeExtra(Intent.EXTRA_TEXT)
+        lifecycleScope.launch {
+            handleSharedMapsText(this@MainActivity, sharedText)
+        }
     }
 
     private fun hasLocationPermissionForWidget(): Boolean {
@@ -1561,6 +1701,7 @@ class MainActivity : FragmentActivity() {
                 // "Scanned Text" field feeding locationDetails.
                 val initialLocationDetails = note
                 val dao = AppDatabase.getDatabase(this@MainActivity).locationDao()
+                val spotPhotoDao = AppDatabase.getDatabase(this@MainActivity).spotPhotoDao()
 
                 val timestamp = System.currentTimeMillis()
                 // The dialog always has an explicit vehicle selection (including "None") by the
@@ -1569,20 +1710,32 @@ class MainActivity : FragmentActivity() {
                 val resolvedVehicleId = vehicleId
                 val pinnedVehicle = resolvedVehicleId?.let { vehicleDao.getById(it) }
 
-                val editor = prefs.edit()
-                    .putBoolean("is_pinned", true)
-                    .putString("photo_path", currentPhotoPath)
-                    .putFloat("lat", lat.toFloat())
-                    .putFloat("lng", lng.toFloat())
-                    .putString("location_details", initialLocationDetails)
-                    .putString("current_address", "Loading address...")
-                    .also { applyPinnedVehiclePrefs(it, pinnedVehicle) }
-                if (timeMs > 0) {
-                    editor.putLong("timer_end_time", System.currentTimeMillis() + timeMs)
-                } else {
-                    editor.remove("timer_end_time")
+                // Quiet Save (isActiveTracking = false) never keeps any of this — the block below
+                // immediately writes is_pinned back to false and removes photo_path/lat/lng again
+                // once this coroutine resumes on Main. Writing "is_pinned"=true here unconditionally
+                // used to mean prefs' own OnSharedPreferenceChangeListener (which drives
+                // isPinned.value, and with it whether the Active Tracking screen renders) could
+                // observe that write and flip the UI to the tracking screen for the entire
+                // duration of the DB insert/dedup-merge work below, before the corrective write
+                // downstream ever got a chance to run — a real, visible flash of the wrong screen
+                // on every single Quiet Save. Skipping the write entirely when it was never the
+                // right state to begin with avoids the round trip instead of racing to revert it.
+                if (isActiveTracking) {
+                    val editor = prefs.edit()
+                        .putBoolean("is_pinned", true)
+                        .putString("photo_path", currentPhotoPath)
+                        .putCoord("lat", lat)
+                        .putCoord("lng", lng)
+                        .putString("location_details", prefsSafeLocationDetails(initialLocationDetails))
+                        .putString("current_address", "Loading address...")
+                        .also { applyPinnedVehiclePrefs(it, pinnedVehicle) }
+                    if (timeMs > 0) {
+                        editor.putLong("timer_end_time", System.currentTimeMillis() + timeMs)
+                    } else {
+                        editor.remove("timer_end_time")
+                    }
+                    editor.apply()
                 }
-                editor.apply()
 
                 // Smart Deduplication: if a recent spot already sits within the merge radius,
                 // fold this save into it (fresh timestamp, blanks filled in) instead of creating
@@ -1591,6 +1744,7 @@ class MainActivity : FragmentActivity() {
                 val (insertedId, resultSpot, wasMerged) = if (mergeTarget != null) {
                     val merged = mergeDeduplicatedSpot(
                         dao = dao,
+                        spotPhotoDao = spotPhotoDao,
                         target = mergeTarget,
                         newTimestamp = timestamp,
                         newImagePath = currentPhotoPath,
@@ -1627,7 +1781,7 @@ class MainActivity : FragmentActivity() {
                     // stuck since the address-refresh block below is skipped for merges.
                     prefs.edit()
                         .putString("current_address", resultSpot.address)
-                        .putString("location_details", resultSpot.locationDetails)
+                        .putString("location_details", prefsSafeLocationDetails(resultSpot.locationDetails))
                         .apply()
                 }
 
@@ -1682,7 +1836,7 @@ class MainActivity : FragmentActivity() {
                     // for both flows, so there's nothing left to branch on here.
                     val finalDetails = pinWork.note
                     if (!pinWork.isCamera) {
-                        prefs.edit().putString("location_details", finalDetails).apply()
+                        prefs.edit().putString("location_details", prefsSafeLocationDetails(finalDetails)).apply()
                     }
 
                     val spotToUpdate = dao.getSpotById(pinWork.insertedId)
@@ -1748,7 +1902,7 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             val dao = AppDatabase.getDatabase(this@MainActivity).locationDao()
             val spot = withContext(Dispatchers.IO) {
-                dao.getHistoryList().find { it.id == spotId }
+                dao.getSpotById(spotId)
             } ?: return@launch
 
             val effectivePhotoPath = photoPath.ifEmpty { spot.imagePath }
@@ -1759,9 +1913,9 @@ class MainActivity : FragmentActivity() {
             prefs.edit()
                 .putBoolean("is_pinned", true)
                 .putString("photo_path", effectivePhotoPath)
-                .putFloat("lat", lat.toFloat())
-                .putFloat("lng", lng.toFloat())
-                .putString("location_details", effectiveDetails)
+                .putCoord("lat", lat)
+                .putCoord("lng", lng)
+                .putString("location_details", prefsSafeLocationDetails(effectiveDetails))
                 .putString("current_address", spot.address.ifBlank { "Loading address..." })
                 .remove("timer_end_time")
                 .apply()
@@ -1777,7 +1931,7 @@ class MainActivity : FragmentActivity() {
                     val geocoded = reverseGeocodeAddress(this@MainActivity, lat, lng)
                     prefs.edit().putString("current_address", geocoded.full).apply()
 
-                    val spotToUpdate = dao.getHistoryList().find { it.id == spotId }
+                    val spotToUpdate = dao.getSpotById(spotId)
                     if (spotToUpdate != null) {
                         dao.updateSpot(spotToUpdate.copy(address = geocoded.full, city = geocoded.city, state = geocoded.state))
                     }
@@ -1814,9 +1968,19 @@ class MainActivity : FragmentActivity() {
 
     private fun extractOcrAndShowDialog() {
         val currentPhotoPath = photoFile?.absolutePath ?: ""
+        // Captured AND cleared synchronously right here, before anything suspends — a second
+        // quick-pin tile tap landing while this capture's OCR coroutine below is still running
+        // (the "Securing your pin…" overlay doesn't block touches) used to be able to reassign
+        // the shared pendingTrackedQuickPinOption field before this coroutine got around to
+        // reading it, so it would complete under the SECOND tap's option/label while still using
+        // the FIRST tap's photo and OCR text. Reading it into this local now (main-thread callback
+        // execution is single-threaded, so nothing else can run between this line and the tap that
+        // triggered it) and never touching the shared field again below makes this capture immune
+        // to whatever a later tap does to it — same reasoning as the early-return branch just
+        // below, which already got this right.
         val trackedOption = pendingTrackedQuickPinOption
+        pendingTrackedQuickPinOption = null
         if (trackedOption != null && currentPhotoPath.isEmpty()) {
-            pendingTrackedQuickPinOption = null
             lifecycleScope.launch {
                 completeTrackedQuickPinWithPhoto(trackedOption, photoPath = "", details = trackedOption.details)
             }
@@ -1890,7 +2054,11 @@ class MainActivity : FragmentActivity() {
                     } catch (e: Exception) {
                         e.printStackTrace()
                     } finally {
-                        workingBitmap?.recycle()
+                        workingBitmap?.takeIf { !it.isRecycled }?.recycle()
+                        // enhanceBitmapForOCR can throw before ownership moves off rawBitmap.
+                        if (!rawBitmap.isRecycled && workingBitmap !== rawBitmap) {
+                            rawBitmap.recycle()
+                        }
                         recognizer.close()
                     }
                 }
@@ -1900,11 +2068,9 @@ class MainActivity : FragmentActivity() {
             tempOcrTextForDialog = ocrResult.first
             tempProminentOcrTextForDialog = ocrResult.second
             isProcessingPhoto.value = false
-            val pendingTrackOption = pendingTrackedQuickPinOption
-            if (pendingTrackOption != null) {
-                pendingTrackedQuickPinOption = null
-                val details = ocrResult.first.ifBlank { pendingTrackOption.details }
-                completeTrackedQuickPinWithPhoto(pendingTrackOption, currentPhotoPath, details)
+            if (trackedOption != null) {
+                val details = ocrResult.first.ifBlank { trackedOption.details }
+                completeTrackedQuickPinWithPhoto(trackedOption, currentPhotoPath, details)
                 return@launch
             }
             showTimerDialog.value = true
@@ -1935,6 +2101,8 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun getUprightBitmap(filePath: String, maxDimension: Int = 1600): Bitmap? {
+        var decoded: Bitmap? = null
+        var bitmap: Bitmap? = null
         try {
             val file = File(filePath)
             if (!file.exists()) return null
@@ -1946,12 +2114,12 @@ class MainActivity : FragmentActivity() {
             if (width <= 0 || height <= 0) return null
 
             var inSampleSize = 1
-            while (width / inSampleSize > maxDimension * 2 || height / inSampleSize > maxDimension * 2) {
+            while (width / inSampleSize > maxDimension || height / inSampleSize > maxDimension) {
                 inSampleSize *= 2
             }
 
             val decodeOptions = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
-            val decoded = BitmapFactory.decodeFile(filePath, decodeOptions) ?: return null
+            decoded = BitmapFactory.decodeFile(filePath, decodeOptions) ?: return null
 
             val exif = ExifInterface(filePath)
             val orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
@@ -1961,26 +2129,29 @@ class MainActivity : FragmentActivity() {
                 ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
                 ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
             }
-            var bitmap = if (matrix.isIdentity) {
+            bitmap = if (matrix.isIdentity) {
                 decoded
             } else {
-                Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true).also {
-                    if (it !== decoded) decoded.recycle()
+                Bitmap.createBitmap(decoded!!, 0, 0, decoded!!.width, decoded!!.height, matrix, true).also {
+                    if (it !== decoded) decoded!!.recycle()
                 }
             }
+            decoded = null // ownership transferred to bitmap (or recycled)
 
-            val longest = maxOf(bitmap.width, bitmap.height)
+            val longest = maxOf(bitmap!!.width, bitmap!!.height)
             if (longest > maxDimension) {
                 val scale = maxDimension.toFloat() / longest
-                val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
-                val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
-                val scaled = Bitmap.createScaledBitmap(bitmap, w, h, true)
-                if (scaled !== bitmap) bitmap.recycle()
+                val w = (bitmap!!.width * scale).toInt().coerceAtLeast(1)
+                val h = (bitmap!!.height * scale).toInt().coerceAtLeast(1)
+                val scaled = Bitmap.createScaledBitmap(bitmap!!, w, h, true)
+                if (scaled !== bitmap) bitmap!!.recycle()
                 bitmap = scaled
             }
             return bitmap
         } catch (e: Exception) {
             e.printStackTrace()
+            decoded?.takeIf { !it.isRecycled }?.recycle()
+            bitmap?.takeIf { it !== decoded && !it.isRecycled }?.recycle()
             return null
         }
     }
@@ -2006,23 +2177,7 @@ class MainActivity : FragmentActivity() {
             // right next to the real "Timer Countdown" channel TimerService actually posts to.
 
             val prefs = getSharedPreferences("SpotVaultPrefs", android.content.Context.MODE_PRIVATE)
-            val soundUriStr = prefs.getString("alarm_sound_uri", null)
-            val baseId = "TIMER_ALERT"
-            val channelId = if (soundUriStr != null) "${baseId}_${soundUriStr.hashCode()}" else baseId
-            
-            val alertChannel = android.app.NotificationChannel(channelId, "Timer Alert", android.app.NotificationManager.IMPORTANCE_HIGH)
-            val audioAttributes = android.media.AudioAttributes.Builder()
-                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_EVENT)
-                .build()
-                
-            if (soundUriStr != null && soundUriStr.isNotEmpty()) {
-                alertChannel.setSound(android.net.Uri.parse(soundUriStr), audioAttributes)
-            } else {
-                alertChannel.setSound(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION), audioAttributes)
-            }
-            
-            manager.createNotificationChannel(alertChannel)
+            ensureTimerAlertChannel(manager, prefs)
         }
     }
 }
@@ -2234,8 +2389,10 @@ fun FullScreenImageViewer(
         }
     }
     val allPhotoPaths = remember(effectiveImagePath, extraPhotoPaths) {
-        (if (effectiveImagePath.isNotEmpty()) listOf(effectiveImagePath) else emptyList()) +
+        val paths = (if (effectiveImagePath.isNotEmpty()) listOf(effectiveImagePath) else emptyList()) +
             extraPhotoPaths.map { it.path }
+        // Soft display cap — rare to exceed; prevents composing dozens of full-decode thumbs.
+        paths.take(24)
     }
     var selectedImagePath by remember(spotId, imagePath) { mutableStateOf(imagePath) }
     LaunchedEffect(allPhotoPaths) {
@@ -2324,7 +2481,11 @@ fun FullScreenImageViewer(
                                         .clickable { selectedImagePath = path }
                                 ) {
                                     AsyncImage(
-                                        model = java.io.File(path),
+                                        model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                            .data(java.io.File(path))
+                                            .size(180, 180)
+                                            .crossfade(true)
+                                            .build(),
                                         contentDescription = "Photo thumbnail",
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Crop
@@ -2628,7 +2789,7 @@ fun FullScreenImageViewer(
                                         lat = lat.toDouble(),
                                         lng = lng.toDouble(),
                                         address = address,
-                                        notes = displayNote,
+                                        title = spotItem?.let { vaultSpotDisplayTitle(it) }.orEmpty(),
                                         imagePath = imagePath
                                     )
                                 )
@@ -2784,7 +2945,6 @@ fun HistoryDialogContent(
             }
         }
     }
-    val historyList by dao.getAllHistory().collectAsState(initial = emptyList())
     var showFavoritesOnly by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var sortBy by remember {
@@ -2809,13 +2969,37 @@ fun HistoryDialogContent(
     var showRecentlyDeleted by remember { mutableStateOf(false) }
     var showArchivedSpots by remember { mutableStateOf(false) }
     var showLocationBrowser by rememberSaveable { mutableStateOf(false) }
+    var showFavoritesHub by rememberSaveable { mutableStateOf(false) }
+    var pendingSharedSpot by remember { mutableStateOf<SharedSpotPayload?>(null) }
+    // Watches PendingSharedSpot.version rather than reading it once — MainActivity's Share-sheet
+    // handling can finish resolving the link (a network round trip) after this composable is
+    // already on screen, and a second share while this screen is already open needs to re-fire
+    // too, which a plain LaunchedEffect(Unit) wouldn't catch.
+    LaunchedEffect(PendingSharedSpot.version.value) {
+        PendingSharedSpot.consume()?.let { spot ->
+            pendingSharedSpot = spot
+            showFavoritesHub = true
+        }
+    }
     var autoDeleteEnabled by remember { mutableStateOf(prefs.getBoolean("auto_delete_enabled", false)) }
     var showVaultMenu by remember { mutableStateOf(false) }
     var showAutoDeleteIntervalDialog by remember { mutableStateOf(false) }
     var deletedCount by remember { mutableStateOf(0) }
 
-    LaunchedEffect(historyList, showRecentlyDeleted) {
-        deletedCount = withContext(Dispatchers.IO) { dao.getRecentlyDeleted().size }
+    // Overlays load only what they need (timestamps / favorites / day / city) — never the full vault.
+    val calendarSpotDayStarts = rememberCalendarSpotDayStarts(dao, enabled = showCalendarDialog)
+    val calendarMonthsWithSpots = remember(calendarSpotDayStarts) {
+        val cal = java.util.Calendar.getInstance()
+        calendarSpotDayStarts.mapTo(mutableSetOf()) { dayStart ->
+            cal.timeInMillis = dayStart
+            cal.get(java.util.Calendar.YEAR) * 100 + cal.get(java.util.Calendar.MONTH)
+        }
+    }
+    val calendarDaySpots = rememberCalendarDaySpots(dao, selectedCalendarDay)
+    val favoriteOverlaySpots = rememberFavoriteOverlaySpots(dao, enabled = showFavoritesHub)
+
+    LaunchedEffect(showRecentlyDeleted) {
+        deletedCount = withContext(Dispatchers.IO) { dao.countRecentlyDeleted() }
     }
 
     if (showRecentlyDeleted) {
@@ -2854,11 +3038,8 @@ fun HistoryDialogContent(
         showCalendarDialog = true
     }
 
-    val vaultHistorySpots = remember(historyList) { historyList.filter { !it.isWishlist } }
-
     if (showLocationBrowser) {
         VaultLocationBrowserDialog(
-            historyList = vaultHistorySpots,
             dao = dao,
             prefs = prefs,
             onDismiss = { showLocationBrowser = false },
@@ -2868,9 +3049,24 @@ fun HistoryDialogContent(
         )
     }
 
+    if (showFavoritesHub) {
+        FavoritesHubDialog(
+            favoriteSpots = favoriteOverlaySpots,
+            dao = dao,
+            prefs = prefs,
+            onDismiss = { showFavoritesHub = false },
+            onViewSpot = onViewSpot,
+            onShareRequest = onShareRequest,
+            coroutineScope = coroutineScope,
+            pendingSharedSpot = pendingSharedSpot,
+            onPendingSharedSpotConsumed = { pendingSharedSpot = null }
+        )
+    }
+
     if (showCalendarDialog) {
         VaultCalendarDialog(
-            historySpots = vaultHistorySpots,
+            spotDayStarts = calendarSpotDayStarts,
+            monthsWithSpots = calendarMonthsWithSpots,
             onDismiss = { showCalendarDialog = false },
             onDaySelected = { dayStart ->
                 selectedCalendarDay = dayStart
@@ -2882,7 +3078,7 @@ fun HistoryDialogContent(
     selectedCalendarDay?.let { dayStart ->
         VaultCalendarDayResultsDialog(
             dayStartMillis = dayStart,
-            historySpots = vaultHistorySpots,
+            daySpots = calendarDaySpots,
             prefs = prefs,
             dao = dao,
             onDismiss = { selectedCalendarDay = null },
@@ -2893,24 +3089,30 @@ fun HistoryDialogContent(
                 if (prefs.getBoolean("confirm_delete", true)) {
                     showDeleteConfirmDialog = true
                 } else {
+                    val spotId = spot.id
                     coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        dao.softDeleteSpot(spot.id)
+                        dao.softDeleteSpot(spotId)
+                    }
+                    VaultUndoSnackbar.show("Spot deleted") {
+                        withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
                     }
                     pendingSwipeDeleteSpot = null
                 }
             },
             selectedItems = selectedItems,
             onSelectionChange = { selectedItems = it },
+            // Bulk delete from the top action bar skips the confirmation modal entirely — softDelete
+            // is already fully reversible (Recently Deleted), so Undo is the safety net here instead
+            // of a blocking dialog, same reasoning as the menu's own Delete item.
             onShowDeleteConfirm = {
                 pendingSwipeDeleteSpot = null
-                if (prefs.getBoolean("confirm_delete", true)) {
-                    showDeleteConfirmDialog = true
-                } else {
-                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        val toDelete = vaultHistorySpots.filter { selectedItems.contains(it.id) }
-                        toDelete.forEach { dao.softDeleteSpot(it.id) }
-                    }
-                    selectedItems = emptySet()
+                val idsToDelete = selectedItems.toList()
+                selectedItems = emptySet()
+                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    idsToDelete.forEach { dao.softDeleteSpot(it) }
+                }
+                VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
+                    withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
                 }
             },
             coroutineScope = coroutineScope
@@ -2971,11 +3173,6 @@ fun HistoryDialogContent(
                     onDismissRequest = { showVaultMenu = false },
                     containerColor = SpotVaultColors.Elevated
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("Active Spots", color = SpotVaultColors.OnSurface) },
-                        leadingIcon = { Icon(Icons.Default.Inventory2, contentDescription = null, tint = SpotVaultColors.Teal) },
-                        onClick = { showVaultMenu = false }
-                    )
                     DropdownMenuItem(
                         text = { Text("Archived Spots", color = SpotVaultColors.OnSurface) },
                         leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null, tint = SpotVaultColors.Teal) },
@@ -3077,13 +3274,28 @@ fun HistoryDialogContent(
                 ) {
                     Icon(Icons.Default.DateRange, contentDescription = "Calendar", tint = SpotVaultColors.Teal)
                 }
+                // Filled gradient badge (rather than a teal outline like the two circles beside it)
+                // so the Favorites Hub actually stands out at a glance as a destination, not just
+                // another filter — but keyed to the active color theme's own Primary shades instead
+                // of a fixed gold, since a hardcoded gold badge looked out of place next to (say)
+                // Neon Pink or Purple Teal's own accent. OnPrimary already picks whichever of white
+                // or the theme's near-black Ink actually contrasts against Primary, so the star stays
+                // readable no matter which theme (including the light Yin Yang one) is active.
+                // Replaces the old Close (X) button: the Vault route already has its own BackHandler
+                // (SpotVaultNavigation.kt) popping back to Home, so a redundant explicit close icon
+                // wasn't doing anything the system back gesture didn't already cover.
                 IconButton(
-                    onClick = onDismiss,
+                    onClick = { showFavoritesHub = true },
                     modifier = Modifier
-                        .background(SpotVaultColors.Surface.copy(alpha = 0.75f), CircleShape)
-                        .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.4f), CircleShape)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(SpotVaultColors.PrimaryBright, SpotVaultColors.Primary, SpotVaultColors.PrimaryDeep)
+                            ),
+                            CircleShape
+                        )
+                        .border(1.dp, SpotVaultColors.PrimaryBright.copy(alpha = 0.8f), CircleShape)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.OnSurface)
+                    Icon(Icons.Default.Star, contentDescription = "Favorites", tint = SpotVaultColors.OnPrimary)
                 }
             }
         }
@@ -3098,7 +3310,6 @@ fun HistoryDialogContent(
     ) {
         HistoryVaultTabPage(
             headerContent = vaultHeaderRow,
-            historyList = historyList,
             prefs = prefs,
             dao = dao,
             isPinned = isPinned,
@@ -3112,16 +3323,18 @@ fun HistoryDialogContent(
             onSelectedVehicleIdChange = { selectedVehicleId = it },
             selectedItems = selectedItems,
             onSelectedItemsChange = { selectedItems = it },
+            // Bulk delete from the top action bar skips the confirmation modal entirely — softDelete
+            // is already fully reversible (Recently Deleted), so Undo is the safety net here instead
+            // of a blocking dialog, same reasoning as the menu's own Delete item.
             onShowDeleteConfirm = {
                 pendingSwipeDeleteSpot = null
-                if (prefs.getBoolean("confirm_delete", true)) {
-                    showDeleteConfirmDialog = true
-                } else {
-                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        val toDelete = historyList.filter { selectedItems.contains(it.id) }
-                        toDelete.forEach { dao.softDeleteSpot(it.id) }
-                    }
-                    selectedItems = emptySet()
+                val idsToDelete = selectedItems.toList()
+                selectedItems = emptySet()
+                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    idsToDelete.forEach { dao.softDeleteSpot(it) }
+                }
+                VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
+                    withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
                 }
             },
             onSwipeDeleteSpot = { spot ->
@@ -3129,8 +3342,12 @@ fun HistoryDialogContent(
                 if (prefs.getBoolean("confirm_delete", true)) {
                     showDeleteConfirmDialog = true
                 } else {
+                    val spotId = spot.id
                     coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        dao.softDeleteSpot(spot.id)
+                        dao.softDeleteSpot(spotId)
+                    }
+                    VaultUndoSnackbar.show("Spot deleted") {
+                        withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
                     }
                     pendingSwipeDeleteSpot = null
                 }
@@ -3152,17 +3369,20 @@ fun HistoryDialogContent(
                 pendingSwipeDeleteSpot = null
             },
             title = { Text("Delete Saved Spots?", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.OnSurface) },
-            content = { Text("Are you sure you want to delete the selected spot(s)? This action cannot be undone.", color = SpotVaultColors.Muted) },
+            content = { Text("Are you sure you want to delete the selected spot(s)?", color = SpotVaultColors.Muted) },
             confirmButton = {
                 SpotVaultButton(
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     onClick = {
+                        val idsToDelete = pendingSwipeDeleteSpot?.let { listOf(it.id) }
+                            ?: selectedItems.toList()
+                        selectedItems = emptySet()
+                        pendingSwipeDeleteSpot = null
                         coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                            val toDelete = pendingSwipeDeleteSpot?.let { listOf(it) }
-                                ?: historyList.filter { selectedItems.contains(it.id) }
-                            toDelete.forEach { dao.softDeleteSpot(it.id) }
-                            selectedItems = emptySet()
-                            pendingSwipeDeleteSpot = null
+                            idsToDelete.forEach { dao.softDeleteSpot(it) }
+                        }
+                        VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
+                            withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
                         }
                         showDeleteConfirmDialog = false
                     }
@@ -3198,10 +3418,11 @@ private fun SaveScreenSectionLabel(text: String, modifier: Modifier = Modifier) 
  * list), and anything not already a tag can be added as a brand-new one from the same field. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun SaveScreenTagField(
+fun SaveScreenTagField(
     selectedTags: List<String>,
     onSelectedTagsChange: (List<String>) -> Unit,
-    allTags: List<TagEntity>
+    allTags: List<TagEntity>,
+    modifier: Modifier = Modifier.fillMaxWidth()
 ) {
     val context = LocalContext.current
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
@@ -3209,8 +3430,7 @@ private fun SaveScreenTagField(
     var showPicker by remember { mutableStateOf(false) }
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
             .clickable { showPicker = true }
@@ -3240,7 +3460,7 @@ private fun SaveScreenTagField(
  * forced a new line, making the card balloon in height after just a few tags. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun SaveScreenSelectedTagsRow(
+fun SaveScreenSelectedTagsRow(
     selectedTags: List<String>,
     onSelectedTagsChange: (List<String>) -> Unit
 ) {
@@ -3261,14 +3481,22 @@ private fun SaveScreenSelectedTagsRow(
             ) {
                 Text(tag, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SpotVaultColors.Teal)
                 Spacer(modifier = Modifier.width(6.dp))
-                Icon(
-                    Icons.Default.Close,
-                    contentDescription = "Remove $tag",
-                    tint = SpotVaultColors.Teal,
+                // Box-wrapped so the tappable area is meaningfully bigger than the 14dp icon
+                // itself — same touch-target fix as the Vault's own tag/vehicle chip remove
+                // buttons (HistoryVaultDialog.kt).
+                Box(
                     modifier = Modifier
-                        .size(14.dp)
-                        .clickable { onSelectedTagsChange(selectedTags.filterNot { it == tag }) }
-                )
+                        .size(32.dp)
+                        .clickable { onSelectedTagsChange(selectedTags.filterNot { it == tag }) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Remove $tag",
+                        tint = SpotVaultColors.Teal,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }
@@ -3282,7 +3510,7 @@ private fun SaveScreenSelectedTagsRow(
  * names just flow back into [onSelectedTagsChange]'s local list until the spot is actually saved. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun SaveScreenTagPickerSheet(
+fun SaveScreenTagPickerSheet(
     selectedTags: List<String>,
     onSelectedTagsChange: (List<String>) -> Unit,
     allTags: List<TagEntity>,
@@ -3824,7 +4052,7 @@ fun TimerSelectionDialog(
                 val (lat, lng, address) = located
                 shareLocation(
                     context, lat, lng, address,
-                    notes = note.text,
+                    title = title.text,
                     imagePath = if (isCamera) photoPath else "",
                     includePhoto = isCamera
                 )
@@ -3842,11 +4070,27 @@ fun TimerSelectionDialog(
         )
     ) {
         EnsureDialogEdgeToEdge()
-        // Dialog windows can't trust WindowInsets.navigationBars — read the Activity's
-        // measured inset from SystemBarInsets instead (same fix as NotepadEditorDialog).
+        // Dialog windows can't always trust WindowInsets.navigationBars — the Activity's own
+        // measured inset from SystemBarInsets is the more reliable signal (same fix as
+        // NotepadEditorDialog), but taking the larger of the two instead of SystemBarInsets
+        // alone means a device where the *other* one happens to be the accurate reading (a
+        // taller custom/OEM nav bar, or SystemBarInsets not yet updated the instant this dialog
+        // first composes) still gets real clearance instead of falling back to the coerced
+        // minimum below.
+        //
+        // The +24dp on top of whichever measurement wins is deliberately more generous than a
+        // stock nav bar needs — third-party nav bar customizers (Nav Star and similar) draw their
+        // own bar as an accessibility overlay, not Android's real navigation bar, so it never
+        // shows up in WindowInsets at all and can render taller than whatever height either
+        // measurement above reports. There's no public API to ask "how tall is that overlay" —
+        // this is a fixed safety margin to reduce the odds of colliding with one, not a guarantee
+        // against every possible custom bar.
         val density = LocalDensity.current
+        val localNavBarPx = WindowInsets.navigationBars.getBottom(density)
         val statusPad = with(density) { SystemBarInsets.statusBarPx.toDp() }.coerceAtLeast(24.dp)
-        val navPad = with(density) { SystemBarInsets.navigationBarPx.toDp() }.coerceAtLeast(24.dp) + 12.dp
+        val navPad = with(density) {
+            maxOf(SystemBarInsets.navigationBarPx, localNavBarPx).toDp()
+        }.coerceAtLeast(24.dp) + 24.dp
         // Left/right — this screen never accounted for either edge before, so the header's Pin
         // button and the photo/Retake column both rendered flush against the raw physical screen
         // edge with zero clearance: exactly what showed up as the Pin button crammed into the
@@ -3862,10 +4106,20 @@ fun TimerSelectionDialog(
         // auto-pans on its own. Scoped to only the compact branch rather than the shared root, so
         // it can't double up with the bottom bar's own imePadding() in the already-working case.
         val needsImeFixHere = needsCompactHeightLayout()
-        Column(
+        // Every other full-screen Dialog in this app (photo viewer, Notepad, Settings, the home
+        // screen) wraps its content in AdaptiveTabletContainer so it caps/centers on a tablet
+        // instead of stretching edge-to-edge — this is the highest-frequency screen in the whole
+        // app (shown after every single Snap/Pin capture) and was missing it, which is what made
+        // the Title field and the Tags/Vehicle row balloon into a "comically wide" tablet layout.
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(SpotVaultColors.Void)
+        ) {
+        AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
                 .padding(start = leftPad, end = rightPad)
                 .then(if (needsImeFixHere) Modifier.imePadding() else Modifier)
         ) {
@@ -3999,7 +4253,13 @@ fun TimerSelectionDialog(
                                 .clickable { showPhotoExpanded = true }
                         ) {
                             androidx.compose.foundation.Image(
-                                painter = coil.compose.rememberAsyncImagePainter(java.io.File(photoPath)),
+                                painter = coil.compose.rememberAsyncImagePainter(
+                                    model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                        .data(java.io.File(photoPath))
+                                        .size(720, 720)
+                                        .crossfade(true)
+                                        .build()
+                                ),
                                 contentDescription = "Captured photo — tap to enlarge",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
@@ -4335,11 +4595,19 @@ fun TimerSelectionDialog(
                 // window's scarce height; each gets the full height of its own column instead,
                 // with the card's own scroll (already built in above) as the safety net for
                 // anything that still doesn't fit.
+                //
+                // This Row is the actual bottom of the screen in this layout — the fixed,
+                // navPad-padded action bar further down is hidden entirely in compact mode (see
+                // its own `if (!isCompact)` below), and cardBlock's Retake/Share buttons live
+                // inside this Row's own scroll instead. Without navPad here too, those buttons
+                // (and Pin's header button, on a phone rotated to landscape with gesture nav)
+                // ended up sitting right against the real nav bar with only a flat 8dp of margin.
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(bottom = navPad),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Box(modifier = Modifier.weight(0.4f).fillMaxHeight()) { photoBlock() }
@@ -4468,6 +4736,8 @@ fun TimerSelectionDialog(
                 }
             }
         }
+        } // close AdaptiveTabletContainer content
+        } // close outer Box
     }
 
     if (showAddVehicle) {
@@ -4790,8 +5060,8 @@ fun SpotVaultScreen(
     var locationDetails by remember { mutableStateOf(prefs.getString("location_details", "") ?: "") }
     var currentAddress by remember { mutableStateOf(prefs.getString("current_address", "") ?: "") }
     var isAlarmRinging by remember { mutableStateOf(prefs.getBoolean("is_alarm_ringing", false)) }
-    var lat by remember { mutableStateOf(prefs.getFloat("lat", 0f)) }
-    var lng by remember { mutableStateOf(prefs.getFloat("lng", 0f)) }
+    var lat by remember { mutableStateOf(prefs.getCoord("lat").toFloat()) }
+    var lng by remember { mutableStateOf(prefs.getCoord("lng").toFloat()) }
     var vaultDisplayName by remember { mutableStateOf(loadVaultDisplayNameFromPrefs(prefs)) }
     val context = LocalContext.current
     val autoParkEnabled by remember(prefs) { prefs.observeAutoParkEnabled() }
@@ -4887,8 +5157,8 @@ fun SpotVaultScreen(
             locationDetails = prefs.getString("location_details", "") ?: ""
             currentAddress = prefs.getString("current_address", "") ?: ""
             isAlarmRinging = prefs.getBoolean("is_alarm_ringing", false)
-            lat = prefs.getFloat("lat", 0f)
-            lng = prefs.getFloat("lng", 0f)
+            lat = prefs.getCoord("lat").toFloat()
+            lng = prefs.getCoord("lng").toFloat()
         }
     }
     
@@ -4901,9 +5171,9 @@ fun SpotVaultScreen(
             } else if (key == "is_alarm_ringing" && sharedPreferences.contains(key)) {
                 isAlarmRinging = sharedPreferences.getBoolean("is_alarm_ringing", false)
             } else if (key == "lat" && sharedPreferences.contains(key)) {
-                lat = sharedPreferences.getFloat("lat", 0f)
+                lat = sharedPreferences.getCoord("lat").toFloat()
             } else if (key == "lng" && sharedPreferences.contains(key)) {
-                lng = sharedPreferences.getFloat("lng", 0f)
+                lng = sharedPreferences.getCoord("lng").toFloat()
             } else if (key == "photo_path" && sharedPreferences.contains(key)) {
                 photoPath = sharedPreferences.getString("photo_path", "") ?: ""
             } else if (key == VAULT_DISPLAY_NAME_PREF) {
@@ -5314,25 +5584,29 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
 
     // Camera capture shared by both buttons — which save happens on the resulting photo is
     // decided by pendingPhotoAction, set right before the permission/capture round trip starts.
-    var pendingPhotoFile by remember { mutableStateOf<File?>(null) }
-    var pendingPhotoAction by remember { mutableStateOf<String?>(null) }
+    // Path/action are rememberSaveable so process death mid-camera (common under memory pressure)
+    // still attaches the photo instead of orphaning the file forever.
+    var pendingPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingPhotoAction by rememberSaveable { mutableStateOf<String?>(null) }
 
     val takePictureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         // Matches the AppLockGate.begin() in startCamera() below — this pending state
-        // (pendingPhotoFile/pendingPhotoAction) lives in Compose remember{}, not an Activity
-        // field, so if App Lock re-locked while the camera app had the foreground, AppLockScreen
-        // swapping in would tear this composable down and silently lose the photo/pin it was for.
+        // lives in Compose, so if App Lock re-locked while the camera app had the foreground,
+        // AppLockScreen swapping in would tear this composable down and lose the photo/pin.
         AppLockGate.end()
-        val file = pendingPhotoFile
+        val path = pendingPhotoPath
         val action = pendingPhotoAction
-        pendingPhotoFile = null
+        pendingPhotoPath = null
         pendingPhotoAction = null
+        val file = path?.let { File(it) }
         if (success && file != null && file.exists()) {
             when (action) {
                 "pin" -> runQuickPin(file.absolutePath)
                 "track" -> runQuickTrack(file.absolutePath)
             }
         } else {
+            // Same orphaned-file cleanup as MainActivity's own takePictureLauncher.
+            file?.delete()
             isSaving = false
             Toast.makeText(context, "Photo canceled.", Toast.LENGTH_SHORT).show()
         }
@@ -5341,7 +5615,7 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
     fun startCamera() {
         val imagesDir = File(context.filesDir, "images").apply { mkdirs() }
         val newFile = File(imagesDir, "quickpin_${System.currentTimeMillis()}.jpg")
-        pendingPhotoFile = newFile
+        pendingPhotoPath = newFile.absolutePath
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", newFile)
         try {
             takePictureLauncher.launch(uri)
@@ -5350,7 +5624,7 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
             // never reaches that callback, so this has to release AppLockGate itself (requestCameraThenCapture
             // already called begin() before this ran) or App Lock's re-lock-on-background check
             // would stay suppressed for the rest of the session.
-            pendingPhotoFile = null
+            pendingPhotoPath = null
             pendingPhotoAction = null
             isSaving = false
             AppLockGate.end()
@@ -5381,7 +5655,7 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
         pendingPhotoAction = action
         // Covers both the permission dialog and the camera capture that can follow it — either
         // one taking the foreground while App Lock is on must not let AppLockScreen swap in and
-        // tear down this composable's pendingPhotoFile/pendingPhotoAction state mid-flight.
+        // tear down this composable's pendingPhotoPath/pendingPhotoAction state mid-flight.
         AppLockGate.begin()
         val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (cameraGranted) {
@@ -5928,7 +6202,13 @@ fun PinnedStateView(
                     if (photoPath.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         androidx.compose.foundation.Image(
-                            painter = coil.compose.rememberAsyncImagePainter(java.io.File(photoPath)),
+                            painter = coil.compose.rememberAsyncImagePainter(
+                                model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                    .data(java.io.File(photoPath))
+                                    .size(720, 720)
+                                    .crossfade(true)
+                                    .build()
+                            ),
                             contentDescription = "Saved Photo",
                             contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                             modifier = Modifier
@@ -6070,7 +6350,6 @@ fun PinnedStateView(
                                 lat = lat,
                                 lng = lng,
                                 address = currentAddress,
-                                notes = locationDetails,
                                 imagePath = photoPath
                             )
                         )
@@ -6297,11 +6576,11 @@ fun shareLocation(
     lat: Double,
     lng: Double,
     address: String,
-    notes: String,
+    title: String = "",
     imagePath: String = "",
     includePhoto: Boolean = false
 ) {
-    val shareText = buildShareText(lat, lng, address, notes)
+    val shareText = buildShareText(lat, lng, address, title)
 
     // Copied to the clipboard unconditionally, in addition to whatever the user picks below — a
     // paste anywhere still works even if they cancel out of the chooser or the picked app doesn't
@@ -6309,11 +6588,13 @@ fun shareLocation(
     val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Location", shareText))
 
+    var photoUri: android.net.Uri? = null
     val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
         if (includePhoto && imagePath.isNotEmpty()) {
             val file = java.io.File(imagePath)
             if (file.exists()) {
                 val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                photoUri = uri
                 type = "image/*"
                 putExtra(android.content.Intent.EXTRA_STREAM, uri)
                 addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -6329,6 +6610,12 @@ fun shareLocation(
         // Needed when called from a non-Activity context (e.g. a widget tap) — harmless
         // when called from an Activity too.
         addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Chooser targets often fail to open EXTRA_STREAM without ClipData + grant on the
+        // *chooser* itself — grant on the inner send intent alone is not enough on many OEMs.
+        photoUri?.let { uri ->
+            clipData = android.content.ClipData.newUri(context.contentResolver, "Photo", uri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
     }
     context.startActivity(chooser)
 }

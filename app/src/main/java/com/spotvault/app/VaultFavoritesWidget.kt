@@ -28,15 +28,29 @@ import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.ContentScale
+import androidx.glance.layout.Row
+import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.size
 import androidx.glance.layout.width
 import androidx.glance.state.GlanceStateDefinition
 import androidx.glance.state.PreferencesGlanceStateDefinition
+import androidx.glance.text.FontWeight
+import androidx.glance.text.Text
+import androidx.glance.text.TextStyle
+import androidx.glance.unit.ColorProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/**
+ * Hard cap for Glance list widgets. Glance LazyColumn still materializes bitmapped rows for the
+ * binder payload — 80 full-width tablet rows OOMs / blows RemoteViews; ~12 is enough to scroll
+ * while staying safe on large Exact-size widgets.
+ */
+internal const val WIDGET_SPOT_ROW_CAP = 12
 
 /**
  * Home-screen widget: scrollable list of every Vault favorite.
@@ -57,6 +71,10 @@ class VaultFavoritesWidget : GlanceAppWidget() {
             val sortOrder = prefs[KEY_SORT_ORDER] ?: "newest"
             val initialPrefs = remember { context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE) }
             val isPremium = isPremiumUnlocked(initialPrefs)
+            // A home-screen widget has no authentication of its own — listing every Favorite
+            // spot's name here regardless of App Lock would leak exactly what App Lock exists to
+            // hide, with no unlock required to see it. See PremiumGlanceWidget's matching fix.
+            val appLockEnabled = initialPrefs.getBoolean(APP_LOCK_ENABLED_PREF, false)
 
             val theme = remember(revision, themeCache) {
                 try {
@@ -68,24 +86,31 @@ class VaultFavoritesWidget : GlanceAppWidget() {
 
             val favoritesState = produceState(
                 initialValue = emptyList<VaultFavoriteEntry>(),
-                key1 = revision,
-                key2 = isPremium,
-                key3 = sortOrder
+                revision, isPremium, sortOrder, appLockEnabled
             ) {
-                value = if (isPremium) {
+                // Caught rather than left to propagate out of provideGlance — an uncaught Room/IO
+                // exception here would crash-loop the widget into "Problem loading widget"
+                // instead of just showing an empty refresh.
+                value = if (isPremium && !appLockEnabled) {
                     withContext(Dispatchers.IO) {
-                        val db = AppDatabase.getDatabase(context)
-                        val spots = db.locationDao().getFavoriteSpots().let { list ->
-                            if (sortOrder == "oldest") list.sortedBy { it.timestamp }
-                            else list.sortedByDescending { it.timestamp }
-                        }
-                        val vehicleDao = db.vehicleDao()
-                        val vehicleNames = mutableMapOf<Int, String?>()
-                        spots.map { spot ->
-                            val vehicleName = spot.vehicleId?.let { id ->
-                                vehicleNames.getOrPut(id) { vehicleDao.getById(id)?.name }
+                        try {
+                            val db = AppDatabase.getDatabase(context)
+                            val spots = if (sortOrder == "oldest") {
+                                db.locationDao().getFavoriteSpotsOldest(WIDGET_SPOT_ROW_CAP)
+                            } else {
+                                db.locationDao().getFavoriteSpotsNewest(WIDGET_SPOT_ROW_CAP)
                             }
-                            VaultFavoriteEntry(spot, vehicleName)
+                            val vehicleDao = db.vehicleDao()
+                            val vehicleNames = mutableMapOf<Int, String?>()
+                            spots.map { spot ->
+                                val vehicleName = spot.vehicleId?.let { id ->
+                                    vehicleNames.getOrPut(id) { vehicleDao.getById(id)?.name }
+                                }
+                                VaultFavoriteEntry(spot, vehicleName)
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("VaultFavoritesWidget", "Failed to load favorites", e)
+                            emptyList()
                         }
                     }
                 } else {
@@ -96,6 +121,14 @@ class VaultFavoritesWidget : GlanceAppWidget() {
             if (!isPremium) {
                 GlanceThemedBackground(theme = theme) {
                     PremiumLockedWidgetContent(
+                        theme = theme,
+                        widthDp = vaultFavoritesContentWidthDp().coerceAtLeast(160f),
+                        heightDp = vaultFavoritesHeightDp().coerceAtLeast(120f)
+                    )
+                }
+            } else if (appLockEnabled) {
+                GlanceThemedBackground(theme = theme) {
+                    AppLockedWidgetContent(
                         theme = theme,
                         widthDp = vaultFavoritesContentWidthDp().coerceAtLeast(160f),
                         heightDp = vaultFavoritesHeightDp().coerceAtLeast(120f)
@@ -132,6 +165,9 @@ class ToggleFavoritesSortAction : androidx.glance.appwidget.action.ActionCallbac
 }
 
 private val FavoritesHeaderHeight = 24.dp
+private val FavoritesSortButtonWidth = 44.dp
+private val FavoritesVaultButtonWidth = 54.dp
+private val FavoritesHeaderButtonGap = 6.dp
 private val FavoritesRowHeight = 56.dp
 private val FavoritesRowMaxHeight = 150.dp
 private val FavoritesEmptyHeight = 140.dp
@@ -217,13 +253,15 @@ private fun FavoritesHeader(
 ) {
     val context = LocalContext.current
     val heightPx = WidgetThemeHelper.dpToPx(context, FavoritesHeaderHeight.value)
-    
-    // Row is [label][sort 24dp][Spacer 8dp][vault 24dp] — reserve exactly that 56dp, not a
+
+    val sortButtonWidthPx = WidgetThemeHelper.dpToPx(context, FavoritesSortButtonWidth.value)
+    val vaultButtonWidthPx = WidgetThemeHelper.dpToPx(context, FavoritesVaultButtonWidth.value)
+    val gapPx = WidgetThemeHelper.dpToPx(context, FavoritesHeaderButtonGap.value)
+    // Row is [label][sort button][gap][vault button] — reserve exactly that fixed width, not a
     // guessed value, or the label bitmap gets rendered at the wrong width and FillBounds
     // stretches it against the box Glance actually lays out.
-    val iconSizePx = WidgetThemeHelper.dpToPx(context, 24f)
-    val labelWidthPx = (widthPx - iconSizePx * 2 - WidgetThemeHelper.dpToPx(context, 8f)).coerceAtLeast(1)
-    
+    val labelWidthPx = (widthPx - sortButtonWidthPx - vaultButtonWidthPx - gapPx).coerceAtLeast(1)
+
     val labelBitmap = remember(theme.cacheKey(), labelWidthPx, heightPx) {
         PremiumWidgetRenderer.renderSectionLabelBitmap(
             context,
@@ -233,15 +271,15 @@ private fun FavoritesHeader(
             heightPx
         )
     }
-    
-    val sortBitmap = remember(theme.cacheKey(), sortOrder, iconSizePx) {
-        PremiumWidgetRenderer.renderSortIconBitmap(context, android.graphics.Color.WHITE, iconSizePx, sortOrder == "oldest")
+
+    val sortBitmap = remember(theme.cacheKey(), sortOrder, sortButtonWidthPx, heightPx) {
+        PremiumWidgetRenderer.renderSortButtonBitmap(context, android.graphics.Color.WHITE, sortButtonWidthPx, heightPx, sortOrder == "oldest")
     }
-    
-    val vaultBitmap = remember(theme.cacheKey(), iconSizePx) {
-        PremiumWidgetRenderer.renderVaultIconBitmap(context, android.graphics.Color.WHITE, iconSizePx)
+
+    val vaultBitmap = remember(theme.cacheKey(), vaultButtonWidthPx, heightPx) {
+        PremiumWidgetRenderer.renderVaultButtonBitmap(context, android.graphics.Color.WHITE, vaultButtonWidthPx, heightPx)
     }
-    
+
     androidx.glance.layout.Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
@@ -254,17 +292,17 @@ private fun FavoritesHeader(
         )
         Image(
             provider = ImageProvider(sortBitmap),
-            contentDescription = "Toggle Sort Order",
-            modifier = GlanceModifier.width(24.dp).height(24.dp).clickable(
+            contentDescription = if (sortOrder == "oldest") "Sorted oldest first, tap to sort newest first" else "Sorted newest first, tap to sort oldest first",
+            modifier = GlanceModifier.width(FavoritesSortButtonWidth).height(FavoritesHeaderHeight).clickable(
                 androidx.glance.appwidget.action.actionRunCallback<ToggleFavoritesSortAction>()
             ),
             contentScale = ContentScale.Fit
         )
-        androidx.glance.layout.Spacer(modifier = GlanceModifier.width(8.dp))
+        androidx.glance.layout.Spacer(modifier = GlanceModifier.width(FavoritesHeaderButtonGap))
         Image(
             provider = ImageProvider(vaultBitmap),
             contentDescription = "Open Vault",
-            modifier = GlanceModifier.width(24.dp).height(24.dp).clickable(
+            modifier = GlanceModifier.width(FavoritesVaultButtonWidth).height(FavoritesHeaderHeight).clickable(
                 actionStartActivity(PremiumWidgetIntents.openVault(context))
             ),
             contentScale = ContentScale.Fit

@@ -1,6 +1,9 @@
 package com.spotvault.app
 
 import androidx.activity.compose.BackHandler
+
+/** Soft cap so a huge paste can't balloon Room + undo history for the life of the install. */
+private const val NOTEPAD_MAX_CHARS = 50_000
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -157,7 +160,15 @@ fun VaultCompactNotesFieldWithExpand(
                 trailingIcon = if (voiceInputEnabled) {
                     {
                         VoiceMicButton(
-                            onResult = { spoken -> onValueChange(TextFieldValue(spoken, TextRange(spoken.length))) },
+                            onResult = { spoken ->
+                                val current = value.text
+                                val combined = if (current.isEmpty() || current.endsWith("\n") || current.endsWith(" ")) {
+                                    current + spoken
+                                } else {
+                                    "$current $spoken"
+                                }
+                                onValueChange(TextFieldValue(combined, TextRange(combined.length)))
+                            },
                             prompt = "Dictate $label…"
                         )
                     }
@@ -216,7 +227,16 @@ fun NotepadEditorDialog(
         if (savedPulse) {
             delay(1800)
             savedPulse = false
-            onDismiss()
+            // closeAndFlush(), not onDismiss() directly — typing more within this 1.8s window
+            // (a completely normal continuation right after tapping Save) restarts the separate
+            // 1200ms autosave debounce below without resetting this timer, so it used to be
+            // possible for this to fire and close the dialog via bare onDismiss() — which never
+            // saves — while a debounce for those extra keystrokes was still pending. Whatever was
+            // typed in that last stretch was silently discarded with no warning, and the Save
+            // button was already disabled the whole time so there was no way to save it manually
+            // either. closeAndFlush() flushes any still-dirty text first, same as every other way
+            // of closing this dialog (back button, X button).
+            closeAndFlush()
         }
     }
 
@@ -224,6 +244,10 @@ fun NotepadEditorDialog(
         if (draft.text != initialNotes) {
             delay(1200)
             onSave(draft.text)
+            // Previously only set by the manual Save button's own onClick — a note saved purely
+            // via this autosave path (typing, then closing via back/X without ever tapping Save)
+            // showed no "Last edited" timestamp at all, even though it was in fact saved.
+            lastEditedAt = System.currentTimeMillis()
         }
     }
 
@@ -239,8 +263,12 @@ fun NotepadEditorDialog(
     val fontSizeSp = when (fontScaleIndex) { 0 -> 15.sp; 2 -> 20.sp; else -> 17.sp }
     val lineHeightSp = when (fontScaleIndex) { 0 -> 24.sp; 2 -> 32.sp; else -> 28.sp }
 
+    fun clampNote(text: String): String =
+        if (text.length <= NOTEPAD_MAX_CHARS) text else text.take(NOTEPAD_MAX_CHARS)
+
     fun pushHistory() {
-        history.add(draft)
+        // Store text only — keeping 40 full TextFieldValue snapshots of a long note was a soft OOM path.
+        history.add(TextFieldValue(draft.text))
         if (history.size > 40) history.removeAt(0)
         redoStack.clear()
     }
@@ -251,8 +279,8 @@ fun NotepadEditorDialog(
         val currentText = draft.text
         val needsNewline = newlineBefore && cursor > 0 && currentText.getOrNull(cursor - 1) != '\n'
         val insertion = (if (needsNewline) "\n" else "") + text
-        val newText = currentText.substring(0, cursor) + insertion + currentText.substring(cursor)
-        draft = TextFieldValue(newText, TextRange(cursor + insertion.length))
+        val newText = clampNote(currentText.substring(0, cursor) + insertion + currentText.substring(cursor))
+        draft = TextFieldValue(newText, TextRange(newText.length.coerceAtMost(cursor + insertion.length)))
     }
 
     // Voice dictation always appends to the very end rather than at the cursor — so stringing
@@ -261,7 +289,9 @@ fun NotepadEditorDialog(
     fun appendVoiceText(spoken: String) {
         pushHistory()
         val current = draft.text
-        val combined = if (current.isEmpty() || current.endsWith("\n")) current + spoken else "$current $spoken"
+        val combined = clampNote(
+            if (current.isEmpty() || current.endsWith("\n")) current + spoken else "$current $spoken"
+        )
         draft = TextFieldValue(combined, TextRange(combined.length))
     }
 
@@ -514,7 +544,10 @@ fun NotepadEditorDialog(
 
                     BasicTextField(
                         value = draft,
-                        onValueChange = { draft = it },
+                        onValueChange = { next ->
+                            draft = if (next.text.length <= NOTEPAD_MAX_CHARS) next
+                            else next.copy(text = next.text.take(NOTEPAD_MAX_CHARS))
+                        },
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(scrollState)
