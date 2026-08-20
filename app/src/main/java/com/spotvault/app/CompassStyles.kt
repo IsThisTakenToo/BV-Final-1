@@ -228,7 +228,9 @@ internal fun DrawScope.drawCompassBezel(center: Offset, radius: Float, palette: 
 }
 
 internal fun DrawScope.drawCardinalTicks(center: Offset, radius: Float, palette: CompassDialPalette) {
-    for (i in 0 until 72) {
+    // Low-RAM / Reduce Animations: half the minor ticks — same cardinals, less Canvas work.
+    val step = if (ThemeState.lowRamDevice || ThemeState.reduceAnimations) 2 else 1
+    for (i in 0 until 72 step step) {
         val angleRad = Math.toRadians(i * 5.0)
         val isMajor = i % 6 == 0
         val isCardinal = i % 18 == 0
@@ -412,7 +414,8 @@ private fun DrawScope.drawDotCompass(
     )
 
     withTransform({ rotate(dialRotationDegrees, center) }) {
-        for (i in 0 until 36) {
+        val ringStep = if (ThemeState.lowRamDevice || ThemeState.reduceAnimations) 2 else 1
+        for (i in 0 until 36 step ringStep) {
             val angleRad = Math.toRadians(i * 10.0)
             val isCardinal = i % 9 == 0
             val innerR = radius * 0.80f
@@ -632,7 +635,8 @@ private fun DrawScope.drawPaperAirplaneCompass(
     drawCompassBezel(center, radius, palette)
 
     withTransform({ rotate(dialRotationDegrees, center) }) {
-        for (i in 0 until 36) {
+        val ringStep = if (ThemeState.lowRamDevice || ThemeState.reduceAnimations) 2 else 1
+        for (i in 0 until 36 step ringStep) {
             val angleRad = Math.toRadians(i * 10.0)
             val isCardinal = i % 9 == 0
             val innerR = radius * 0.78f
@@ -747,7 +751,8 @@ private fun DrawScope.drawTrailPupCompass(
     drawCircle(color = palette.deep.copy(alpha = 0.88f), radius = radius * 0.9f, center = center)
 
     withTransform({ rotate(dialRotationDegrees, center) }) {
-        for (i in 0 until 36) {
+        val ringStep = if (ThemeState.lowRamDevice || ThemeState.reduceAnimations) 2 else 1
+        for (i in 0 until 36 step ringStep) {
             val angleRad = Math.toRadians(i * 10.0)
             val isCardinal = i % 9 == 0
             if (isCardinal) {
@@ -927,7 +932,8 @@ private fun DrawScope.drawLaserDotCompass(
     drawCircle(color = palette.outline.copy(alpha = 0.4f), radius = radius * 0.94f, center = center, style = Stroke(width = 1.5.dp.toPx()))
 
     withTransform({ rotate(dialRotationDegrees, center) }) {
-        for (i in 0 until 36) {
+        val ringStep = if (ThemeState.lowRamDevice || ThemeState.reduceAnimations) 2 else 1
+        for (i in 0 until 36 step ringStep) {
             val angleRad = Math.toRadians(i * 10.0)
             val isCardinal = i % 9 == 0
             val innerR = radius * 0.80f
@@ -1152,7 +1158,8 @@ private fun DrawScope.drawReindeerCompass(
 
     withTransform({ rotate(dialRotationDegrees, center) }) {
         // Snow-dusted ticks
-        for (i in 0 until 36) {
+        val ringStep = if (ThemeState.lowRamDevice || ThemeState.reduceAnimations) 2 else 1
+        for (i in 0 until 36 step ringStep) {
             val angleRad = Math.toRadians(i * 10.0)
             val isCardinal = i % 9 == 0
             val innerR = radius * 0.78f
@@ -1320,7 +1327,8 @@ private fun DrawScope.drawBeaconPulseCompass(
     }
 
     withTransform({ rotate(dialRotationDegrees, center) }) {
-        for (i in 0 until 36) {
+        val ringStep = if (ThemeState.lowRamDevice || ThemeState.reduceAnimations) 2 else 1
+        for (i in 0 until 36 step ringStep) {
             val angleRad = Math.toRadians(i * 10.0)
             val isCardinal = i % 9 == 0
             val innerR = radius * 0.82f

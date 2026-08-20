@@ -451,7 +451,7 @@ class TimerService : Service() {
             val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(photoPath, boundsOpts)
             var sample = 1
-            val maxDim = 1024
+            val maxDim = 512
             while (boundsOpts.outWidth / sample > maxDim || boundsOpts.outHeight / sample > maxDim) {
                 sample *= 2
             }
