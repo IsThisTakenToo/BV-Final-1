@@ -903,6 +903,28 @@ class MainActivity : FragmentActivity() {
             )
             val db = AppDatabase.getDatabase(this@MainActivity)
             val pendingCameraPath = photoFile?.absolutePath
+            // One paged pass of referenced paths — per-file EXISTS queries used to storm the DB
+            // once vault_images/ held tens of thousands of files from years of use.
+            val referencedPaths = HashSet<String>()
+            fun addReferenced(path: String) {
+                if (path.isEmpty()) return
+                referencedPaths.add(path)
+                runCatching { referencedPaths.add(File(path).absolutePath) }
+            }
+            var afterCoverId = 0
+            while (true) {
+                val page = db.locationDao().getCoverImagePathRowsPage(afterCoverId, 2_000)
+                if (page.isEmpty()) break
+                page.forEach { addReferenced(it.imagePath) }
+                afterCoverId = page.last().id
+            }
+            var afterPhotoId = 0
+            while (true) {
+                val page = db.spotPhotoDao().getPhotoRowsPage(afterPhotoId, 2_000)
+                if (page.isEmpty()) break
+                page.forEach { addReferenced(it.path) }
+                afterPhotoId = page.last().id
+            }
             imageDirs.forEach { dir ->
                 if (!dir.isDirectory) return@forEach
                 // Stream directory entries — listFiles() on a years-old vault_images/ can allocate
@@ -913,13 +935,8 @@ class MainActivity : FragmentActivity() {
                         if (!file.isFile || file.lastModified() >= cutoff) continue
                         val abs = file.absolutePath
                         if (abs == pendingCameraPath) continue
-                        val referenced = db.locationDao().hasCoverImagePath(abs) ||
-                            db.spotPhotoDao().hasPhotoPath(abs) ||
-                            db.locationDao().hasCoverImagePath(file.path) ||
-                            db.spotPhotoDao().hasPhotoPath(file.path)
-                        if (!referenced) {
-                            runCatching { file.delete() }
-                        }
+                        if (abs in referencedPaths || file.path in referencedPaths) continue
+                        runCatching { file.delete() }
                     }
                 }
             }

@@ -17,6 +17,9 @@ object GpxParser {
 
     /** Hard cap so a huge Garmin/Gaia export cannot OOM mid-parse or flood the vault. */
     const val MAX_IMPORT_WAYPOINTS = 1000
+    /** Whole-file ceiling — XmlPullParser buffers each text node fully, so a giant &lt;desc&gt;
+     * still OOMs before [readText]'s char cap can help. */
+    private const val MAX_GPX_FILE_BYTES = 8L * 1024 * 1024
 
     data class ImportResult(
         val imported: Int,
@@ -33,6 +36,11 @@ object GpxParser {
     /** Parse GPX XML text into [LocationSpot] rows ready for [LocationDao.insertSpot]. */
     fun parseGpx(xml: String, maxWaypoints: Int = MAX_IMPORT_WAYPOINTS): List<LocationSpot> {
         if (xml.isBlank()) return emptyList()
+        if (xml.length > MAX_GPX_FILE_BYTES) {
+            throw java.io.IOException(
+                "GPX file is larger than the ${MAX_GPX_FILE_BYTES / (1024 * 1024)} MB import limit"
+            )
+        }
         return parseGpxResult(xml.byteInputStream(Charsets.UTF_8), maxWaypoints).spots
     }
 
@@ -43,9 +51,10 @@ object GpxParser {
     private data class ParseResult(val spots: List<LocationSpot>, val truncated: Boolean)
 
     private fun parseGpxResult(inputStream: InputStream, maxWaypoints: Int): ParseResult {
+        val limited = CountingInputStream(inputStream, MAX_GPX_FILE_BYTES)
         val parser = android.util.Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
-        parser.setInput(inputStream, null)
+        parser.setInput(limited, null)
 
         val waypoints = mutableListOf<LocationSpot>()
         var eventType = parser.eventType
@@ -171,13 +180,52 @@ object GpxParser {
     }
 
     private fun readText(parser: XmlPullParser): String {
-        var result = ""
-        if (parser.next() == XmlPullParser.TEXT) {
-            result = parser.text.orEmpty()
-            parser.nextTag()
+        if (parser.next() != XmlPullParser.TEXT) return ""
+        // Copy at most NOTEPAD_MAX_CHARS from the parser's char buffer — avoids a second
+        // full-size String via parser.text. The file-level [CountingInputStream] is what
+        // prevents a multi-hundred-MB text node from being buffered in the first place.
+        val holder = IntArray(2)
+        val buf = parser.getTextCharacters(holder)
+        val result = if (buf != null && holder[1] > 0) {
+            val start = holder[0]
+            val len = minOf(holder[1], NOTEPAD_MAX_CHARS)
+            String(buf, start, len)
+        } else {
+            parser.text.orEmpty().take(NOTEPAD_MAX_CHARS)
         }
-        // Cap before trim so a malicious/huge GPX text node cannot allocate twice.
-        return result.take(NOTEPAD_MAX_CHARS).trim()
+        parser.nextTag()
+        return result.trim()
+    }
+
+    /** Rejects GPX payloads larger than [maxBytes] as they are read — XmlPullParser has no
+     * per-text-node size limit of its own. */
+    private class CountingInputStream(
+        private val wrapped: InputStream,
+        private val maxBytes: Long
+    ) : InputStream() {
+        private var total = 0L
+
+        private fun account(n: Int): Int {
+            if (n <= 0) return n
+            total += n
+            if (total > maxBytes) {
+                throw java.io.IOException(
+                    "GPX file is larger than the ${maxBytes / (1024 * 1024)} MB import limit"
+                )
+            }
+            return n
+        }
+
+        override fun read(): Int {
+            val b = wrapped.read()
+            if (b >= 0) account(1)
+            return b
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int =
+            account(wrapped.read(b, off, len))
+
+        override fun close() = wrapped.close()
     }
 
 }

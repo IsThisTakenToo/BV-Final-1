@@ -210,6 +210,28 @@ object VaultBackupManager {
         val resolver = context.contentResolver
         resolver.openOutputStream(outputUri)?.use { rawOut ->
             ZipOutputStream(BufferedOutputStream(rawOut)).use { zip ->
+                var exportBytes = 0L
+                fun accountExport(bytes: Long) {
+                    exportBytes += bytes
+                    if (exportBytes > MAX_BACKUP_TOTAL_BYTES) {
+                        throw java.io.IOException(
+                            "Vault is larger than the ${MAX_BACKUP_TOTAL_BYTES / (1024 * 1024)} MB backup limit"
+                        )
+                    }
+                }
+                fun writeText(name: String, text: String) {
+                    val bytes = text.toByteArray(Charsets.UTF_8)
+                    accountExport(bytes.size.toLong())
+                    zip.putNextEntry(ZipEntry(name))
+                    zip.write(bytes)
+                    zip.closeEntry()
+                }
+                fun writeFile(name: String, source: File) {
+                    accountExport(source.length())
+                    zip.putNextEntry(ZipEntry(name))
+                    source.inputStream().use { input -> input.copyTo(zip) }
+                    zip.closeEntry()
+                }
                 val manifest = JSONObject().apply {
                     put("format", FORMAT)
                     put("version", VERSION)
@@ -218,10 +240,9 @@ object VaultBackupManager {
                     put("vehicleCount", vehicles.size)
                     put("layout", "spots/<folder>/ — photo.jpg, extra photos, notes.txt, and spot.json bundled per saved location; vehicles.json at the root")
                 }
-                writeZipText(zip, "manifest.json", manifest.toString(2))
+                writeText("manifest.json", manifest.toString(2))
 
-                writeZipText(
-                    zip,
+                writeText(
                     "README.txt",
                     """
                     DropPin Vault Backup
@@ -246,7 +267,7 @@ object VaultBackupManager {
 
                 val vehiclesArray = JSONArray()
                 vehicles.forEach { vehiclesArray.put(vehicleToJson(it)) }
-                writeZipText(zip, "vehicles.json", vehiclesArray.toString(2))
+                writeText("vehicles.json", vehiclesArray.toString(2))
 
                 // Built incrementally in the loop below rather than collected into a
                 // List<SpotExportSummary> holding every spot's raw photo bytes for the whole
@@ -274,7 +295,7 @@ object VaultBackupManager {
                             val source = File(spot.imagePath)
                             if (source.exists()) {
                                 val entryName = "${folderPrefix}photo.jpg"
-                                writeZipFile(zip, entryName, source)
+                                writeFile(entryName, source)
                                 // Only buffer bytes when the HTML gallery will embed this photo —
                                 // past MAX_HTML_EMBEDDED_PHOTOS the zip already has the file stream.
                                 // Cap source size too — pre-compress legacy cameras can still be huge.
@@ -298,7 +319,7 @@ object VaultBackupManager {
                             val source = File(extraPath)
                             if (source.exists()) {
                                 val name = "photo_${photoIndex + 2}.${source.extension.ifBlank { "jpg" }}"
-                                writeZipFile(zip, "$folderPrefix$name", source)
+                                writeFile("$folderPrefix$name", source)
                                 extraPhotoNames.add(name)
                             }
                         }
@@ -306,8 +327,8 @@ object VaultBackupManager {
                         val vehicleExportIndex = spot.vehicleId?.let { vehicleIndexById[it] }
                         val tagNames = tagDao.getTagsForSpot(spot.id).map { it.name }
                         val spotJson = spotToJson(spot, photoEntry.removePrefix(folderPrefix), extraPhotoNames, vehicleExportIndex, tagNames)
-                        writeZipText(zip, "${folderPrefix}spot.json", spotJson.toString(2))
-                        writeZipText(zip, "${folderPrefix}notes.txt", buildSpotNotesText(spot, tagNames))
+                        writeText("${folderPrefix}spot.json", spotJson.toString(2))
+                        writeText("${folderPrefix}notes.txt", buildSpotNotesText(spot, tagNames))
 
                         // Card HTML (with the photo downscaled+base64-embedded by buildSpotCardHtml)
                         // is built right here, immediately, while photoBytes is still in scope for
@@ -334,10 +355,9 @@ object VaultBackupManager {
                     }
                 }
 
-                writeZipText(zip, "prefs.json", serializeAllPrefs(prefs).toString(2))
+                writeText("prefs.json", serializeAllPrefs(prefs).toString(2))
 
-                writeZipText(
-                    zip,
+                writeText(
                     "index.html",
                     buildHtmlIndexShell(cardsHtml.toString(), visibleSpotCount, galleryCardCount)
                 )
@@ -869,7 +889,13 @@ object VaultBackupManager {
     private fun readSpilledMetaRequired(metaSpillDir: File, entryName: String): String {
         val path = findSpilledMeta(metaSpillDir, entryName)
             ?: error("Backup is missing $entryName")
-        return File(path).readText(Charsets.UTF_8)
+        val file = File(path)
+        // Spill already enforced MAX_BACKUP_META_ENTRY_BYTES; keep a tighter ceiling for the
+        // DOM parse so a fat/corrupt spot.json can't become a multi-MB JSONObject.
+        if (file.length() > MAX_BACKUP_ROOT_META_BYTES) {
+            error("Backup entry $entryName is too large to import safely")
+        }
+        return file.readText(Charsets.UTF_8)
     }
 
     /** One JSON object from [JsonReader] without buffering sibling objects. */
@@ -1175,18 +1201,6 @@ object VaultBackupManager {
             appendLine()
             appendLine("Photo: see photo.jpg in this folder (if present)")
         }
-    }
-
-    private fun writeZipText(zip: ZipOutputStream, name: String, text: String) {
-        zip.putNextEntry(ZipEntry(name))
-        zip.write(text.toByteArray(Charsets.UTF_8))
-        zip.closeEntry()
-    }
-
-    private fun writeZipFile(zip: ZipOutputStream, name: String, source: File) {
-        zip.putNextEntry(ZipEntry(name))
-        source.inputStream().use { input -> input.copyTo(zip) }
-        zip.closeEntry()
     }
 
     /**

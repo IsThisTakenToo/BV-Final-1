@@ -356,7 +356,7 @@ interface LocationDao {
         WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
           AND timestamp >= :dayStart AND timestamp < :dayEnd
         ORDER BY timestamp DESC
-        LIMIT 3000
+        LIMIT 500
         """
     )
     suspend fun getActiveVaultSpotsForDay(dayStart: Long, dayEnd: Long): List<LocationSpot>
