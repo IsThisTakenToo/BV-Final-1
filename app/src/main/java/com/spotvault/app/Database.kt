@@ -368,7 +368,7 @@ interface LocationDao {
         FROM location_history
         WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND isFavorite = 1
         ORDER BY timestamp DESC
-        LIMIT 3000
+        LIMIT 500
         """
     )
     suspend fun getFavoriteVaultSpotsForBrowse(): List<LocationSpot>
@@ -407,7 +407,7 @@ interface LocationDao {
           AND CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END = :state
           AND CASE WHEN length(trim(city)) = 0 THEN 'Unknown' ELSE city END = :city
         ORDER BY timestamp DESC
-        LIMIT 3000
+        LIMIT 500
         """
     )
     suspend fun getActiveVaultSpotsForCity(state: String, city: String): List<LocationSpot>
@@ -709,7 +709,7 @@ interface LocationDao {
         FROM location_history
         WHERE deletedAt IS NOT NULL
         ORDER BY deletedAt DESC
-        LIMIT 3000
+        LIMIT 500
         """
     )
     suspend fun getRecentlyDeleted(): List<LocationSpot>
@@ -743,7 +743,7 @@ interface LocationDao {
         FROM location_history
         WHERE isArchived = 1
         ORDER BY timestamp DESC
-        LIMIT 3000
+        LIMIT 500
         """
     )
     suspend fun getArchivedSpots(): List<LocationSpot>

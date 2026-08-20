@@ -14,7 +14,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStreamReader
@@ -40,6 +39,8 @@ object VaultBackupManager {
     private const val MAX_BACKUP_ENTRY_BYTES = 200L * 1024 * 1024
     /** Meta JSON/txt/html entries are far smaller than photos — keep them tightly capped. */
     private const val MAX_BACKUP_META_ENTRY_BYTES = 16L * 1024 * 1024
+    /** Root prefs.json stays in RAM — keep this tight so a corrupt blob can't balloon. */
+    private const val MAX_BACKUP_ROOT_META_BYTES = 512L * 1024
     /** Cap on base64-embedded thumbnails in index.html — beyond this, cards link to
      * spots/.../photo.jpg so a multi-year vault can't OOM the export StringBuilder. */
     private const val MAX_HTML_EMBEDDED_PHOTOS = 16
@@ -61,8 +62,33 @@ object VaultBackupManager {
      * hundreds of large photos to OOM the process when all buffered into [extracted]. */
     internal const val MAX_BACKUP_TOTAL_BYTES = 512L * 1024 * 1024
 
-    /** Like [ZipInputStream.readBytes] but aborts once [maxBytes] is exceeded instead of growing
-     * an unbounded buffer for a corrupt or adversarial entry. */
+    private fun hashEntryName(entryName: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(entryName.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }.take(40)
+    }
+
+    private fun spilledMetaFile(metaSpillDir: File, entryName: String): File =
+        File(metaSpillDir, "m_${hashEntryName(entryName)}.bin")
+
+    private fun spilledPhotoFile(imagesDir: File, entryName: String, extension: String): File {
+        val ext = extension.filter { it.isLetterOrDigit() }.lowercase(Locale.US).take(8).ifBlank { "jpg" }
+        return File(imagesDir, "import_spill_${hashEntryName(entryName)}.$ext")
+    }
+
+    private fun findSpilledPhoto(imagesDir: File, entryName: String): String? {
+        val hash = hashEntryName(entryName)
+        for (ext in listOf("jpg", "jpeg", "png", "webp", "bin")) {
+            val f = File(imagesDir, "import_spill_$hash.$ext")
+            if (f.exists()) return f.absolutePath
+        }
+        return null
+    }
+
+    private fun findSpilledMeta(metaSpillDir: File, entryName: String): String? {
+        val f = spilledMetaFile(metaSpillDir, entryName)
+        return f.takeIf { it.exists() }?.absolutePath
+    }
     private fun ZipInputStream.readEntryBytesLimited(entryName: String, maxBytes: Long): ByteArray {
         val out = ByteArrayOutputStream()
         val buffer = ByteArray(64 * 1024)
@@ -125,9 +151,8 @@ object VaultBackupManager {
     /** Root-level JSON that must stay in RAM for the import transaction. */
     private fun isRootMetaEntry(name: String): Boolean {
         val base = name.substringAfterLast('/')
-        // spots.json (legacy) is spilled — a years-old vault's single JSON blob must not sit
-        // alongside every other entry as a second full copy in extractedMeta.
-        return base == "vehicles.json" || base == "prefs.json"
+        // vehicles.json and spots.json are spilled — only prefs stays as a small RAM blob.
+        return base == "prefs.json"
     }
 
     /** Human-readable companions never used by import — discard during unzip. */
@@ -141,17 +166,6 @@ object VaultBackupManager {
 
     private fun isSpotJsonEntry(name: String): Boolean =
         name.matches(Regex("spots/[^/]+/spot\\.json"))
-
-    private fun readMetaText(
-        entryName: String,
-        extractedMeta: Map<String, ByteArray>,
-        extractedMetaPaths: Map<String, String>
-    ): String {
-        extractedMetaPaths[entryName]?.let { path ->
-            return File(path).readText(Charsets.UTF_8)
-        }
-        return String(extractedMeta.getValue(entryName), Charsets.UTF_8)
-    }
 
     private val BACKUP_EXCLUDED_PREF_KEYS = setOf(
         "auto_backup_tree_uri", "auto_backup_last_success", "auto_backup_enabled", "auto_backup_last_fingerprint",
@@ -438,11 +452,9 @@ object VaultBackupManager {
         inputUri: Uri,
         replaceExisting: Boolean
     ): Result<Int> = try {
-        // Root JSON (vehicles/prefs/legacy spots) stays in RAM; per-spot spot.json is spilled
-        // like photos; notes.txt / index.html / readme are discarded — never needed for import.
+        // Only prefs.json stays in RAM. Photos, spot.json, vehicles.json, and legacy spots.json
+        // spill to disk under hash names — years of entries must not grow path HashMaps in RAM.
         val extractedMeta = mutableMapOf<String, ByteArray>()
-        val extractedMetaPaths = mutableMapOf<String, String>()
-        val extractedPhotoPaths = mutableMapOf<String, String>()
         var manifestJson: JSONObject? = null
         var totalBytes = 0L
         val imagesDir = backupImagesDir(context)
@@ -450,8 +462,9 @@ object VaultBackupManager {
             dir.mkdirs()
             dir.listFiles()?.forEach { runCatching { it.delete() } }
         }
-        var photoSpillIndex = 0
-        var metaSpillIndex = 0
+        val spotJsonListFile = File(metaSpillDir, "spot_json_entries.txt")
+        val photoCleanupList = File(context.cacheDir, "backup_import_photo_cleanup.txt")
+        runCatching { photoCleanupList.delete() }
 
         fun isPhotoZipEntry(name: String): Boolean {
             val lower = name.lowercase(Locale.US)
@@ -477,64 +490,71 @@ object VaultBackupManager {
         try {
         context.contentResolver.openInputStream(inputUri)?.use { rawIn ->
             ZipInputStream(BufferedInputStream(rawIn)).use { zip ->
-                var entry = zip.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory) {
-                        when {
-                            entry.name == "manifest.json" -> {
-                                val bytes = zip.readEntryBytesLimited(entry.name, MAX_BACKUP_META_ENTRY_BYTES)
-                                accountBytes(bytes.size.toLong())
-                                manifestJson = JSONObject(String(bytes, Charsets.UTF_8))
-                            }
-                            isPhotoZipEntry(entry.name) -> {
-                                val extension = entry.name.substringAfterLast('.', "jpg")
-                                val outFile = File(
-                                    imagesDir,
-                                    "import_spill_${System.currentTimeMillis()}_${photoSpillIndex++}.$extension"
-                                )
-                                try {
-                                    zip.spillEntryToFile(
-                                        entryName = entry.name,
-                                        destination = outFile,
-                                        maxEntryBytes = MAX_BACKUP_ENTRY_BYTES,
-                                        onBytes = { accountBytes(it) }
+                spotJsonListFile.bufferedWriter().use { spotListWriter ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        if (!entry.isDirectory) {
+                            when {
+                                entry.name == "manifest.json" -> {
+                                    val bytes = zip.readEntryBytesLimited(
+                                        entry.name,
+                                        MAX_BACKUP_ROOT_META_BYTES
                                     )
-                                } catch (e: Exception) {
-                                    runCatching { outFile.delete() }
-                                    throw e
+                                    accountBytes(bytes.size.toLong())
+                                    manifestJson = JSONObject(String(bytes, Charsets.UTF_8))
                                 }
-                                extractedPhotoPaths[entry.name] = outFile.absolutePath
-                            }
-                            isDiscardableMetaEntry(entry.name) -> {
-                                zip.discardEntry(entry.name, MAX_BACKUP_META_ENTRY_BYTES) { accountBytes(it) }
-                            }
-                            isSpotJsonEntry(entry.name) || !isRootMetaEntry(entry.name) -> {
-                                val outFile = File(
-                                    metaSpillDir,
-                                    "meta_${metaSpillIndex++}_${entry.name.hashCode().toUInt()}.bin"
-                                )
-                                try {
-                                    zip.spillEntryToFile(
-                                        entryName = entry.name,
-                                        destination = outFile,
-                                        maxEntryBytes = MAX_BACKUP_META_ENTRY_BYTES,
-                                        onBytes = { accountBytes(it) }
+                                isPhotoZipEntry(entry.name) -> {
+                                    val extension = entry.name.substringAfterLast('.', "jpg")
+                                    val outFile = spilledPhotoFile(imagesDir, entry.name, extension)
+                                    try {
+                                        zip.spillEntryToFile(
+                                            entryName = entry.name,
+                                            destination = outFile,
+                                            maxEntryBytes = MAX_BACKUP_ENTRY_BYTES,
+                                            onBytes = { accountBytes(it) }
+                                        )
+                                    } catch (e: Exception) {
+                                        runCatching { outFile.delete() }
+                                        throw e
+                                    }
+                                    photoCleanupList.appendText(outFile.absolutePath + "\n")
+                                }
+                                isDiscardableMetaEntry(entry.name) -> {
+                                    zip.discardEntry(entry.name, MAX_BACKUP_META_ENTRY_BYTES) {
+                                        accountBytes(it)
+                                    }
+                                }
+                                isSpotJsonEntry(entry.name) || !isRootMetaEntry(entry.name) -> {
+                                    val outFile = spilledMetaFile(metaSpillDir, entry.name)
+                                    try {
+                                        zip.spillEntryToFile(
+                                            entryName = entry.name,
+                                            destination = outFile,
+                                            maxEntryBytes = MAX_BACKUP_META_ENTRY_BYTES,
+                                            onBytes = { accountBytes(it) }
+                                        )
+                                    } catch (e: Exception) {
+                                        runCatching { outFile.delete() }
+                                        throw e
+                                    }
+                                    if (isSpotJsonEntry(entry.name)) {
+                                        spotListWriter.appendLine(entry.name)
+                                    }
+                                }
+                                else -> {
+                                    // prefs.json only — tightly capped so a corrupt blob can't balloon.
+                                    val bytes = zip.readEntryBytesLimited(
+                                        entry.name,
+                                        MAX_BACKUP_ROOT_META_BYTES
                                     )
-                                } catch (e: Exception) {
-                                    runCatching { outFile.delete() }
-                                    throw e
+                                    accountBytes(bytes.size.toLong())
+                                    extractedMeta[entry.name] = bytes
                                 }
-                                extractedMetaPaths[entry.name] = outFile.absolutePath
-                            }
-                            else -> {
-                                val bytes = zip.readEntryBytesLimited(entry.name, MAX_BACKUP_META_ENTRY_BYTES)
-                                accountBytes(bytes.size.toLong())
-                                extractedMeta[entry.name] = bytes
                             }
                         }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
                     }
-                    zip.closeEntry()
-                    entry = zip.nextEntry
                 }
             }
         } ?: error("Could not read backup file")
@@ -587,17 +607,17 @@ object VaultBackupManager {
                     vehicleDao.deleteAll()
                 }
 
-                val vehicleIdMap = if (extractedMeta.containsKey("vehicles.json")) {
-                    importVehicles(extractedMeta.getValue("vehicles.json"), vehicleDao)
+                val vehiclesSpill = findSpilledMeta(metaSpillDir, "vehicles.json")?.let { File(it) }
+                val vehicleIdMap = if (vehiclesSpill != null) {
+                    importVehiclesFromFile(vehiclesSpill, vehicleDao)
                 } else {
                     emptyList()
                 }
 
                 when {
                     version >= FOLDER_FORMAT_MIN_VERSION -> importFolderBackup(
-                        extractedMeta,
-                        extractedMetaPaths,
-                        extractedPhotoPaths,
+                        metaSpillDir,
+                        spotJsonListFile,
                         imagesDir,
                         dao,
                         spotPhotoDao,
@@ -606,9 +626,7 @@ object VaultBackupManager {
                         expectedSpotCount = manifest.optInt("spotCount", -1)
                     )
                     else -> importLegacyBackup(
-                        extractedMeta,
-                        extractedMetaPaths,
-                        extractedPhotoPaths,
+                        metaSpillDir,
                         imagesDir,
                         dao,
                         prefs
@@ -617,11 +635,17 @@ object VaultBackupManager {
             }
         } catch (e: Exception) {
             // Transaction rolled back — spilled photos from this import attempt are orphans.
-            extractedPhotoPaths.values.forEach { path -> runCatching { File(path).delete() } }
+            if (photoCleanupList.exists()) {
+                photoCleanupList.forEachLine { path ->
+                    if (path.isNotBlank()) runCatching { File(path).delete() }
+                }
+            }
             // Do not delete paths listed in pendingDeletesFile — those still belong to the
             // rolled-back vault rows. Only drop the path list itself.
             runCatching { pendingDeletesFile.delete() }
             throw e
+        } finally {
+            runCatching { photoCleanupList.delete() }
         }
 
         // Transaction committed successfully — now safe to actually reclaim the old photos' disk
@@ -654,8 +678,7 @@ object VaultBackupManager {
     private fun vehicleIdentity(name: String, bluetoothMac: String?): String =
         bluetoothMac?.uppercase(Locale.US)?.takeIf { it.isNotBlank() } ?: name.trim().lowercase(Locale.US)
 
-    private suspend fun importVehicles(vehiclesJsonBytes: ByteArray, vehicleDao: VehicleDao): List<Int> {
-        val arr = JSONArray(String(vehiclesJsonBytes, Charsets.UTF_8))
+    private suspend fun importVehiclesFromFile(vehiclesFile: File, vehicleDao: VehicleDao): List<Int> {
         val existing = vehicleDao.getAllList()
         val existingByIdentity = existing.associateBy { vehicleIdentity(it.name, it.bluetoothMac) }
         val newIds = mutableListOf<Int>()
@@ -667,33 +690,44 @@ object VaultBackupManager {
         // exactly this reason (it transactionally clears every other row first) — this was the one
         // path that bypassed it.
         var newDefaultId: Int? = null
-        val vehicleCount = minOf(arr.length(), MAX_IMPORT_VEHICLES)
-        for (i in 0 until vehicleCount) {
-            val v = arr.getJSONObject(i)
-            val name = v.optString("name", "My Car").take(80)
-            val bluetoothMac = v.optString("bluetoothMac", "").ifBlank { null }?.take(64)
-            val already = existingByIdentity[vehicleIdentity(name, bluetoothMac)]
-            if (already != null) {
-                newIds.add(already.id)
-                continue
+        var vehicleCount = 0
+        vehiclesFile.inputStream().use { stream ->
+            JsonReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
+                reader.beginArray()
+                while (reader.hasNext()) {
+                    if (vehicleCount >= MAX_IMPORT_VEHICLES) {
+                        reader.skipValue()
+                        continue
+                    }
+                    val v = reader.readJsonObject()
+                    vehicleCount++
+                    val name = v.optString("name", "My Car").take(80)
+                    val bluetoothMac = v.optString("bluetoothMac", "").ifBlank { null }?.take(64)
+                    val already = existingByIdentity[vehicleIdentity(name, bluetoothMac)]
+                    if (already != null) {
+                        newIds.add(already.id)
+                        continue
+                    }
+                    val isDefault = v.optBoolean("isDefault", false)
+                    val newId = vehicleDao.insert(
+                        Vehicle(
+                            id = 0,
+                            name = name,
+                            colorArgb = v.optInt("colorArgb", VehicleColorOptions.first()),
+                            iconKey = v.optString("iconKey", "car").take(32),
+                            notes = v.optString("notes", "").take(2_000),
+                            isDefault = false,
+                            isArchived = v.optBoolean("isArchived", false),
+                            bluetoothMac = bluetoothMac,
+                            bluetoothName = v.optString("bluetoothName", "").ifBlank { null }?.take(80),
+                            createdAt = v.optLong("createdAt", System.currentTimeMillis())
+                        )
+                    ).toInt()
+                    if (isDefault) newDefaultId = newId
+                    newIds.add(newId)
+                }
+                reader.endArray()
             }
-            val isDefault = v.optBoolean("isDefault", false)
-            val newId = vehicleDao.insert(
-                Vehicle(
-                    id = 0,
-                    name = name,
-                    colorArgb = v.optInt("colorArgb", VehicleColorOptions.first()),
-                    iconKey = v.optString("iconKey", "car").take(32),
-                    notes = v.optString("notes", "").take(2_000),
-                    isDefault = false,
-                    isArchived = v.optBoolean("isArchived", false),
-                    bluetoothMac = bluetoothMac,
-                    bluetoothName = v.optString("bluetoothName", "").ifBlank { null }?.take(80),
-                    createdAt = v.optLong("createdAt", System.currentTimeMillis())
-                )
-            ).toInt()
-            if (isDefault) newDefaultId = newId
-            newIds.add(newId)
         }
         newDefaultId?.let { vehicleDao.setDefault(it) }
         // A backup where no vehicle was ever marked default (older export, or one that had its
@@ -706,9 +740,8 @@ object VaultBackupManager {
     }
 
     private suspend fun importFolderBackup(
-        extractedMeta: Map<String, ByteArray>,
-        extractedMetaPaths: Map<String, String>,
-        extractedPhotoPaths: Map<String, String>,
+        metaSpillDir: File,
+        spotJsonListFile: File,
         imagesDir: File,
         dao: LocationDao,
         spotPhotoDao: SpotPhotoDao,
@@ -716,63 +749,51 @@ object VaultBackupManager {
         vehicleIdMap: List<Int>,
         expectedSpotCount: Int
     ): Int {
-        val spotJsonPaths = (
-            extractedMeta.keys.filter { isSpotJsonEntry(it) } +
-                extractedMetaPaths.keys.filter { isSpotJsonEntry(it) }
-            ).distinct().sorted()
-
         var imported = 0
-        spotJsonPaths.forEachIndexed { index, jsonPath ->
-            val folderPrefix = jsonPath.removeSuffix("spot.json")
-            val item = JSONObject(readMetaText(jsonPath, extractedMeta, extractedMetaPaths))
-            val imagePath = resolveSpotPhoto(
-                extractedMeta,
-                extractedMetaPaths,
-                extractedPhotoPaths,
-                folderPrefix,
-                item,
-                imagesDir,
-                index
-            )
-            val newSpotId = insertSpotFromJson(dao, item, imagePath, vehicleIdMap)
-            if (newSpotId != null) {
-                imported++
-                val extraNames = item.optJSONArray("extraPhotos")
-                if (extraNames != null) {
-                    val maxExtras = minOf(extraNames.length(), MAX_EXTRA_PHOTOS_PER_SPOT)
-                    for (i in 0 until maxExtras) {
-                        val name = extraNames.getString(i)
-                        val entryName = folderPrefix + name
-                        val spilled = extractedPhotoPaths[entryName]
-                        if (spilled != null) {
-                            spotPhotoDao.insertExtraPhotoCapped(newSpotId, spilled)
-                            continue
+        var spotJsonCount = 0
+        if (spotJsonListFile.exists()) {
+            spotJsonListFile.bufferedReader().use { reader ->
+                while (true) {
+                    val jsonPath = reader.readLine() ?: break
+                    if (jsonPath.isBlank()) continue
+                    spotJsonCount++
+                    val index = spotJsonCount - 1
+                    val folderPrefix = jsonPath.removeSuffix("spot.json")
+                    val item = JSONObject(readSpilledMetaRequired(metaSpillDir, jsonPath))
+                    val imagePath = resolveSpotPhoto(folderPrefix, item, imagesDir, metaSpillDir, index)
+                    val newSpotId = insertSpotFromJson(dao, item, imagePath, vehicleIdMap)
+                    if (newSpotId != null) {
+                        imported++
+                        val extraNames = item.optJSONArray("extraPhotos")
+                        if (extraNames != null) {
+                            val maxExtras = minOf(extraNames.length(), MAX_EXTRA_PHOTOS_PER_SPOT)
+                            for (i in 0 until maxExtras) {
+                                val name = extraNames.getString(i)
+                                val entryName = folderPrefix + name
+                                val spilled = findSpilledPhoto(imagesDir, entryName)
+                                if (spilled != null) {
+                                    spotPhotoDao.insertExtraPhotoCapped(newSpotId, spilled)
+                                    continue
+                                }
+                                val spilledMeta = findSpilledMeta(metaSpillDir, entryName) ?: continue
+                                val extension = name.substringAfterLast('.', "jpg")
+                                val outFile = File(imagesDir, "import_extra_${System.currentTimeMillis()}_${index}_$i.$extension")
+                                File(spilledMeta).copyTo(outFile, overwrite = true)
+                                spotPhotoDao.insertExtraPhotoCapped(newSpotId, outFile.absolutePath)
+                            }
                         }
-                        val spilledMeta = extractedMetaPaths[entryName]
-                        if (spilledMeta != null) {
-                            val extension = name.substringAfterLast('.', "jpg")
-                            val outFile = File(imagesDir, "import_extra_${System.currentTimeMillis()}_${index}_$i.$extension")
-                            File(spilledMeta).copyTo(outFile, overwrite = true)
-                            spotPhotoDao.insertExtraPhotoCapped(newSpotId, outFile.absolutePath)
-                            continue
+                        // Tag names, not ids — tags are globally unique by name (see TagEntity's unique
+                        // index), and assignTag() already finds-or-creates by name, so this needs no id
+                        // remapping table the way vehicles do. Also correct for a merge import: an
+                        // existing tag with the same name just gets this spot added as a new member.
+                        val tagNames = item.optJSONArray("tags")
+                        if (tagNames != null) {
+                            val maxTags = minOf(tagNames.length(), MAX_IMPORT_TAGS_PER_SPOT)
+                            for (i in 0 until maxTags) {
+                                val name = tagNames.getString(i).trim().take(MAX_IMPORT_TAG_NAME_CHARS)
+                                if (name.isNotEmpty()) tagDao.assignTag(newSpotId, name)
+                            }
                         }
-                        val bytes = extractedMeta[entryName] ?: continue
-                        val extension = name.substringAfterLast('.', "jpg")
-                        val outFile = File(imagesDir, "import_extra_${System.currentTimeMillis()}_${index}_$i.$extension")
-                        outFile.writeBytes(bytes)
-                        spotPhotoDao.insertExtraPhotoCapped(newSpotId, outFile.absolutePath)
-                    }
-                }
-                // Tag names, not ids — tags are globally unique by name (see TagEntity's unique
-                // index), and assignTag() already finds-or-creates by name, so this needs no id
-                // remapping table the way vehicles do. Also correct for a merge import: an
-                // existing tag with the same name just gets this spot added as a new member.
-                val tagNames = item.optJSONArray("tags")
-                if (tagNames != null) {
-                    val maxTags = minOf(tagNames.length(), MAX_IMPORT_TAGS_PER_SPOT)
-                    for (i in 0 until maxTags) {
-                        val name = tagNames.getString(i).trim().take(MAX_IMPORT_TAG_NAME_CHARS)
-                        if (name.isNotEmpty()) tagDao.assignTag(newSpotId, name)
                     }
                 }
             }
@@ -783,49 +804,30 @@ object VaultBackupManager {
         // Drive restore path can hit exactly this) — without checking it, that valid, correctly-
         // formatted zip looked identical to someone picking a completely unrelated file with no
         // spots/ folder at all, and both used to fail with the same "not a real backup" error.
-        if (imported == 0 && spotJsonPaths.isEmpty() && expectedSpotCount != 0) {
+        if (imported == 0 && spotJsonCount == 0 && expectedSpotCount != 0) {
             error("Backup contains no spot folders under spots/")
         }
         return imported
     }
 
     private suspend fun importLegacyBackup(
-        extractedMeta: Map<String, ByteArray>,
-        extractedMetaPaths: Map<String, String>,
-        extractedPhotoPaths: Map<String, String>,
+        metaSpillDir: File,
         imagesDir: File,
         dao: LocationDao,
         prefs: SharedPreferences
     ): Int {
-        val spotsFile = extractedMetaPaths["spots.json"]?.let { File(it) }
-        val spotsBytes = extractedMeta["spots.json"]
-        when {
-            spotsFile != null -> {
-                if (spotsFile.length() > MAX_LEGACY_SPOTS_JSON_BYTES) {
-                    error(
-                        "This older backup format is too large to import safely. " +
-                            "Export again from a recent DropPin Vault build and retry."
-                    )
-                }
-            }
-            spotsBytes != null -> {
-                if (spotsBytes.size > MAX_LEGACY_SPOTS_JSON_BYTES) {
-                    error(
-                        "This older backup format is too large to import safely. " +
-                            "Export again from a recent DropPin Vault build and retry."
-                    )
-                }
-            }
-            else -> error("Backup is missing spots.json")
+        val spotsFile = findSpilledMeta(metaSpillDir, "spots.json")?.let { File(it) }
+            ?: error("Backup is missing spots.json")
+        if (spotsFile.length() > MAX_LEGACY_SPOTS_JSON_BYTES) {
+            error(
+                "This older backup format is too large to import safely. " +
+                    "Export again from a recent DropPin Vault build and retry."
+            )
         }
 
         // Stream one spot object at a time — never materialize the full spots.json DOM.
-        val input = when {
-            spotsFile != null -> spotsFile.inputStream()
-            else -> ByteArrayInputStream(spotsBytes!!)
-        }
         var imported = 0
-        input.use { stream ->
+        spotsFile.inputStream().use { stream ->
             JsonReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
                 reader.beginObject()
                 while (reader.hasNext()) {
@@ -838,19 +840,16 @@ object VaultBackupManager {
                                 val imageEntry = item.optString("imageEntry", "")
                                 val imagePath = when {
                                     imageEntry.isEmpty() -> ""
-                                    extractedPhotoPaths.containsKey(imageEntry) ->
-                                        extractedPhotoPaths.getValue(imageEntry)
-                                    extractedMetaPaths.containsKey(imageEntry) -> {
-                                        val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
-                                        File(extractedMetaPaths.getValue(imageEntry)).copyTo(outFile, overwrite = true)
-                                        outFile.absolutePath
+                                    else -> {
+                                        findSpilledPhoto(imagesDir, imageEntry)
+                                            ?: findSpilledMeta(metaSpillDir, imageEntry)?.let { metaPath ->
+                                                val outFile =
+                                                    File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
+                                                File(metaPath).copyTo(outFile, overwrite = true)
+                                                outFile.absolutePath
+                                            }
+                                            ?: ""
                                     }
-                                    extractedMeta.containsKey(imageEntry) -> {
-                                        val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
-                                        outFile.writeBytes(extractedMeta.getValue(imageEntry))
-                                        outFile.absolutePath
-                                    }
-                                    else -> ""
                                 }
                                 if (insertSpotFromJson(dao, item, imagePath, emptyList()) != null) imported++
                                 i++
@@ -865,6 +864,12 @@ object VaultBackupManager {
             }
         }
         return imported
+    }
+
+    private fun readSpilledMetaRequired(metaSpillDir: File, entryName: String): String {
+        val path = findSpilledMeta(metaSpillDir, entryName)
+            ?: error("Backup is missing $entryName")
+        return File(path).readText(Charsets.UTF_8)
     }
 
     /** One JSON object from [JsonReader] without buffering sibling objects. */
@@ -906,12 +911,10 @@ object VaultBackupManager {
     }
 
     private fun resolveSpotPhoto(
-        extractedMeta: Map<String, ByteArray>,
-        extractedMetaPaths: Map<String, String>,
-        extractedPhotoPaths: Map<String, String>,
         folderPrefix: String,
         item: JSONObject,
         imagesDir: File,
+        metaSpillDir: File,
         index: Int
     ): String {
         val candidates = listOf(
@@ -928,24 +931,16 @@ object VaultBackupManager {
             }
         }.filter { it.isNotEmpty() }.distinct()
 
-        candidates.firstOrNull { extractedPhotoPaths.containsKey(it) }?.let { entryName ->
-            return extractedPhotoPaths.getValue(entryName)
-        }
+        candidates.firstNotNullOfOrNull { findSpilledPhoto(imagesDir, it) }?.let { return it }
 
-        candidates.firstOrNull { extractedMetaPaths.containsKey(it) }?.let { entryName ->
-            val extension = entryName.substringAfterLast('.', "jpg")
+        candidates.firstNotNullOfOrNull { findSpilledMeta(metaSpillDir, it) }?.let { spilledPath ->
+            val extension = spilledPath.substringAfterLast('.', "jpg")
             val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$index.$extension")
-            File(extractedMetaPaths.getValue(entryName)).copyTo(outFile, overwrite = true)
+            File(spilledPath).copyTo(outFile, overwrite = true)
             return outFile.absolutePath
         }
 
-        val entryName = candidates.firstOrNull { extractedMeta.containsKey(it) }
-            ?: return ""
-
-        val extension = entryName.substringAfterLast('.', "jpg")
-        val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$index.$extension")
-        outFile.writeBytes(extractedMeta.getValue(entryName))
-        return outFile.absolutePath
+        return ""
     }
 
     /** Returns the new spot's row id on success, or null if it was skipped as a duplicate. */
