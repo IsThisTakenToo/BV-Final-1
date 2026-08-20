@@ -160,25 +160,17 @@ private fun spotSortDistanceMeters(
     return haversineDistanceMeters(user.first, user.second, spot.lat, spot.lng)
 }
 
-/** Shared Vault tag map — one lightweight Flow instead of @Relation reloading every spot.
- * When [loadAllAssignments] is false, only tags for [spotIds] are loaded (windowed browse).
- * Search / tag-filter need the full active assignment index. */
+/** Shared Vault tag map for the currently loaded spot window.
+ * Always scoped to [spotIds] — search/tag filter only run against the browse/full-cap list
+ * (≤ [VAULT_BROWSE_FULL_CAP]), so the whole active assignment table is never needed in Compose. */
 @Composable
 fun rememberVaultSpotIdToTags(
     tagDao: TagDao,
-    spotIds: List<Int> = emptyList(),
-    loadAllAssignments: Boolean = true
+    spotIds: List<Int> = emptyList()
 ): Map<Int, List<TagEntity>> {
-    val assignmentFlow = remember(loadAllAssignments) {
-        if (loadAllAssignments) tagDao.observeActiveSpotTagAssignments()
-        else kotlinx.coroutines.flow.flowOf(emptyList())
-    }
-    val allRows by assignmentFlow.collectAsState(initial = emptyList())
-    val scoped by produceState(emptyMap<Int, List<TagEntity>>(), spotIds, loadAllAssignments) {
-        if (loadAllAssignments) {
-            value = emptyMap()
-            return@produceState
-        }
+    // Cheap invalidation signal when tags are assigned/removed without spotIds changing.
+    val assignmentEpoch by tagDao.observeTagAssignmentCount().collectAsState(initial = 0)
+    val scoped by produceState(emptyMap<Int, List<TagEntity>>(), spotIds, assignmentEpoch) {
         value = withContext(Dispatchers.IO) {
             if (spotIds.isEmpty()) {
                 emptyMap()
@@ -189,11 +181,7 @@ fun rememberVaultSpotIdToTags(
             }
         }
     }
-    return if (loadAllAssignments) {
-        remember(allRows) { allRows.toTagsBySpotId() }
-    } else {
-        scoped
-    }
+    return scoped
 }
 
 /**

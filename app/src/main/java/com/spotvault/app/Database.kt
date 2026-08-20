@@ -214,6 +214,12 @@ data class DeletedSpotCover(
     val imagePath: String
 )
 
+/** Photo path + id cursor for paged Clear All / purge file deletes. */
+data class PhotoPathIdRow(
+    val id: Int,
+    val path: String
+)
+
 /** Paged calendar timestamps — id cursor so day-dot Set can be built without every Long in RAM. */
 data class SpotIdTimestamp(
     val id: Int,
@@ -574,7 +580,18 @@ interface LocationDao {
 
     /** Cover paths for Clear All (active + soft-deleted; archived kept forever). */
     @Query("SELECT imagePath FROM location_history WHERE isArchived = 0 AND length(imagePath) > 0")
+    @Deprecated("Prefer getCoverImagePathRowsForClearAllPage")
     suspend fun getCoverImagePathsForClearAll(): List<String>
+
+    @Query(
+        """
+        SELECT id, imagePath FROM location_history
+        WHERE id > :afterId AND isArchived = 0 AND length(imagePath) > 0
+        ORDER BY id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getCoverImagePathRowsForClearAllPage(afterId: Int, limit: Int): List<CoverImagePathRow>
 
     @Update
     suspend fun updateSpot(spot: LocationSpot)
@@ -725,7 +742,22 @@ interface LocationDao {
         WHERE deletedAt IS NOT NULL AND deletedAt < :cutoff
         """
     )
+    @Deprecated("Prefer getDeletedCoverPathsOlderThanPage")
     suspend fun getDeletedCoverPathsOlderThan(cutoff: Long): List<DeletedSpotCover>
+
+    @Query(
+        """
+        SELECT id, imagePath FROM location_history
+        WHERE deletedAt IS NOT NULL AND deletedAt < :cutoff AND id > :afterId
+        ORDER BY id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getDeletedCoverPathsOlderThanPage(
+        cutoff: Long,
+        afterId: Int,
+        limit: Int
+    ): List<DeletedSpotCover>
 
     @Query(
         """
@@ -734,10 +766,38 @@ interface LocationDao {
         WHERE s.deletedAt IS NOT NULL AND s.deletedAt < :cutoff
         """
     )
+    @Deprecated("Prefer getExtraPhotoPathsDeletedOlderThanPage")
     suspend fun getExtraPhotoPathsDeletedOlderThan(cutoff: Long): List<String>
 
+    @Query(
+        """
+        SELECT p.id AS id, p.path AS path FROM spot_photos AS p
+        INNER JOIN location_history AS s ON s.id = p.spotId
+        WHERE s.deletedAt IS NOT NULL AND s.deletedAt < :cutoff AND p.id > :afterId
+        ORDER BY p.id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getExtraPhotoPathsDeletedOlderThanPage(
+        cutoff: Long,
+        afterId: Int,
+        limit: Int
+    ): List<PhotoPathIdRow>
+
     @Query("DELETE FROM location_history WHERE deletedAt IS NOT NULL AND deletedAt < :cutoff")
+    @Deprecated("Prefer purgeDeletedOlderThanBatch")
     suspend fun purgeDeletedOlderThan(cutoff: Long)
+
+    @Query(
+        """
+        DELETE FROM location_history WHERE id IN (
+            SELECT id FROM location_history
+            WHERE deletedAt IS NOT NULL AND deletedAt < :cutoff
+            LIMIT :limit
+        )
+        """
+    )
+    suspend fun purgeDeletedOlderThanBatch(cutoff: Long, limit: Int): Int
 
     @Query("UPDATE location_history SET vehicleId = NULL WHERE vehicleId = :vehicleId")
     suspend fun clearVehicleId(vehicleId: Int)
@@ -843,7 +903,12 @@ interface TagDao {
         ORDER BY tags.name COLLATE NOCASE ASC
         """
     )
+    @Deprecated("Prefer getTagAssignmentsForSpots — full Flow grows with vault size")
     fun observeActiveSpotTagAssignments(): Flow<List<SpotTagAssignment>>
+
+    /** Invalidation tick for scoped Vault tag maps — tiny payload, updates on any assign/remove. */
+    @Query("SELECT COUNT(*) FROM location_tag_cross_ref")
+    fun observeTagAssignmentCount(): Flow<Int>
 
     @Query(
         """
@@ -1115,7 +1180,19 @@ interface SpotPhotoDao {
         WHERE s.isArchived = 0
         """
     )
+    @Deprecated("Prefer getPhotoPathRowsForClearAllPage")
     suspend fun getPhotoPathsForClearAll(): List<String>
+
+    @Query(
+        """
+        SELECT p.id AS id, p.path AS path FROM spot_photos AS p
+        INNER JOIN location_history AS s ON s.id = p.spotId
+        WHERE s.isArchived = 0 AND p.id > :afterId
+        ORDER BY p.id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getPhotoPathRowsForClearAllPage(afterId: Int, limit: Int): List<PhotoPathIdRow>
 
     @Insert
     suspend fun insert(photo: SpotPhoto): Long

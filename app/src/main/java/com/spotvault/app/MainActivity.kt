@@ -843,23 +843,12 @@ class MainActivity : FragmentActivity() {
             val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(30)
             val db = AppDatabase.getDatabase(this@MainActivity)
             val dao = db.locationDao()
-            val coverPaths = dao.getDeletedCoverPathsOlderThan(cutoff)
-            coverPaths.forEach { spot ->
-                if (spot.imagePath.isNotEmpty()) {
-                    runCatching { File(spot.imagePath).delete() }
-                }
-            }
-            // Extra gallery files must be deleted before the purge cascades away spot_photos rows.
-            dao.getExtraPhotoPathsDeletedOlderThan(cutoff).forEach { path ->
-                runCatching { File(path).delete() }
-            }
-            dao.purgeDeletedOlderThan(cutoff)
-            // Cascades away the cross-refs for every tag those spots carried, but nothing else
-            // ever decrements usageCount for a hard-deleted spot — left unrecomputed, every tag's
-            // count only ever climbs, never falls, on this exact auto-purge that runs on every
-            // single app launch. See TagDao.recomputeAllUsageCounts's own doc for the full picture
-            // (this is one of four call sites that needed it).
-            if (coverPaths.isNotEmpty()) {
+            if (purgeExpiredDeletedSpots(dao, cutoff)) {
+                // Cascades away the cross-refs for every tag those spots carried, but nothing else
+                // ever decrements usageCount for a hard-deleted spot — left unrecomputed, every tag's
+                // count only ever climbs, never falls, on this exact auto-purge that runs on every
+                // single app launch. See TagDao.recomputeAllUsageCounts's own doc for the full picture
+                // (this is one of four call sites that needed it).
                 db.tagDao().recomputeAllUsageCounts()
             }
         }
@@ -4042,8 +4031,9 @@ fun TimerSelectionDialog(
     // this, every spot saved from this dialog kept LocationSpot's blank title default and showed
     // up in the Vault as generic "Saved spot" (see vaultSpotDisplayTitle's ifBlank fallback).
     val initialTitle = if (isCamera) prominentOcrText.ifBlank { ocrText } else ""
+    val cappedInitialTitle = initialTitle.take(200)
     var title by rememberSaveable(stateSaver = TextFieldValue.Saver) {
-        mutableStateOf(TextFieldValue(text = initialTitle, selection = TextRange(initialTitle.length)))
+        mutableStateOf(TextFieldValue(text = cappedInitialTitle, selection = TextRange(cappedInitialTitle.length)))
     }
     var note by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     val defaultTracking = prefs.getBoolean("default_active_tracking", true)
@@ -4406,7 +4396,10 @@ fun TimerSelectionDialog(
                                 // regardless of how much is typed.
                                 VaultCompactNotesFieldWithExpand(
                                     value = title,
-                                    onValueChange = { title = it },
+                                    onValueChange = { next ->
+                                        title = if (next.text.length <= 200) next
+                                        else next.copy(text = next.text.take(200))
+                                    },
                                     label = "Title",
                                     placeholder = "Name this pin",
                                     minLines = 1,

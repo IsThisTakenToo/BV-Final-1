@@ -2244,13 +2244,25 @@ fun ClearAllVaultDataButton(dao: LocationDao, spotPhotoDao: SpotPhotoDao, corout
                             // the paths needed to find them. Same leak class as RecentlyDeletedDialog/
                             // ArchivedSpotsDialog's "Delete Forever" had — "Clear All" is the bulk
                             // version of that exact operation and needs the same file cleanup.
-                            // Path-only queries (not full spot rows) so large vaults don't OOM here.
+                            // Path-only paged queries (not full spot rows) so large vaults don't OOM.
                             // Covers active + soft-deleted; archived rows are intentionally kept.
-                            dao.getCoverImagePathsForClearAll().forEach { path ->
-                                runCatching { File(path).delete() }
+                            var afterCoverId = 0
+                            while (true) {
+                                val page = dao.getCoverImagePathRowsForClearAllPage(afterCoverId, 500)
+                                if (page.isEmpty()) break
+                                page.forEach { row ->
+                                    runCatching { File(row.imagePath).delete() }
+                                }
+                                afterCoverId = page.last().id
                             }
-                            spotPhotoDao.getPhotoPathsForClearAll().forEach { path ->
-                                runCatching { File(path).delete() }
+                            var afterPhotoId = 0
+                            while (true) {
+                                val page = spotPhotoDao.getPhotoPathRowsForClearAllPage(afterPhotoId, 500)
+                                if (page.isEmpty()) break
+                                page.forEach { row ->
+                                    runCatching { File(row.path).delete() }
+                                }
+                                afterPhotoId = page.last().id
                             }
                             dao.deleteAllNonArchivedHistory()
                             tagDao.recomputeAllUsageCounts()

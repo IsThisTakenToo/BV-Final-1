@@ -43,6 +43,8 @@ object VaultBackupManager {
     /** Cap gallery cards in index.html — past this, folders in the zip are still complete. */
     private const val MAX_HTML_GALLERY_CARDS = 200
     private const val MAX_HTML_NOTES_CHARS = 200
+    /** Older single-file spots.json backups above this size need a re-export from a modern build. */
+    private const val MAX_LEGACY_SPOTS_JSON_BYTES = 4L * 1024 * 1024
     /** Total decompressed payload across every zip entry — per-entry limit alone still allows
      * hundreds of large photos to OOM the process when all buffered into [extracted]. */
     internal const val MAX_BACKUP_TOTAL_BYTES = 512L * 1024 * 1024
@@ -111,7 +113,9 @@ object VaultBackupManager {
     /** Root-level JSON that must stay in RAM for the import transaction. */
     private fun isRootMetaEntry(name: String): Boolean {
         val base = name.substringAfterLast('/')
-        return base == "vehicles.json" || base == "spots.json" || base == "prefs.json"
+        // spots.json (legacy) is spilled — a years-old vault's single JSON blob must not sit
+        // alongside every other entry as a second full copy in extractedMeta.
+        return base == "vehicles.json" || base == "prefs.json"
     }
 
     /** Human-readable companions never used by import — discard during unzip. */
@@ -551,25 +555,32 @@ object VaultBackupManager {
         // spot.json, disk full mid-write) rolled the SQL back to the old rows while leaving their
         // photos already deleted, so a reported "Import failed" could still silently orphan every
         // existing spot's photo.
-        val photosToDeleteAfterCommit = mutableListOf<String>()
+        // Paths to delete after commit are spilled to a temp file — retaining every cover/extra
+        // path in a List would peak RAM on a replace restore of a years-old vault.
+        val pendingDeletesFile = File(context.cacheDir, "backup_pending_photo_deletes.txt")
+        runCatching { pendingDeletesFile.delete() }
         val imported = try {
             db.withTransaction {
                 if (replaceExisting) {
-                    var afterCoverId = 0
-                    while (true) {
-                        val page = dao.getCoverImagePathRowsPage(afterCoverId, 2_000)
-                        if (page.isEmpty()) break
-                        page.forEach { row ->
-                            if (row.imagePath.isNotEmpty()) photosToDeleteAfterCommit.add(row.imagePath)
+                    pendingDeletesFile.bufferedWriter().use { writer ->
+                        var afterCoverId = 0
+                        while (true) {
+                            val page = dao.getCoverImagePathRowsPage(afterCoverId, 2_000)
+                            if (page.isEmpty()) break
+                            page.forEach { row ->
+                                if (row.imagePath.isNotEmpty()) {
+                                    writer.appendLine(row.imagePath)
+                                }
+                            }
+                            afterCoverId = page.last().id
                         }
-                        afterCoverId = page.last().id
-                    }
-                    var afterPhotoId = 0
-                    while (true) {
-                        val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
-                        if (page.isEmpty()) break
-                        page.forEach { photosToDeleteAfterCommit.add(it.path) }
-                        afterPhotoId = page.last().id
+                        var afterPhotoId = 0
+                        while (true) {
+                            val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
+                            if (page.isEmpty()) break
+                            page.forEach { writer.appendLine(it.path) }
+                            afterPhotoId = page.last().id
+                        }
                     }
                     dao.deleteAllHistory() // cascades to spot_photos via the FK
                     vehicleDao.deleteAll()
@@ -605,25 +616,34 @@ object VaultBackupManager {
                         vehicleIdMap,
                         expectedSpotCount = manifest.optInt("spotCount", -1)
                     )
-                    else -> importLegacyBackup(
-                        extractedMeta,
-                        extractedPhotoPaths,
-                        imagesDir,
-                        dao,
-                        prefs,
-                        existingSpotSignatures
-                    )
+                        else -> importLegacyBackup(
+                            extractedMeta,
+                            extractedMetaPaths,
+                            extractedPhotoPaths,
+                            imagesDir,
+                            dao,
+                            prefs,
+                            existingSpotSignatures
+                        )
                 }
             }
         } catch (e: Exception) {
             // Transaction rolled back — spilled photos from this import attempt are orphans.
             extractedPhotoPaths.values.forEach { path -> runCatching { File(path).delete() } }
+            // Do not delete paths listed in pendingDeletesFile — those still belong to the
+            // rolled-back vault rows. Only drop the path list itself.
+            runCatching { pendingDeletesFile.delete() }
             throw e
         }
 
         // Transaction committed successfully — now safe to actually reclaim the old photos' disk
         // space, since there's nothing left for a later failure in this import to roll back onto.
-        photosToDeleteAfterCommit.forEach { path -> runCatching { File(path).delete() } }
+        if (pendingDeletesFile.exists()) {
+            pendingDeletesFile.forEachLine { path ->
+                if (path.isNotBlank()) runCatching { File(path).delete() }
+            }
+            runCatching { pendingDeletesFile.delete() }
+        }
 
         importPrefs(extractedMeta, prefs, clearNonExcludedFirst = replaceExisting)
         // Recomputed from scratch rather than trusted from assignTag()'s own incremental bumps
@@ -781,15 +801,38 @@ object VaultBackupManager {
 
     private suspend fun importLegacyBackup(
         extractedMeta: Map<String, ByteArray>,
+        extractedMetaPaths: Map<String, String>,
         extractedPhotoPaths: Map<String, String>,
         imagesDir: File,
         dao: LocationDao,
         prefs: SharedPreferences,
         existingSignatures: MutableSet<String>
     ): Int {
+        val spotsFile = extractedMetaPaths["spots.json"]?.let { File(it) }
         val spotsBytes = extractedMeta["spots.json"]
-            ?: error("Backup is missing spots.json")
-        val backup = JSONObject(String(spotsBytes, Charsets.UTF_8))
+        when {
+            spotsFile != null -> {
+                if (spotsFile.length() > MAX_LEGACY_SPOTS_JSON_BYTES) {
+                    error(
+                        "This older backup format is too large to import safely. " +
+                            "Export again from a recent DropPin Vault build and retry."
+                    )
+                }
+            }
+            spotsBytes != null -> {
+                if (spotsBytes.size > MAX_LEGACY_SPOTS_JSON_BYTES) {
+                    error(
+                        "This older backup format is too large to import safely. " +
+                            "Export again from a recent DropPin Vault build and retry."
+                    )
+                }
+            }
+            else -> error("Backup is missing spots.json")
+        }
+        val backup = JSONObject(
+            if (spotsFile != null) spotsFile.readText(Charsets.UTF_8)
+            else String(spotsBytes!!, Charsets.UTF_8)
+        )
         val spotsArray = backup.getJSONArray("spots")
 
         var imported = 0
@@ -799,6 +842,11 @@ object VaultBackupManager {
             val imagePath = when {
                 imageEntry.isEmpty() -> ""
                 extractedPhotoPaths.containsKey(imageEntry) -> extractedPhotoPaths.getValue(imageEntry)
+                extractedMetaPaths.containsKey(imageEntry) -> {
+                    val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
+                    File(extractedMetaPaths.getValue(imageEntry)).copyTo(outFile, overwrite = true)
+                    outFile.absolutePath
+                }
                 extractedMeta.containsKey(imageEntry) -> {
                     val outFile = File(imagesDir, "import_${System.currentTimeMillis()}_$i.jpg")
                     outFile.writeBytes(extractedMeta.getValue(imageEntry))

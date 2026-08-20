@@ -2927,8 +2927,7 @@ fun HistoryVaultTabPage(
     )
     val spotIdToTags = rememberVaultSpotIdToTags(
         tagDao = tagDao,
-        spotIds = historyList.map { it.id },
-        loadAllAssignments = selectedTag != null || searchQuery.isNotBlank()
+        spotIds = historyList.map { it.id }
     )
     val pinnedSpots = remember(historyList) {
         historyList.filter { it.isPinned && it.deletedAt == null && !it.isArchived && !it.isWishlist }
@@ -4420,8 +4419,7 @@ fun VaultFilterableSpotList(
 
     val spotIdToTags = rememberVaultSpotIdToTags(
         tagDao = tagDao,
-        spotIds = baseSpots.map { it.id },
-        loadAllAssignments = selectedTag != null || searchQuery.isNotBlank()
+        spotIds = baseSpots.map { it.id }
     )
 
     LaunchedEffect(selectedItems) {

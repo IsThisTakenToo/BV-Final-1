@@ -120,17 +120,7 @@ class AutoDeleteWorker(private val context: Context, params: WorkerParameters) :
             // MainActivity.onCreate used to be the only place this ran, so widget-/BT-only users
             // who rarely open the app kept deleted photo files on disk indefinitely.
             val recentlyDeletedCutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(30)
-            val coverPaths = dao.getDeletedCoverPathsOlderThan(recentlyDeletedCutoff)
-            coverPaths.forEach { spot ->
-                if (spot.imagePath.isNotEmpty()) {
-                    runCatching { java.io.File(spot.imagePath).delete() }
-                }
-            }
-            dao.getExtraPhotoPathsDeletedOlderThan(recentlyDeletedCutoff).forEach { path ->
-                runCatching { java.io.File(path).delete() }
-            }
-            if (coverPaths.isNotEmpty()) {
-                dao.purgeDeletedOlderThan(recentlyDeletedCutoff)
+            if (purgeExpiredDeletedSpots(dao, recentlyDeletedCutoff)) {
                 db.tagDao().recomputeAllUsageCounts()
             }
 
