@@ -467,7 +467,7 @@ private fun FireworksFoundEffect(progress: () -> Float, modifier: Modifier = Mod
                 endY = h
             )
         )
-        for (s in 0 until 28) {
+        for (s in 0 until splashLoopCount(28)) {
             val sx = (s * 73.7f + 11f) % w
             val sy = (s * 41.3f + 7f) % (h * 0.42f)
             val twinkle = sin(progress * PI.toFloat() * (3.5f + s * 0.15f) + s * 1.7f) * 0.5f + 0.5f
@@ -574,7 +574,7 @@ private fun FireworksFoundEffect(progress: () -> Float, modifier: Modifier = Mod
 
         // Act V — stardust afterglow
         if (stardustPhase > 0f) {
-            for (g in 0 until 32) {
+            for (g in 0 until splashLoopCount(32)) {
                 val gx = (g * 97f + stardustPhase * 45f) % w
                 val gy = h * (0.08f + (g * 0.033f) % 0.62f) + stardustPhase * 14f
                 val ga = stardustPhase * (1f - g * 0.012f).coerceAtLeast(0.25f) * (0.28f + (g % 5) * 0.10f)
@@ -763,7 +763,7 @@ private fun DrawScope.drawFoundFireworkWillow(
     tint: Color,
     index: Int
 ) {
-    for (strand in 0 until 10) {
+    for (strand in 0 until splashLoopCount(10)) {
         val baseAngle = (strand * (360f / 10f) + index * 20f) * PI.toFloat() / 180f
         val path = Path()
         var started = false
@@ -812,7 +812,7 @@ private fun DrawScope.drawFoundFireworkCrackle(
     tint: Color,
     seed: Int
 ) {
-    for (spark in 0 until 12) {
+    for (spark in 0 until splashLoopCount(12)) {
         val angle = (spark * 30f + seed * 17f) * PI.toFloat() / 180f
         val dist = minDim * 0.12f * phase
         val pos = center + Offset(cos(angle), sin(angle)) * dist
@@ -901,7 +901,7 @@ private fun ConfettiFoundEffect(progress: () -> Float, modifier: Modifier = Modi
                 )
                 val volley = smoothStep(((cannonPhase - 0.10f) / 0.75f).coerceIn(0f, 1f))
                 if (volley <= 0f) return@forEach
-                for (piece in 0 until 10) {
+                for (piece in 0 until splashLoopCount(10)) {
                     val seed = piece + if (side < 0) 0 else 30
                     val angle = (-118f + piece * 11f * side) * PI.toFloat() / 180f
                     val dist = haloR * volley * (0.55f + (piece % 3) * 0.12f)
@@ -962,7 +962,7 @@ private fun ConfettiFoundEffect(progress: () -> Float, modifier: Modifier = Modi
                 Offset(haloCenter.x, haloCenter.y + haloR * 0.78f)
             )
             for (layer in 0 until 2) {
-                for (i in 0 until 18) {
+                for (i in 0 until splashLoopCount(18)) {
                     val seed = i + layer * 40
                     val launch = launchPoints[seed % launchPoints.size]
                     val delay = (i % 7) * 0.028f + layer * 0.06f
@@ -1007,7 +1007,7 @@ private fun ConfettiFoundEffect(progress: () -> Float, modifier: Modifier = Modi
                     style = Stroke(width = 3.5f)
                 )
             }
-            for (g in 0 until 16) {
+            for (g in 0 until splashLoopCount(16)) {
                 val angle = (g * 22.5f + progress * 65f) * PI.toFloat() / 180f
                 val dist = haloR * (0.35f + (g % 4) * 0.14f)
                 val gx = haloCenter.x + cos(angle) * dist
@@ -1170,7 +1170,7 @@ private fun DrawScope.drawFoundConfettiBurst(
         center = center,
         style = Stroke(width = (3.5f - phase * 2f).coerceAtLeast(1.2f))
     )
-    for (p in 0 until 22) {
+    for (p in 0 until splashLoopCount(22)) {
         val angle = (p * 16.36f + index * 22f + phase * 80f) * PI.toFloat() / 180f
         val dist = radius * (0.35f + (p % 4) * 0.14f)
         val pos = center + Offset(cos(angle), sin(angle)) * dist
@@ -1256,7 +1256,7 @@ private fun VictoryRippleFoundEffect(progress: () -> Float, modifier: Modifier =
         )
 
         // Expanding shock rings with gradient strokes
-        for (ring in 0 until 9) {
+        for (ring in 0 until splashLoopCount(9)) {
             val delay = ring * 0.065f
             val local = ((progress - delay) / 0.72f).coerceIn(0f, 1f)
             if (local <= 0f) continue
@@ -1282,7 +1282,7 @@ private fun VictoryRippleFoundEffect(progress: () -> Float, modifier: Modifier =
             )
 
             // Spark particles riding the wave front
-            for (dot in 0 until 8) {
+            for (dot in 0 until splashLoopCount(8)) {
                 val a = (dot * 45f + ring * 12f + progress * 30f) * PI.toFloat() / 180f
                 val dotPos = center + Offset(cos(a), sin(a)) * radius
                 drawCircle(
@@ -1458,7 +1458,7 @@ private fun StarBurstFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         }
 
         // Orbiting stars
-        for (star in 0 until 16) {
+        for (star in 0 until splashLoopCount(16)) {
             val orbitA = (star * 22.5f + progress * 55f) * PI.toFloat() / 180f
             val orbitR = maxR * (0.28f + (star % 4) * 0.1f) * burst
             val starCenter = center + Offset(cos(orbitA), sin(orbitA)) * orbitR
@@ -1532,7 +1532,7 @@ private fun ChampagnePopFoundEffect(progress: () -> Float, modifier: Modifier = 
             radius = haloR * 1.05f,
             center = haloCenter
         )
-        for (dust in 0 until 8) {
+        for (dust in 0 until splashLoopCount(8)) {
             val angle = (dust * 45f + progress * 35f) * PI.toFloat() / 180f
             val dist = haloR * (0.28f + (dust % 3) * 0.18f)
             val dx = haloCenter.x + cos(angle) * dist
@@ -1625,7 +1625,7 @@ private fun ChampagnePopFoundEffect(progress: () -> Float, modifier: Modifier = 
 
         // Act V — bubble helix rising within the halo column
         if (bubblePhase > 0f) {
-            for (b in 0 until 26) {
+            for (b in 0 until splashLoopCount(26)) {
                 val seed = b
                 val delay = (b % 8) * 0.022f
                 val local = ((bubblePhase - delay) / 0.85f).coerceIn(0f, 1f)
@@ -1668,7 +1668,7 @@ private fun ChampagnePopFoundEffect(progress: () -> Float, modifier: Modifier = 
                     gold = gold
                 )
             }
-            for (f in 0 until 12) {
+            for (f in 0 until splashLoopCount(12)) {
                 val angle = (f * 30f + toastPhase * 40f) * PI.toFloat() / 180f
                 val dist = haloR * (0.40f + (f % 3) * 0.12f)
                 val fx = haloCenter.x + cos(angle) * dist
@@ -1800,7 +1800,7 @@ private fun DrawScope.drawFoundChampagnePopBurst(
             center = origin
         )
     }
-    for (chunk in 0 until 18) {
+    for (chunk in 0 until splashLoopCount(18)) {
         val local = smoothStep(((phase - 0.04f - chunk * 0.015f) / 0.55f).coerceIn(0f, 1f))
         if (local <= 0f) continue
         val angle = (chunk * 20f + phase * 35f) * PI.toFloat() / 180f
@@ -1837,7 +1837,7 @@ private fun DrawScope.drawFoundChampagneFizzSpray(
     accent: Color,
     flicker: Float
 ) {
-    for (jet in 0 until 12) {
+    for (jet in 0 until splashLoopCount(12)) {
         val delay = jet * 0.05f
         val local = smoothStep(((phase - delay) / 0.75f).coerceIn(0f, 1f))
         if (local <= 0f) continue
@@ -2183,7 +2183,7 @@ private fun HalloweenFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         }
 
         // Sparse stars — tasteful, not noisy
-        for (s in 0 until 16) {
+        for (s in 0 until splashLoopCount(16)) {
             val sx = (s * 91.7f + 23f) % w
             val sy = (s * 53.3f + 11f) % (h * 0.38f)
             val twinkle = sin(progress * PI.toFloat() * 2.8f + s * 1.3f) * 0.5f + 0.5f
@@ -2250,7 +2250,7 @@ private fun HalloweenFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         // Pumpkin-light garland — high across the top, well above the Found copy
         if (framePhase > 0.15f) {
             val garlandLit = ((framePhase - 0.15f) / 0.85f).coerceIn(0f, 1f)
-            for (i in 0 until 11) {
+            for (i in 0 until splashLoopCount(11)) {
                 val t = i / 10f
                 val angle = (200f + t * 140f) * PI.toFloat() / 180f
                 val gr = minDim * 0.62f
@@ -2284,7 +2284,7 @@ private fun HalloweenFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         val ringPhase = smoothStep(((progress - 0.14f) / 0.62f).coerceIn(0f, 1f))
         if (ringPhase > 0f) {
             val flicker = (0.78f + 0.22f * sin(progress * PI.toFloat() * 0.95f)).coerceIn(0.72f, 1f)
-            for (ring in 0 until 8) {
+            for (ring in 0 until splashLoopCount(8)) {
                 val delay = ring * 0.07f
                 val local = ((ringPhase - delay) / 0.78f).coerceIn(0f, 1f)
                 if (local <= 0f) continue
@@ -2376,7 +2376,7 @@ private fun HalloweenFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         // Act V — autumn leaf drift (refined, fewer particles)
         if (progress > 0.30f) {
             val leafPhase = ((progress - 0.30f) / 0.70f).coerceIn(0f, 1f)
-            for (p in 0 until 22) {
+            for (p in 0 until splashLoopCount(22)) {
                 val seed = p * 31.3f
                 val delay = (p % 10) * 0.018f
                 val local = ((leafPhase - delay) / 0.85f).coerceIn(0f, 1f)
@@ -2425,7 +2425,7 @@ private fun HalloweenFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         // Warm ember linger — celebration tail
         if (progress > 0.50f) {
             val drift = ((progress - 0.50f) / 0.50f).coerceIn(0f, 1f)
-            for (e in 0 until 18) {
+            for (e in 0 until splashLoopCount(18)) {
                 val ex = (e * 107f + drift * 28f) % w
                 val ey = h * (0.22f + (e * 0.038f) % 0.55f) - drift * 10f
                 drawCircle(
@@ -2602,7 +2602,7 @@ private fun DrawScope.drawFoundChristmasGiftBox(
             size = Size(size * 2f, boxH * 0.28f),
             cornerRadius = CornerRadius(size * 0.08f)
         )
-        for (r in 0 until 8) {
+        for (r in 0 until splashLoopCount(8)) {
             val angle = (r * 45f + unwrap * 70f) * PI.toFloat() / 180f
             val dist = size * unwrap * 1.6f
             val pos = center + Offset(cos(angle), sin(angle)) * dist - Offset(0f, lidLift * 0.4f)
@@ -2623,7 +2623,7 @@ private fun DrawScope.drawFoundChristmasNorthStar(
     rayPhase: Float,
     alpha: Float
 ) {
-    for (ray in 0 until 8) {
+    for (ray in 0 until splashLoopCount(8)) {
         val rayLen = outerR * (0.55f + rayPhase * 0.65f)
         val angle = (ray * 45f - 90f) * PI.toFloat() / 180f
         drawLine(
@@ -2686,7 +2686,7 @@ private fun ChristmasFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         )
 
         // Sparse star field
-        for (s in 0 until 16) {
+        for (s in 0 until splashLoopCount(16)) {
             val sx = (s * 88.3f + 19f) % w
             val sy = (s * 49.1f + 7f) % (h * 0.4f)
             val twinkle = sin(progress * PI.toFloat() * 2.6f + s * 1.2f) * 0.5f + 0.5f
@@ -2752,7 +2752,7 @@ private fun ChristmasFoundEffect(progress: () -> Float, modifier: Modifier = Mod
             rotate(progress * 45f, pivot = center) {
                 val candy = listOf(Color(0xFFE0233D), Color.White)
                 val candyR = minDim * 0.58f
-                for (seg in 0 until 12) {
+                for (seg in 0 until splashLoopCount(12)) {
                     drawArc(
                         color = candy[seg % candy.size].copy(alpha = framePhase * 0.88f),
                         startAngle = seg * 30f,
@@ -2772,7 +2772,7 @@ private fun ChristmasFoundEffect(progress: () -> Float, modifier: Modifier = Mod
             val lightColors = listOf(
                 Color(0xFFFF4D4D), Color(0xFF3DDC6E), Color(0xFFFFD24D), Color(0xFF64B5F6)
             )
-            for (i in 0 until 11) {
+            for (i in 0 until splashLoopCount(11)) {
                 val t = i / 10f
                 val angle = (200f + t * 140f) * PI.toFloat() / 180f
                 val gr = minDim * 0.62f
@@ -2821,7 +2821,7 @@ private fun ChristmasFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         val ringPhase = smoothStep(((progress - 0.14f) / 0.62f).coerceIn(0f, 1f))
         if (ringPhase > 0f) {
             val shimmer = 0.82f + 0.18f * sin(progress * PI.toFloat() * 1.1f)
-            for (ring in 0 until 8) {
+            for (ring in 0 until splashLoopCount(8)) {
                 val delay = ring * 0.07f
                 val local = ((ringPhase - delay) / 0.78f).coerceIn(0f, 1f)
                 if (local <= 0f) continue
@@ -2962,7 +2962,7 @@ private fun ChristmasFoundEffect(progress: () -> Float, modifier: Modifier = Mod
                 center = center,
                 style = Stroke(width = minDim * 0.024f)
             )
-            for (berry in 0 until 10) {
+            for (berry in 0 until splashLoopCount(10)) {
                 val ba = (berry * 36f + progress * 22f) * PI.toFloat() / 180f
                 drawCircle(
                     color = Color(0xFFE0233D).copy(alpha = wreathAlpha * 1.35f),
@@ -2975,7 +2975,7 @@ private fun ChristmasFoundEffect(progress: () -> Float, modifier: Modifier = Mod
         // Golden fairy dust — celebration tail
         if (progress > 0.48f) {
             val drift = ((progress - 0.48f) / 0.52f).coerceIn(0f, 1f)
-            for (g in 0 until 16) {
+            for (g in 0 until splashLoopCount(16)) {
                 val gx = (g * 97f + drift * 32f) % w
                 val gy = h * (0.2f + (g * 0.036f) % 0.52f) - drift * 12f
                 drawCircle(

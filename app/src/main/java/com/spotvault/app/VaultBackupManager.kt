@@ -40,6 +40,8 @@ object VaultBackupManager {
     private const val MAX_HTML_EMBEDDED_PHOTOS = 40
     /** Skip embedding source JPEGs larger than this — still zip the file; card uses relative link. */
     private const val MAX_HTML_EMBED_SOURCE_BYTES = 8L * 1024 * 1024
+    /** Cap gallery cards in index.html — past this, folders in the zip are still complete. */
+    private const val MAX_HTML_GALLERY_CARDS = 200
     private const val MAX_HTML_NOTES_CHARS = 200
     /** Total decompressed payload across every zip entry — per-entry limit alone still allows
      * hundreds of large photos to OOM the process when all buffered into [extracted]. */
@@ -176,7 +178,9 @@ object VaultBackupManager {
                 // export — see the comment right before buildSpotCardHtml() is called.
                 val cardsHtml = StringBuilder()
                 var visibleSpotCount = 0
-                val photosBySpotId = spotPhotoDao.getAllPhotos().groupBy { it.spotId }
+                var galleryCardCount = 0
+                // Path-only index — full SpotPhoto rows (id/createdAt) are unused for export.
+                val photosBySpotId = spotPhotoDao.getAllPhotoPathRows().groupBy { it.spotId }
                 val tagsBySpotId = tagDao.getAllSpotTagNames()
                     .groupBy({ it.locationId }, { it.name })
                 // One full spot row at a time — years of 50k notepads must not all sit in RAM.
@@ -193,7 +197,7 @@ object VaultBackupManager {
                             // Only buffer bytes when the HTML gallery will embed this photo —
                             // past MAX_HTML_EMBEDDED_PHOTOS the zip already has the file stream.
                             // Cap source size too — pre-compress legacy cameras can still be huge.
-                            if (visibleSpotCount < MAX_HTML_EMBEDDED_PHOTOS &&
+                            if (galleryCardCount < MAX_HTML_EMBEDDED_PHOTOS &&
                                 !spot.isTrashed() &&
                                 source.length() <= MAX_HTML_EMBED_SOURCE_BYTES
                             ) {
@@ -237,19 +241,24 @@ object VaultBackupManager {
                     // stopped protecting anything. Building the card here bounds peak memory to
                     // one photo's worth, regardless of vault size.
                     if (!spot.isTrashed()) {
-                        // Embed data-URIs only for a bounded gallery prefix. Past that, cards use
-                        // relative photo.jpg links so index.html can't grow into a multi-hundred-MB
-                        // string on a years-old vault (each embedded JPEG is base64-expanded in
-                        // cardsHtml even though photoBytes itself is released per spot).
-                        val embedBytes = if (visibleSpotCount < MAX_HTML_EMBEDDED_PHOTOS) photoBytes else null
-                        cardsHtml.append(buildSpotCardHtml(folderName, spot, photoEntry, embedBytes)).append('\n')
+                        // Bound both embeds and card markup — years of spots must not grow
+                        // index.html into a multi-hundred-MB StringBuilder.
+                        if (galleryCardCount < MAX_HTML_GALLERY_CARDS) {
+                            val embedBytes = if (galleryCardCount < MAX_HTML_EMBEDDED_PHOTOS) photoBytes else null
+                            cardsHtml.append(buildSpotCardHtml(folderName, spot, photoEntry, embedBytes)).append('\n')
+                            galleryCardCount++
+                        }
                         visibleSpotCount++
                     }
                 }
 
                 writeZipText(zip, "prefs.json", serializeAllPrefs(prefs).toString(2))
 
-                writeZipText(zip, "index.html", buildHtmlIndexShell(cardsHtml.toString(), visibleSpotCount))
+                writeZipText(
+                    zip,
+                    "index.html",
+                    buildHtmlIndexShell(cardsHtml.toString(), visibleSpotCount, galleryCardCount)
+                )
             }
         } ?: error("Could not open backup destination")
 
@@ -317,8 +326,7 @@ object VaultBackupManager {
             feedEnd()
         }
         // One photo query + one tag-assignment query — not N+1 getForSpot/getTagsForSpot per spot.
-        spotPhotoDao.getAllPhotos().forEach { p ->
-            feed(p.id.toString()); feedSep()
+        spotPhotoDao.getAllPhotoPathRows().forEach { p ->
             feed(p.spotId.toString()); feedSep()
             feed(p.path)
             feedEnd()
@@ -1008,8 +1016,13 @@ object VaultBackupManager {
         """.trimIndent()
     }
 
-    private fun buildHtmlIndexShell(cardsHtml: String, spotCount: Int): String {
+    private fun buildHtmlIndexShell(cardsHtml: String, spotCount: Int, galleryCardCount: Int): String {
         val exportedAt = SimpleDateFormat("MMM d, yyyy h:mm a", Locale.US).format(Date())
+        val galleryNote = if (galleryCardCount < spotCount) {
+            """<p class="meta" style="padding:0 24px 12px">Showing $galleryCardCount of $spotCount spots here — open the spots/ folders in this zip for the rest.</p>"""
+        } else {
+            ""
+        }
         return """
             <!DOCTYPE html>
             <html lang="en">
@@ -1038,6 +1051,7 @@ object VaultBackupManager {
                 <h1>DropPin Vault Backup</h1>
                 <div class="meta">Exported $exportedAt · $spotCount spots · each spot folder bundles photo + notes</div>
               </header>
+              $galleryNote
               <main>
                 $cardsHtml
               </main>

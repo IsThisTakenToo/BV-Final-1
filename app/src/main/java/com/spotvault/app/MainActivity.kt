@@ -873,10 +873,11 @@ class MainActivity : FragmentActivity() {
                 }
             }
             // Process-death mid Drive upload/restore can leave multi-MB zip temps in cacheDir.
+            // Delete drive_*.zip / *_cmp.jpg on every launch (no age gate) — a failed export
+            // should not sit around until tomorrow reclaiming disk.
             cacheDir.listFiles()?.forEach { file ->
                 val name = file.name
                 if (file.isFile &&
-                    file.lastModified() < cutoff &&
                     (name.startsWith("drive_") && name.endsWith(".zip") ||
                         name.endsWith("_cmp.jpg"))
                 ) {

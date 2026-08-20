@@ -132,6 +132,12 @@ data class SpotPhoto(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+/** Path-only photo index for backup/fingerprint — no id/createdAt payload. */
+data class SpotPhotoPathRow(
+    val spotId: Int,
+    val path: String
+)
+
 @Dao
 interface VehicleDao {
     @Query("SELECT * FROM vehicles WHERE isArchived = 0 ORDER BY name COLLATE NOCASE ASC")
@@ -364,7 +370,9 @@ interface LocationDao {
 
     @Query(
         """
-        SELECT * FROM location_history
+        SELECT id, imagePath, '' AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
         WHERE deletedAt IS NULL AND isArchived = 0
           AND city = '' AND state = ''
           AND (lat != 0 OR lng != 0)
@@ -519,7 +527,16 @@ interface LocationDao {
     @Deprecated("Loads every active spot with full notes — use capped/windowed queries")
     suspend fun getHistoryList(): List<LocationSpot>
 
-    @Query("SELECT * FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 ORDER BY timestamp DESC LIMIT :limit")
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
     suspend fun getRecentVaultSpots(limit: Int = 5): List<LocationSpot>
 
     @Query(
@@ -535,7 +552,9 @@ interface LocationDao {
     /** Widget-only bound — Glance cannot safely materialize unbounded favorite rows + thumbnails. */
     @Query(
         """
-        SELECT * FROM location_history
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
         WHERE deletedAt IS NULL AND isArchived = 0 AND isFavorite = 1 AND isWishlist = 0
         ORDER BY timestamp DESC
         LIMIT :limit
@@ -545,7 +564,9 @@ interface LocationDao {
 
     @Query(
         """
-        SELECT * FROM location_history
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
         WHERE deletedAt IS NULL AND isArchived = 0 AND isFavorite = 1 AND isWishlist = 0
         ORDER BY timestamp ASC
         LIMIT :limit
@@ -731,7 +752,14 @@ interface TagDao {
 
     @Query(
         """
-        SELECT DISTINCT location_history.* FROM location_history
+        SELECT DISTINCT location_history.id, location_history.imagePath,
+               SUBSTR(location_history.locationDetails, 1, 160) AS locationDetails,
+               location_history.timestamp, location_history.lat, location_history.lng,
+               location_history.address, location_history.isFavorite, location_history.title,
+               location_history.isWishlist, location_history.isVisited, location_history.deletedAt,
+               location_history.vehicleId, location_history.city, location_history.state,
+               location_history.isArchived, location_history.isPinned
+        FROM location_history
         INNER JOIN location_tag_cross_ref ON location_history.id = location_tag_cross_ref.locationId
         WHERE location_tag_cross_ref.tagId IN (:tagIds) AND location_history.deletedAt IS NULL AND location_history.isArchived = 0
         ORDER BY location_history.timestamp DESC
@@ -742,7 +770,14 @@ interface TagDao {
 
     @Query(
         """
-        SELECT DISTINCT location_history.* FROM location_history
+        SELECT DISTINCT location_history.id, location_history.imagePath,
+               SUBSTR(location_history.locationDetails, 1, 160) AS locationDetails,
+               location_history.timestamp, location_history.lat, location_history.lng,
+               location_history.address, location_history.isFavorite, location_history.title,
+               location_history.isWishlist, location_history.isVisited, location_history.deletedAt,
+               location_history.vehicleId, location_history.city, location_history.state,
+               location_history.isArchived, location_history.isPinned
+        FROM location_history
         INNER JOIN location_tag_cross_ref ON location_history.id = location_tag_cross_ref.locationId
         WHERE location_tag_cross_ref.tagId IN (:tagIds) AND location_history.deletedAt IS NULL AND location_history.isArchived = 0
         ORDER BY location_history.timestamp ASC
@@ -909,6 +944,9 @@ interface SpotPhotoDao {
 
     @Query("SELECT path FROM spot_photos WHERE spotId IN (:spotIds)")
     suspend fun getPathsForSpots(spotIds: List<Int>): List<String>
+
+    @Query("SELECT spotId, path FROM spot_photos ORDER BY spotId ASC, id ASC")
+    suspend fun getAllPhotoPathRows(): List<SpotPhotoPathRow>
 
     @Query("SELECT * FROM spot_photos ORDER BY spotId ASC, id ASC")
     suspend fun getAllPhotos(): List<SpotPhoto>
