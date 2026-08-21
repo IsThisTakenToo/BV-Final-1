@@ -489,8 +489,16 @@ class MainActivity : FragmentActivity() {
                     false
                 }
                 if (copied) {
-                    compressCapturedPhoto(destFile.absolutePath)
-                    attachPhotoToSpot(spotId, destFile.absolutePath)
+                    // Don't keep a multi‑MB original if compress fails (HEIC/weird formats) —
+                    // years of failed picks would leave permanent vault bloat.
+                    if (compressCapturedPhoto(destFile.absolutePath)) {
+                        attachPhotoToSpot(spotId, destFile.absolutePath)
+                    } else {
+                        runCatching { destFile.delete() }
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Couldn't add that photo. Try again.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 } else {
                     runCatching { destFile.delete() }
                     withContext(Dispatchers.Main) {
@@ -519,8 +527,14 @@ class MainActivity : FragmentActivity() {
         pendingCameraPhotoFile = null
         if (success && spotId >= 0 && file != null) {
             lifecycleScope.launch(Dispatchers.IO) {
-                compressCapturedPhoto(file.absolutePath)
-                attachPhotoToSpot(spotId, file.absolutePath)
+                if (compressCapturedPhoto(file.absolutePath)) {
+                    attachPhotoToSpot(spotId, file.absolutePath)
+                } else {
+                    runCatching { file.delete() }
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Couldn't add that photo. Try again.", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
         } else if (!success) {
             // Same orphaned-file cleanup as the main takePictureLauncher.

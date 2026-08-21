@@ -84,11 +84,11 @@ object GpxParser {
                     timestamp = parseGpxTime(time),
                     lat = wLat,
                     lng = wLng,
-                    address = cmt.orEmpty(),
+                    address = cmt.orEmpty().take(SPOT_ADDRESS_MAX_CHARS),
                     isFavorite = false,
                     // <type> used to become the fallback category when <name> was blank; folded
                     // into the title fallback chain instead now that category is gone.
-                    title = name.orEmpty().ifBlank { type.orEmpty() },
+                    title = name.orEmpty().ifBlank { type.orEmpty() }.take(SPOT_TITLE_MAX_CHARS),
                     isWishlist = false,
                     isVisited = false
                 )

@@ -334,11 +334,15 @@ fun quickActionSpotTitle(geocoded: GeocodedAddress?, lat: Double, lng: Double): 
     if (lat == 0.0 && lng == 0.0) return "No GPS signal"
     val shortCoords = String.format(Locale.US, "%.4f, %.4f", lat, lng)
     val full = geocoded?.full?.trim().orEmpty()
-    if (full.isNotEmpty() && !full.startsWith("Lat:", ignoreCase = true)) return full
+    if (full.isNotEmpty() && !full.startsWith("Lat:", ignoreCase = true)) {
+        return prefsSafeTitle(full)
+    }
     val cityState = listOf(geocoded?.city?.trim().orEmpty(), geocoded?.state?.trim().orEmpty())
         .filter { it.isNotEmpty() }
         .joinToString(", ")
-    return if (cityState.isNotEmpty()) "$cityState · $shortCoords" else shortCoords
+    return prefsSafeTitle(
+        if (cityState.isNotEmpty()) "$cityState · $shortCoords" else shortCoords
+    )
 }
 
 /** True when [title] is still exactly the raw-coordinate fallback [quickActionSpotTitle] produces
@@ -408,7 +412,11 @@ private suspend fun buildGeocodedAddress(context: Context, lat: Double, lng: Dou
         addressStr = listOf(street, city, state).filter { it.isNotEmpty() }.joinToString(", ")
     }
     if (addressStr.isEmpty() || addressStr.contains("null")) return null
-    return GeocodedAddress(full = addressStr, city = city, state = state)
+    return GeocodedAddress(
+        full = addressStr.take(SPOT_ADDRESS_MAX_CHARS),
+        city = city.take(SPOT_CITY_STATE_MAX_CHARS),
+        state = state.take(SPOT_CITY_STATE_MAX_CHARS)
+    )
 }
 
 /** Result of turning typed address text into coordinates — includes the geocoder's own formatted
@@ -470,7 +478,13 @@ suspend fun geocodeAddress(context: Context, addressText: String): ForwardGeocod
         ?: ""
     val state = address.adminArea ?: ""
     val formatted = address.getAddressLine(0)?.takeIf { it.isNotBlank() } ?: query
-    return ForwardGeocodeResult(address.latitude, address.longitude, formatted, city, state)
+    return ForwardGeocodeResult(
+        address.latitude,
+        address.longitude,
+        formatted.take(SPOT_ADDRESS_MAX_CHARS),
+        city.take(SPOT_CITY_STATE_MAX_CHARS),
+        state.take(SPOT_CITY_STATE_MAX_CHARS)
+    )
 }
 
 private suspend fun fetchFirstAddress(context: Context, lat: Double, lng: Double): android.location.Address? {

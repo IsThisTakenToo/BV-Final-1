@@ -5426,8 +5426,14 @@ private fun AddFavoriteSpotDialog(
                     false
                 }
                 if (copied) {
-                    compressCapturedPhoto(destFile.absolutePath)
-                    withContext(Dispatchers.Main) { photoPath = destFile.absolutePath }
+                    if (compressCapturedPhoto(destFile.absolutePath)) {
+                        withContext(Dispatchers.Main) { photoPath = destFile.absolutePath }
+                    } else {
+                        runCatching { destFile.delete() }
+                        withContext(Dispatchers.Main) {
+                            android.widget.Toast.makeText(context, "Couldn't add that photo. Try again.", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 } else {
                     runCatching { destFile.delete() }
                     withContext(Dispatchers.Main) {

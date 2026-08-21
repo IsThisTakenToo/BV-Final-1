@@ -124,10 +124,16 @@ fun android.content.SharedPreferences.Editor.putCoord(key: String, value: Double
 /** Prefs/notification copy of notes — full notepad stays in Room only. */
 const val PINNED_PREFS_NOTES_MAX_CHARS = 800
 const val PINNED_PREFS_ADDRESS_MAX_CHARS = 400
+/** Matches backup import — browse still loads full title/address columns. */
+const val SPOT_TITLE_MAX_CHARS = 200
+const val SPOT_ADDRESS_MAX_CHARS = PINNED_PREFS_ADDRESS_MAX_CHARS
+const val SPOT_CITY_STATE_MAX_CHARS = 80
 
 fun prefsSafeLocationDetails(notes: String): String = notes.take(PINNED_PREFS_NOTES_MAX_CHARS)
 
 fun prefsSafeAddress(address: String): String = address.take(PINNED_PREFS_ADDRESS_MAX_CHARS)
+
+fun prefsSafeTitle(title: String): String = title.take(SPOT_TITLE_MAX_CHARS)
 
 /** Soft ceiling when copying a gallery pick into app storage before compress. */
 const val MAX_GALLERY_IMPORT_BYTES = 40L * 1024 * 1024
