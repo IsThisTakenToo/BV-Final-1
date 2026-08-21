@@ -716,7 +716,7 @@ interface LocationDao {
     )
     suspend fun getRecentlyDeleted(): List<LocationSpot>
 
-    /** Keyset page for Recently Deleted browse — [beforeDeletedAt]/[beforeId] null/0 = first page. */
+    /** Keyset page for Recently Deleted browse. Pass [isFirstPage]=true for the newest page. */
     @Query(
         """
         SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
@@ -724,7 +724,7 @@ interface LocationDao {
         FROM location_history
         WHERE deletedAt IS NOT NULL
           AND (
-            :beforeDeletedAt < 0
+            :isFirstPage = 1
             OR deletedAt < :beforeDeletedAt
             OR (deletedAt = :beforeDeletedAt AND id < :beforeId)
           )
@@ -732,12 +732,17 @@ interface LocationDao {
         LIMIT :limit
         """
     )
-    suspend fun getRecentlyDeletedPage(beforeDeletedAt: Long, beforeId: Int, limit: Int): List<LocationSpot>
+    suspend fun getRecentlyDeletedPage(
+        isFirstPage: Boolean,
+        beforeDeletedAt: Long,
+        beforeId: Int,
+        limit: Int
+    ): List<LocationSpot>
 
     @Query("SELECT COUNT(*) FROM location_history WHERE deletedAt IS NOT NULL")
     suspend fun countRecentlyDeleted(): Int
 
-    @Query("SELECT COUNT(*) FROM location_history WHERE isArchived = 1")
+    @Query("SELECT COUNT(*) FROM location_history WHERE isArchived = 1 AND deletedAt IS NULL")
     suspend fun countArchivedSpots(): Int
 
     @Query("SELECT COUNT(*) FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND isFavorite = 1")
@@ -771,28 +776,28 @@ interface LocationDao {
     suspend fun restoreAllDeleted()
 
     // Archived spots are hidden from the main Vault but kept forever (no auto-purge), unlike
-    // deletedAt's "Recently Deleted" flow.
+    // deletedAt's "Recently Deleted" flow. Soft-deleted rows must not appear here — trash owns them.
     @Query(
         """
         SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
                isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
         FROM location_history
-        WHERE isArchived = 1
+        WHERE isArchived = 1 AND deletedAt IS NULL
         ORDER BY timestamp DESC, id DESC
         LIMIT 500
         """
     )
     suspend fun getArchivedSpots(): List<LocationSpot>
 
-    /** Keyset page for Archived browse — [beforeTimestamp] &lt; 0 = first page. */
+    /** Keyset page for Archived browse. Pass [isFirstPage]=true for the newest page. */
     @Query(
         """
         SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
                isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
         FROM location_history
-        WHERE isArchived = 1
+        WHERE isArchived = 1 AND deletedAt IS NULL
           AND (
-            :beforeTimestamp < 0
+            :isFirstPage = 1
             OR timestamp < :beforeTimestamp
             OR (timestamp = :beforeTimestamp AND id < :beforeId)
           )
@@ -800,7 +805,12 @@ interface LocationDao {
         LIMIT :limit
         """
     )
-    suspend fun getArchivedSpotsPage(beforeTimestamp: Long, beforeId: Int, limit: Int): List<LocationSpot>
+    suspend fun getArchivedSpotsPage(
+        isFirstPage: Boolean,
+        beforeTimestamp: Long,
+        beforeId: Int,
+        limit: Int
+    ): List<LocationSpot>
 
     @Query("UPDATE location_history SET isArchived = 1 WHERE id = :spotId")
     suspend fun archiveSpot(spotId: Int)
@@ -816,7 +826,7 @@ interface LocationDao {
         return true
     }
 
-    @Query("UPDATE location_history SET isArchived = 0 WHERE isArchived = 1")
+    @Query("UPDATE location_history SET isArchived = 0 WHERE isArchived = 1 AND deletedAt IS NULL")
     suspend fun unarchiveAllSpots()
 
     @Query(

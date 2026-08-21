@@ -1179,6 +1179,8 @@ object VaultBackupManager {
         }
         val vehicleId = vehicleExportIndex.takeIf { it in vehicleIdMap.indices }?.let { vehicleIdMap[it] }
         val deletedAt = item.optLong("deletedAt", -1L).takeIf { it > 0 }
+        // Trash and Archive are mutually exclusive in the UI — never import both flags set.
+        val isArchived = if (deletedAt != null) false else item.optBoolean("isArchived", false)
 
         val newId = dao.insertSpotAndGetId(
             LocationSpot(
@@ -1197,7 +1199,7 @@ object VaultBackupManager {
                 vehicleId = vehicleId,
                 city = item.optString("city", "").take(MAX_IMPORT_CITY_STATE_CHARS),
                 state = item.optString("state", "").take(MAX_IMPORT_CITY_STATE_CHARS),
-                isArchived = item.optBoolean("isArchived", false),
+                isArchived = isArchived,
                 isPinned = item.optBoolean("isPinned", false)
             )
         )

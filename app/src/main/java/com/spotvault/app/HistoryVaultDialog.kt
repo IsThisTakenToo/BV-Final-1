@@ -1464,9 +1464,11 @@ private fun VaultSpotOverflowMenuItems(
         onClick = {
             onDismissMenu()
             val spotId = item.id
-            coroutineScope.launch(Dispatchers.IO) { dao.archiveSpot(spotId) }
-            VaultUndoSnackbar.show("Spot archived") {
-                withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
+            coroutineScope.launch {
+                withContext(Dispatchers.IO) { dao.archiveSpot(spotId) }
+                VaultUndoSnackbar.show("Spot archived") {
+                    withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
+                }
             }
         }
     )
@@ -1480,9 +1482,11 @@ private fun VaultSpotOverflowMenuItems(
         onClick = {
             onDismissMenu()
             val spotId = item.id
-            coroutineScope.launch(Dispatchers.IO) { dao.softDeleteSpot(spotId) }
-            VaultUndoSnackbar.show("Spot deleted") {
-                withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
+            coroutineScope.launch {
+                withContext(Dispatchers.IO) { dao.softDeleteSpot(spotId) }
+                VaultUndoSnackbar.show("Spot deleted") {
+                    withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
+                }
             }
         }
     )
@@ -3033,9 +3037,11 @@ fun HistoryVaultTabPage(
 
     val onSwipeArchive: (LocationSpot) -> Unit = { spot ->
         val spotId = spot.id
-        coroutineScope.launch(Dispatchers.IO) { dao.archiveSpot(spotId) }
-        VaultUndoSnackbar.show("Spot archived") {
-            withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
+        coroutineScope.launch {
+            withContext(Dispatchers.IO) { dao.archiveSpot(spotId) }
+            VaultUndoSnackbar.show("Spot archived") {
+                withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
+            }
         }
     }
 
@@ -3392,9 +3398,11 @@ private fun VaultPinnedSpotsRow(
                     onClick = { onViewSpot(spot) },
                     onUnpin = {
                         val spotId = spot.id
-                        coroutineScope.launch(Dispatchers.IO) { dao.setPinned(spotId, false) }
-                        VaultUndoSnackbar.show("Removed from Active") {
-                            withContext(Dispatchers.IO) { dao.setPinned(spotId, true) }
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) { dao.setPinned(spotId, false) }
+                            VaultUndoSnackbar.show("Removed from Active") {
+                                withContext(Dispatchers.IO) { dao.setPinned(spotId, true) }
+                            }
                         }
                     }
                 )
@@ -4496,9 +4504,11 @@ fun VaultFilterableSpotList(
 
     val onSwipeArchive: (LocationSpot) -> Unit = { spot ->
         val spotId = spot.id
-        coroutineScope.launch(Dispatchers.IO) { dao.archiveSpot(spotId) }
-        VaultUndoSnackbar.show("Spot archived") {
-            withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
+        coroutineScope.launch {
+            withContext(Dispatchers.IO) { dao.archiveSpot(spotId) }
+            VaultUndoSnackbar.show("Spot archived") {
+                withContext(Dispatchers.IO) { dao.unarchiveSpotIfArchived(spotId) }
+            }
         }
     }
 
@@ -4832,6 +4842,7 @@ fun RecentlyDeletedDialog(
     var deletedTotalCount by remember { mutableIntStateOf(0) }
     var hasMoreDeleted by remember { mutableStateOf(true) }
     var loadingMoreDeleted by remember { mutableStateOf(false) }
+    var deletedListEpoch by remember { mutableIntStateOf(0) }
     var tagsBySpotId by remember { mutableStateOf<Map<Int, List<TagEntity>>>(emptyMap()) }
     var spotPendingPermanentDelete by remember { mutableStateOf<LocationSpot?>(null) }
     var showRestoreAllConfirm by remember { mutableStateOf(false) }
@@ -4840,13 +4851,21 @@ fun RecentlyDeletedDialog(
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     suspend fun refreshDeleted() {
-        val (spots, total) = withContext(Dispatchers.IO) {
-            dao.getRecentlyDeletedPage(beforeDeletedAt = -1L, beforeId = 0, limit = SECONDARY_BROWSE_PAGE_SIZE) to
-                dao.countRecentlyDeleted()
+        deletedListEpoch += 1
+        val epoch = deletedListEpoch
+        loadingMoreDeleted = false
+        val (spots, total, tags) = withContext(Dispatchers.IO) {
+            val page = dao.getRecentlyDeletedPage(
+                isFirstPage = true,
+                beforeDeletedAt = 0L,
+                beforeId = 0,
+                limit = SECONDARY_BROWSE_PAGE_SIZE
+            )
+            val count = dao.countRecentlyDeleted()
+            val loadedTags = loadTagsBySpotIds(tagDao, page.map { it.id })
+            Triple(page, count, loadedTags)
         }
-        val tags = withContext(Dispatchers.IO) {
-            loadTagsBySpotIds(tagDao, spots.map { it.id })
-        }
+        if (epoch != deletedListEpoch) return
         deletedSpots = spots
         deletedTotalCount = total
         hasMoreDeleted = spots.size >= SECONDARY_BROWSE_PAGE_SIZE && spots.size < total
@@ -4859,33 +4878,42 @@ fun RecentlyDeletedDialog(
             hasMoreDeleted = false
             return
         }
+        val epoch = deletedListEpoch
         val anchor = deletedSpots.lastOrNull() ?: return
         val beforeDeletedAt = anchor.deletedAt ?: return
         loadingMoreDeleted = true
         try {
             val page = withContext(Dispatchers.IO) {
                 dao.getRecentlyDeletedPage(
+                    isFirstPage = false,
                     beforeDeletedAt = beforeDeletedAt,
                     beforeId = anchor.id,
                     limit = SECONDARY_BROWSE_PAGE_SIZE
                 )
             }
+            if (epoch != deletedListEpoch) return
             if (page.isEmpty()) {
                 hasMoreDeleted = false
             } else {
                 val existing = deletedSpots.map { it.id }.toHashSet()
                 val newRows = page.filter { it.id !in existing }
+                if (newRows.isEmpty()) {
+                    // Refresh raced this append — stop rather than spin on the same keyset.
+                    hasMoreDeleted = false
+                    return
+                }
                 deletedSpots = (deletedSpots + newRows).take(SECONDARY_BROWSE_FULL_CAP)
                 val tags = withContext(Dispatchers.IO) {
                     loadTagsBySpotIds(tagDao, newRows.map { it.id })
                 }
+                if (epoch != deletedListEpoch) return
                 tagsBySpotId = tagsBySpotId + tags
                 hasMoreDeleted = page.size >= SECONDARY_BROWSE_PAGE_SIZE &&
                     deletedSpots.size < deletedTotalCount &&
                     deletedSpots.size < SECONDARY_BROWSE_FULL_CAP
             }
         } finally {
-            loadingMoreDeleted = false
+            if (epoch == deletedListEpoch) loadingMoreDeleted = false
         }
     }
 
@@ -4923,8 +4951,8 @@ fun RecentlyDeletedDialog(
             confirmButton = {
                 SpotVaultButton(
                     onClick = {
-                        coroutineScope.launch(Dispatchers.IO) {
-                            dao.restoreAllDeleted()
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) { dao.restoreAllDeleted() }
                             refreshDeleted()
                         }
                         showRestoreAllConfirm = false
@@ -4957,15 +4985,17 @@ fun RecentlyDeletedDialog(
                         containerColor = MaterialTheme.colorScheme.error
                     ),
                     onClick = {
-                        coroutineScope.launch(Dispatchers.IO) {
-                            // Delete All Forever pages until empty so rows past the browse window
-                            // (and their JPEGs) are never left behind.
-                            while (true) {
-                                val page = dao.getRecentlyDeleted()
-                                if (page.isEmpty()) break
-                                permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, page)
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) {
+                                // Delete All Forever pages until empty so rows past the browse window
+                                // (and their JPEGs) are never left behind.
+                                while (true) {
+                                    val page = dao.getRecentlyDeleted()
+                                    if (page.isEmpty()) break
+                                    permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, page)
+                                }
+                                tagDao.recomputeAllUsageCounts()
                             }
-                            tagDao.recomputeAllUsageCounts()
                             refreshDeleted()
                         }
                         showDeleteAllConfirm = false
@@ -5003,9 +5033,11 @@ fun RecentlyDeletedDialog(
                         containerColor = MaterialTheme.colorScheme.error
                     ),
                     onClick = {
-                        coroutineScope.launch(Dispatchers.IO) {
-                            permanentlyDeleteSpotAndPhotos(dao, spotPhotoDao, spot)
-                            tagDao.recomputeAllUsageCounts()
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) {
+                                permanentlyDeleteSpotAndPhotos(dao, spotPhotoDao, spot)
+                                tagDao.recomputeAllUsageCounts()
+                            }
                             refreshDeleted()
                         }
                         spotPendingPermanentDelete = null
@@ -5164,8 +5196,10 @@ fun RecentlyDeletedDialog(
                                 ) {
                                     TextButton(
                                         onClick = {
-                                            coroutineScope.launch(Dispatchers.IO) {
-                                                dao.restoreSpotIfSoftDeleted(spot.id)
+                                            coroutineScope.launch {
+                                                withContext(Dispatchers.IO) {
+                                                    dao.restoreSpotIfSoftDeleted(spot.id)
+                                                }
                                                 refreshDeleted()
                                             }
                                         }
@@ -5221,11 +5255,13 @@ fun FavoritesHubDialog(
     // below — soft-deletes then offers Undo, same as the main Vault's own delete handling.
     fun deleteSpots(ids: Set<Int>) {
         selectedItems = emptySet()
-        coroutineScope.launch(Dispatchers.IO) {
-            ids.forEach { dao.softDeleteSpot(it) }
-        }
-        VaultUndoSnackbar.show(if (ids.size == 1) "Spot deleted" else "${ids.size} spots deleted") {
-            withContext(Dispatchers.IO) { ids.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+        coroutineScope.launch {
+            withContext(Dispatchers.IO) {
+                ids.forEach { dao.softDeleteSpot(it) }
+            }
+            VaultUndoSnackbar.show(if (ids.size == 1) "Spot deleted" else "${ids.size} spots deleted") {
+                withContext(Dispatchers.IO) { ids.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+            }
         }
     }
 
@@ -5964,6 +6000,7 @@ fun ArchivedSpotsDialog(
     var archivedTotalCount by remember { mutableIntStateOf(0) }
     var hasMoreArchived by remember { mutableStateOf(true) }
     var loadingMoreArchived by remember { mutableStateOf(false) }
+    var archivedListEpoch by remember { mutableIntStateOf(0) }
     var tagsBySpotId by remember { mutableStateOf<Map<Int, List<TagEntity>>>(emptyMap()) }
     var spotPendingPermanentDelete by remember { mutableStateOf<LocationSpot?>(null) }
     var showUnarchiveAllConfirm by remember { mutableStateOf(false) }
@@ -5972,13 +6009,21 @@ fun ArchivedSpotsDialog(
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     suspend fun refreshArchived() {
-        val (spots, total) = withContext(Dispatchers.IO) {
-            dao.getArchivedSpotsPage(beforeTimestamp = -1L, beforeId = 0, limit = SECONDARY_BROWSE_PAGE_SIZE) to
-                dao.countArchivedSpots()
+        archivedListEpoch += 1
+        val epoch = archivedListEpoch
+        loadingMoreArchived = false
+        val (spots, total, tags) = withContext(Dispatchers.IO) {
+            val page = dao.getArchivedSpotsPage(
+                isFirstPage = true,
+                beforeTimestamp = 0L,
+                beforeId = 0,
+                limit = SECONDARY_BROWSE_PAGE_SIZE
+            )
+            val count = dao.countArchivedSpots()
+            val loadedTags = loadTagsBySpotIds(tagDao, page.map { it.id })
+            Triple(page, count, loadedTags)
         }
-        val tags = withContext(Dispatchers.IO) {
-            loadTagsBySpotIds(tagDao, spots.map { it.id })
-        }
+        if (epoch != archivedListEpoch) return
         archivedSpots = spots
         archivedTotalCount = total
         hasMoreArchived = spots.size >= SECONDARY_BROWSE_PAGE_SIZE && spots.size < total
@@ -5991,32 +6036,40 @@ fun ArchivedSpotsDialog(
             hasMoreArchived = false
             return
         }
+        val epoch = archivedListEpoch
         val anchor = archivedSpots.lastOrNull() ?: return
         loadingMoreArchived = true
         try {
             val page = withContext(Dispatchers.IO) {
                 dao.getArchivedSpotsPage(
+                    isFirstPage = false,
                     beforeTimestamp = anchor.timestamp,
                     beforeId = anchor.id,
                     limit = SECONDARY_BROWSE_PAGE_SIZE
                 )
             }
+            if (epoch != archivedListEpoch) return
             if (page.isEmpty()) {
                 hasMoreArchived = false
             } else {
                 val existing = archivedSpots.map { it.id }.toHashSet()
                 val newRows = page.filter { it.id !in existing }
+                if (newRows.isEmpty()) {
+                    hasMoreArchived = false
+                    return
+                }
                 archivedSpots = (archivedSpots + newRows).take(SECONDARY_BROWSE_FULL_CAP)
                 val tags = withContext(Dispatchers.IO) {
                     loadTagsBySpotIds(tagDao, newRows.map { it.id })
                 }
+                if (epoch != archivedListEpoch) return
                 tagsBySpotId = tagsBySpotId + tags
                 hasMoreArchived = page.size >= SECONDARY_BROWSE_PAGE_SIZE &&
                     archivedSpots.size < archivedTotalCount &&
                     archivedSpots.size < SECONDARY_BROWSE_FULL_CAP
             }
         } finally {
-            loadingMoreArchived = false
+            if (epoch == archivedListEpoch) loadingMoreArchived = false
         }
     }
 
@@ -6054,8 +6107,8 @@ fun ArchivedSpotsDialog(
             confirmButton = {
                 SpotVaultButton(
                     onClick = {
-                        coroutineScope.launch(Dispatchers.IO) {
-                            dao.unarchiveAllSpots()
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) { dao.unarchiveAllSpots() }
                             refreshArchived()
                         }
                         showUnarchiveAllConfirm = false
@@ -6088,15 +6141,17 @@ fun ArchivedSpotsDialog(
                         containerColor = MaterialTheme.colorScheme.error
                     ),
                     onClick = {
-                        coroutineScope.launch(Dispatchers.IO) {
-                            // Delete All Forever pages until empty so archive rows past the
-                            // browse window (and photos) are never left undeletable.
-                            while (true) {
-                                val page = dao.getArchivedSpots()
-                                if (page.isEmpty()) break
-                                permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, page)
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) {
+                                // Delete All Forever pages until empty so archive rows past the
+                                // browse window (and photos) are never left undeletable.
+                                while (true) {
+                                    val page = dao.getArchivedSpots()
+                                    if (page.isEmpty()) break
+                                    permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, page)
+                                }
+                                tagDao.recomputeAllUsageCounts()
                             }
-                            tagDao.recomputeAllUsageCounts()
                             refreshArchived()
                         }
                         showDeleteAllConfirm = false
@@ -6134,9 +6189,11 @@ fun ArchivedSpotsDialog(
                         containerColor = MaterialTheme.colorScheme.error
                     ),
                     onClick = {
-                        coroutineScope.launch(Dispatchers.IO) {
-                            permanentlyDeleteSpotAndPhotos(dao, spotPhotoDao, spot)
-                            tagDao.recomputeAllUsageCounts()
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) {
+                                permanentlyDeleteSpotAndPhotos(dao, spotPhotoDao, spot)
+                                tagDao.recomputeAllUsageCounts()
+                            }
                             refreshArchived()
                         }
                         spotPendingPermanentDelete = null
@@ -6289,8 +6346,10 @@ fun ArchivedSpotsDialog(
                                 ) {
                                     TextButton(
                                         onClick = {
-                                            coroutineScope.launch(Dispatchers.IO) {
-                                                dao.unarchiveSpotIfArchived(spot.id)
+                                            coroutineScope.launch {
+                                                withContext(Dispatchers.IO) {
+                                                    dao.unarchiveSpotIfArchived(spot.id)
+                                                }
                                                 refreshArchived()
                                             }
                                         }
@@ -6451,10 +6510,19 @@ fun VaultLocationBrowserDialog(
     var cityRows by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     var entrySpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
     var entryTotalCount by remember { mutableIntStateOf(0) }
-    var entryLimit by remember { mutableIntStateOf(SECONDARY_BROWSE_PAGE_SIZE) }
+    // Survive SPOT_DETAIL dispose/restore so "Show more" isn't wiped when opening a spot.
+    var entryLimit by rememberSaveable { mutableIntStateOf(SECONDARY_BROWSE_PAGE_SIZE) }
+    var entryLimitKey by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(level) {
-        entryLimit = SECONDARY_BROWSE_PAGE_SIZE
+        val key = when (val l = level) {
+            is LocationBrowserLevel.Entries -> "${l.state}\u0000${l.city}"
+            else -> ""
+        }
+        if (key != entryLimitKey) {
+            entryLimitKey = key
+            entryLimit = SECONDARY_BROWSE_PAGE_SIZE
+        }
     }
 
     LaunchedEffect(level, vaultEpoch, entryLimit) {
@@ -6489,11 +6557,13 @@ fun VaultLocationBrowserDialog(
     // path below — soft-deletes then offers Undo, same as the main Vault's own delete handling.
     fun deleteSpots(ids: Set<Int>) {
         exitEntriesSelection()
-        coroutineScope.launch(Dispatchers.IO) {
-            ids.forEach { dao.softDeleteSpot(it) }
-        }
-        VaultUndoSnackbar.show(if (ids.size == 1) "Spot deleted" else "${ids.size} spots deleted") {
-            withContext(Dispatchers.IO) { ids.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+        coroutineScope.launch {
+            withContext(Dispatchers.IO) {
+                ids.forEach { dao.softDeleteSpot(it) }
+            }
+            VaultUndoSnackbar.show(if (ids.size == 1) "Spot deleted" else "${ids.size} spots deleted") {
+                withContext(Dispatchers.IO) { ids.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+            }
         }
     }
 

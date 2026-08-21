@@ -3241,11 +3241,11 @@ fun HistoryDialogContent(
                     showDeleteConfirmDialog = true
                 } else {
                     val spotId = spot.id
-                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        dao.softDeleteSpot(spotId)
-                    }
-                    VaultUndoSnackbar.show("Spot deleted") {
-                        withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) { dao.softDeleteSpot(spotId) }
+                        VaultUndoSnackbar.show("Spot deleted") {
+                            withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
+                        }
                     }
                     pendingSwipeDeleteSpot = null
                 }
@@ -3259,11 +3259,13 @@ fun HistoryDialogContent(
                 pendingSwipeDeleteSpot = null
                 val idsToDelete = selectedItems.toList()
                 selectedItems = emptySet()
-                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    idsToDelete.forEach { dao.softDeleteSpot(it) }
-                }
-                VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
-                    withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+                coroutineScope.launch {
+                    withContext(Dispatchers.IO) {
+                        idsToDelete.forEach { dao.softDeleteSpot(it) }
+                    }
+                    VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
+                        withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+                    }
                 }
             },
             coroutineScope = coroutineScope
@@ -3481,11 +3483,13 @@ fun HistoryDialogContent(
                 pendingSwipeDeleteSpot = null
                 val idsToDelete = selectedItems.toList()
                 selectedItems = emptySet()
-                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    idsToDelete.forEach { dao.softDeleteSpot(it) }
-                }
-                VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
-                    withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+                coroutineScope.launch {
+                    withContext(Dispatchers.IO) {
+                        idsToDelete.forEach { dao.softDeleteSpot(it) }
+                    }
+                    VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
+                        withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+                    }
                 }
             },
             onSwipeDeleteSpot = { spot ->
@@ -3494,11 +3498,11 @@ fun HistoryDialogContent(
                     showDeleteConfirmDialog = true
                 } else {
                     val spotId = spot.id
-                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        dao.softDeleteSpot(spotId)
-                    }
-                    VaultUndoSnackbar.show("Spot deleted") {
-                        withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) { dao.softDeleteSpot(spotId) }
+                        VaultUndoSnackbar.show("Spot deleted") {
+                            withContext(Dispatchers.IO) { dao.restoreSpotIfSoftDeleted(spotId) }
+                        }
                     }
                     pendingSwipeDeleteSpot = null
                 }
@@ -3529,11 +3533,13 @@ fun HistoryDialogContent(
                             ?: selectedItems.toList()
                         selectedItems = emptySet()
                         pendingSwipeDeleteSpot = null
-                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                            idsToDelete.forEach { dao.softDeleteSpot(it) }
-                        }
-                        VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
-                            withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) {
+                                idsToDelete.forEach { dao.softDeleteSpot(it) }
+                            }
+                            VaultUndoSnackbar.show(if (idsToDelete.size == 1) "Spot deleted" else "${idsToDelete.size} spots deleted") {
+                                withContext(Dispatchers.IO) { idsToDelete.forEach { dao.restoreSpotIfSoftDeleted(it) } }
+                            }
                         }
                         showDeleteConfirmDialog = false
                     }
