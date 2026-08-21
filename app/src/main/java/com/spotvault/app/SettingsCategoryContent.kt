@@ -2271,6 +2271,7 @@ fun ClearAllVaultDataButton(dao: LocationDao, spotPhotoDao: SpotPhotoDao, corout
                             }
                             dao.deleteAllNonArchivedHistory()
                             tagDao.recomputeAllUsageCounts()
+                            AppDatabase.getDatabase(context).reclaimDiskAfterBulkWipe()
                             withContext(Dispatchers.Main) {
                                 ActiveTrackingHelper.clearActiveTracking(context)
                                 val prefs = context.getSharedPreferences("SpotVaultPrefs", android.content.Context.MODE_PRIVATE)

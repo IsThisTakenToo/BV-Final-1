@@ -899,18 +899,29 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             }
-            // Process-death mid Drive upload/restore can leave multi-MB zip temps in cacheDir.
-            // Delete drive_*.zip / *_cmp.jpg on every launch (no age gate) — a failed export
-            // should not sit around until tomorrow reclaiming disk.
+            // Process-death mid Drive upload/restore / backup import can leave multi-MB temps in
+            // cacheDir. Delete known spill artifacts on every launch (no age gate) so a failed
+            // export/import does not sit around reclaiming disk for years.
             java.nio.file.Files.newDirectoryStream(cacheDir.toPath()).use { stream ->
                 for (path in stream) {
                     val file = path.toFile()
                     val name = file.name
-                    if (file.isFile &&
-                        (name.startsWith("drive_") && name.endsWith(".zip") ||
-                            name.endsWith("_cmp.jpg"))
-                    ) {
-                        runCatching { file.delete() }
+                    when {
+                        file.isFile && (
+                            (name.startsWith("drive_") && name.endsWith(".zip")) ||
+                                name.endsWith("_cmp.jpg") ||
+                                name == "backup_export_cards.html" ||
+                                name == "backup_import_photo_cleanup.txt" ||
+                                name == "backup_pending_photo_deletes.txt" ||
+                                (name.startsWith("orphan_refs_") && name.endsWith(".db"))
+                            ) -> runCatching { file.delete() }
+                        file.isDirectory && name == "backup_import_meta" -> {
+                            deleteDirectoryContentsStreamed(file)
+                            runCatching { file.delete() }
+                        }
+                        file.isFile && (
+                            name.endsWith("-journal") || name.endsWith("-wal") || name.endsWith("-shm")
+                            ) && name.startsWith("orphan_refs_") -> runCatching { file.delete() }
                     }
                 }
             }
@@ -2191,6 +2202,24 @@ class MainActivity : FragmentActivity() {
 
             val prefs = getSharedPreferences("SpotVaultPrefs", android.content.Context.MODE_PRIVATE)
             ensureTimerAlertChannel(manager, prefs)
+        }
+    }
+}
+
+/** Deletes every child under [dir] via DirectoryStream — never materializes a giant File[]. */
+fun deleteDirectoryContentsStreamed(dir: File) {
+    if (!dir.isDirectory) return
+    runCatching {
+        java.nio.file.Files.newDirectoryStream(dir.toPath()).use { stream ->
+            for (entry in stream) {
+                val child = entry.toFile()
+                if (child.isDirectory) {
+                    deleteDirectoryContentsStreamed(child)
+                    runCatching { child.delete() }
+                } else {
+                    runCatching { child.delete() }
+                }
+            }
         }
     }
 }

@@ -531,7 +531,7 @@ object VaultBackupManager {
         val imagesDir = backupImagesDir(context)
         val metaSpillDir = File(context.cacheDir, "backup_import_meta").also { dir ->
             dir.mkdirs()
-            dir.listFiles()?.forEach { runCatching { it.delete() } }
+            deleteDirectoryContentsStreamed(dir)
         }
         val spotJsonListFile = File(metaSpillDir, "spot_json_entries.txt")
         val photoCleanupList = File(context.cacheDir, "backup_import_photo_cleanup.txt")
@@ -795,9 +795,13 @@ object VaultBackupManager {
         // spots added. Harmless (a no-op) on a merge import where existing spots/cross-refs were
         // never touched.
         db.tagDao().recomputeAllUsageCounts()
+        if (replaceExisting) {
+            // Free pages left by the wipe stay on disk until VACUUM — reclaim once restore commits.
+            db.reclaimDiskAfterBulkWipe()
+        }
         Result.success(imported)
         } finally {
-            metaSpillDir.listFiles()?.forEach { runCatching { it.delete() } }
+            deleteDirectoryContentsStreamed(metaSpillDir)
         }
     } catch (e: Exception) {
         Result.failure(e)

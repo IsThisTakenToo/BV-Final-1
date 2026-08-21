@@ -1291,6 +1291,23 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun spotPhotoDao(): SpotPhotoDao
     abstract fun tagDao(): TagDao
 
+    /**
+     * After a bulk wipe (Clear All / replace-import), SQLite keeps free pages until VACUUM —
+     * years of churn otherwise leave a fat .db on disk after the vault is empty.
+     * IO-thread only; can take seconds on a large file.
+     */
+    fun reclaimDiskAfterBulkWipe() {
+        runCatching {
+            val support = openHelper.writableDatabase
+            support.query("PRAGMA wal_checkpoint(TRUNCATE)").use { cursor ->
+                while (cursor.moveToNext()) {
+                    // Drain checkpoint result rows.
+                }
+            }
+            support.execSQL("VACUUM")
+        }
+    }
+
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
