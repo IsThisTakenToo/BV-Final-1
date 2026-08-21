@@ -24,6 +24,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.database.sqlite.SQLiteDatabase
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
@@ -938,60 +939,17 @@ class MainActivity : FragmentActivity() {
             )
             val db = AppDatabase.getDatabase(this@MainActivity)
             val pendingCameraPath = photoFile?.absolutePath
-            // One paged pass of referenced paths — per-file EXISTS queries used to storm the DB
-            // once vault_images/ held tens of thousands of files from years of use.
-            val referencedPaths = HashSet<String>()
-            fun addReferenced(path: String) {
-                if (path.isEmpty()) return
-                referencedPaths.add(path)
-                runCatching { referencedPaths.add(File(path).absolutePath) }
-            }
-            var afterCoverId = 0
-            while (true) {
-                val page = db.locationDao().getCoverImagePathRowsPage(afterCoverId, 2_000)
-                if (page.isEmpty()) break
-                page.forEach { addReferenced(it.imagePath) }
-                afterCoverId = page.last().id
-            }
-            var afterPhotoId = 0
-            while (true) {
-                val page = db.spotPhotoDao().getPhotoRowsPage(afterPhotoId, 2_000)
-                if (page.isEmpty()) break
-                page.forEach { addReferenced(it.path) }
-                afterPhotoId = page.last().id
-            }
-            imageDirs.forEach { dir ->
-                if (!dir.isDirectory) return@forEach
-                // Stream directory entries — listFiles() on a years-old vault_images/ can allocate
-                // a huge File[] before any orphan check runs.
-                java.nio.file.Files.newDirectoryStream(dir.toPath()).use { stream ->
-                    for (path in stream) {
-                        val file = path.toFile()
-                        if (!file.isFile || file.lastModified() >= cutoff) continue
-                        val abs = file.absolutePath
-                        if (abs == pendingCameraPath) continue
-                        if (abs in referencedPaths || file.path in referencedPaths) continue
-                        runCatching { file.delete() }
-                    }
-                }
-            }
+            // Spill referenced paths to a temp SQLite file instead of one HashSet that grows with
+            // every cover + extra photo over years — cold-start RAM on low-end tablets stays flat.
+            sweepOrphanPhotoFiles(
+                cacheDir = cacheDir,
+                locationDao = db.locationDao(),
+                spotPhotoDao = db.spotPhotoDao(),
+                imageDirs = imageDirs,
+                cutoffMillis = cutoff,
+                pendingCameraPath = pendingCameraPath
+            )
             prefs.edit().putLong("orphan_photo_sweep_at", now).apply()
-        }
-
-        // Interrupted Drive upload/restore can leave multi‑hundred‑MB zips in cacheDir until the
-        // next successful finally{} — reclaim them on open so a kill mid-upload can't starve disk.
-        lifecycleScope.launch(Dispatchers.IO) {
-            val cache = cacheDir
-            if (!cache.isDirectory) return@launch
-            val cutoff = System.currentTimeMillis() - TimeUnit.HOURS.toMillis(6)
-            cache.listFiles()?.forEach { file ->
-                val name = file.name
-                if (!file.isFile) return@forEach
-                if (!name.startsWith("drive_upload_") && !name.startsWith("drive_restore_")) return@forEach
-                if (!name.endsWith(".zip")) return@forEach
-                if (file.lastModified() >= cutoff) return@forEach
-                runCatching { file.delete() }
-            }
         }
 
         if (prefs.getBoolean("widget_refresh_on_open", true)) {
@@ -2234,6 +2192,91 @@ class MainActivity : FragmentActivity() {
             val prefs = getSharedPreferences("SpotVaultPrefs", android.content.Context.MODE_PRIVATE)
             ensureTimerAlertChannel(manager, prefs)
         }
+    }
+}
+
+/**
+ * Deletes unreferenced JPEGs under [imageDirs] older than [cutoffMillis].
+ * Referenced cover + extra-photo paths are spilled to a temp SQLite file so a multi-year vault
+ * never holds tens of thousands of path strings in a single HashSet during cold start.
+ */
+private suspend fun sweepOrphanPhotoFiles(
+    cacheDir: File,
+    locationDao: LocationDao,
+    spotPhotoDao: SpotPhotoDao,
+    imageDirs: List<File>,
+    cutoffMillis: Long,
+    pendingCameraPath: String?
+) {
+    val spillFile = File(cacheDir, "orphan_refs_${System.currentTimeMillis()}.db")
+    fun deleteSpillArtifacts() {
+        runCatching { spillFile.delete() }
+        runCatching { File(spillFile.path + "-journal").delete() }
+        runCatching { File(spillFile.path + "-wal").delete() }
+        runCatching { File(spillFile.path + "-shm").delete() }
+    }
+    try {
+        SQLiteDatabase.openOrCreateDatabase(spillFile, null).use { spill ->
+            spill.execSQL("CREATE TABLE refs (path TEXT PRIMARY KEY NOT NULL)")
+            spill.beginTransaction()
+            try {
+                val insert = spill.compileStatement("INSERT OR IGNORE INTO refs(path) VALUES (?)")
+                fun addReferenced(path: String) {
+                    if (path.isEmpty()) return
+                    insert.bindString(1, path)
+                    insert.executeInsert()
+                    runCatching {
+                        val abs = File(path).absolutePath
+                        if (abs != path) {
+                            insert.bindString(1, abs)
+                            insert.executeInsert()
+                        }
+                    }
+                }
+                var afterCoverId = 0
+                while (true) {
+                    val page = locationDao.getCoverImagePathRowsPage(afterCoverId, 2_000)
+                    if (page.isEmpty()) break
+                    page.forEach { addReferenced(it.imagePath) }
+                    afterCoverId = page.last().id
+                }
+                var afterPhotoId = 0
+                while (true) {
+                    val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
+                    if (page.isEmpty()) break
+                    page.forEach { addReferenced(it.path) }
+                    afterPhotoId = page.last().id
+                }
+                spill.setTransactionSuccessful()
+            } finally {
+                spill.endTransaction()
+            }
+
+            fun isReferenced(path: String, abs: String): Boolean {
+                spill.rawQuery(
+                    "SELECT 1 FROM refs WHERE path = ? OR path = ? LIMIT 1",
+                    arrayOf(path, abs)
+                ).use { cursor -> return cursor.moveToFirst() }
+            }
+
+            imageDirs.forEach { dir ->
+                if (!dir.isDirectory) return@forEach
+                // Stream directory entries — listFiles() on a years-old vault_images/ can allocate
+                // a huge File[] before any orphan check runs.
+                java.nio.file.Files.newDirectoryStream(dir.toPath()).use { stream ->
+                    for (entry in stream) {
+                        val file = entry.toFile()
+                        if (!file.isFile || file.lastModified() >= cutoffMillis) continue
+                        val abs = file.absolutePath
+                        if (abs == pendingCameraPath) continue
+                        if (isReferenced(file.path, abs)) continue
+                        runCatching { file.delete() }
+                    }
+                }
+            }
+        }
+    } finally {
+        deleteSpillArtifacts()
     }
 }
 

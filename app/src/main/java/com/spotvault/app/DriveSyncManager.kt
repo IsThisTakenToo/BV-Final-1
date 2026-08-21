@@ -25,11 +25,14 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -60,6 +63,11 @@ object DriveSyncManager {
     private val backupMutex = Mutex()
     private const val DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
     private const val DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
+    /** Google recommends resumable above ~5MB; below that multipart is one RTT and fine. */
+    private const val RESUMABLE_UPLOAD_THRESHOLD_BYTES = 5L * 1024 * 1024
+    /** Must be a multiple of 256 KiB per Drive resumable-upload rules. */
+    private const val RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024
+    private const val RESUMABLE_CHUNK_RETRIES = 3
 
     // Web-application-type OAuth client ID from Google Cloud Console. Not a secret — Google's own
     // Credential Manager / Authorization Client docs have this embedded directly in app code,
@@ -76,6 +84,16 @@ object DriveSyncManager {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.MINUTES)
             .writeTimeout(10, TimeUnit.MINUTES)
+            .build()
+    }
+
+    // Drive answers incomplete chunk uploads with HTTP 308 Resume Incomplete. OkHttp treats 308
+    // as a permanent redirect by default and would mis-handle the session URI — keep redirects off
+    // for the PUT loop only.
+    private val resumableHttpClient by lazy {
+        httpClient.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build()
     }
 
@@ -323,6 +341,16 @@ object DriveSyncManager {
     /** Returns the newly-created file's Drive id, so the caller can tell it apart from any other
      * (old or orphaned) file sharing the same [BACKUP_FILE_NAME] when cleaning those up. */
     private fun uploadFile(accessToken: String, file: File): String {
+        // Years of photos make a 100–512MB zip common. Multipart must restart from byte 0 after
+        // any stall; resumable uploads 8MB chunks and can query the session after a blip.
+        return if (file.length() <= RESUMABLE_UPLOAD_THRESHOLD_BYTES) {
+            uploadFileMultipart(accessToken, file)
+        } else {
+            uploadFileResumable(accessToken, file)
+        }
+    }
+
+    private fun uploadFileMultipart(accessToken: String, file: File): String {
         val metadata = JSONObject().apply {
             put("name", BACKUP_FILE_NAME)
             put("parents", JSONArray().put("appDataFolder"))
@@ -347,6 +375,144 @@ object DriveSyncManager {
             val responseText = response.body?.string().orEmpty()
             if (!response.isSuccessful) error("Drive upload failed: ${response.code} $responseText")
             return JSONObject(responseText).getString("id")
+        }
+    }
+
+    private fun uploadFileResumable(accessToken: String, file: File): String {
+        val total = file.length()
+        val metadata = JSONObject().apply {
+            put("name", BACKUP_FILE_NAME)
+            put("parents", JSONArray().put("appDataFolder"))
+        }.toString()
+        val initRequest = Request.Builder()
+            .url("$DRIVE_UPLOAD_URL?uploadType=resumable&fields=${Uri.encode("id")}")
+            .header("Authorization", "Bearer $accessToken")
+            .header("X-Upload-Content-Type", "application/zip")
+            .header("X-Upload-Content-Length", total.toString())
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .post(metadata.toRequestBody("application/json; charset=UTF-8".toMediaType()))
+            .build()
+        val sessionUri = httpClient.newCall(initRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                error("Drive resumable init failed: ${response.code} ${response.body?.string().orEmpty()}")
+            }
+            response.header("Location")
+                ?: error("Drive resumable init missing Location header")
+        }
+
+        var offset = 0L
+        var failures = 0
+        while (offset < total) {
+            val end = minOf(offset + RESUMABLE_CHUNK_BYTES, total) - 1
+            val length = (end - offset + 1).toInt()
+            val putRequest = Request.Builder()
+                .url(sessionUri)
+                .header("Content-Range", "bytes $offset-$end/$total")
+                .put(fileSliceRequestBody(file, offset, length))
+                .build()
+            try {
+                resumableHttpClient.newCall(putRequest).execute().use { response ->
+                    when (response.code) {
+                        200, 201 -> {
+                            val responseText = response.body?.string().orEmpty()
+                            return JSONObject(responseText).getString("id")
+                        }
+                        308 -> {
+                            val range = response.header("Range")
+                            if (range.isNullOrBlank()) {
+                                // Google: no Range means retry from the same offset — don't assume
+                                // the whole chunk landed.
+                                failures++
+                                if (failures > RESUMABLE_CHUNK_RETRIES) {
+                                    error("Drive resumable stalled without a Range header")
+                                }
+                            } else {
+                                failures = 0
+                                offset = nextOffsetFromRangeHeader(range)
+                            }
+                        }
+                        else -> {
+                            val body = response.body?.string().orEmpty()
+                            throw IllegalStateException(
+                                "Drive resumable chunk failed: ${response.code} $body"
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlin.coroutines.cancellation.CancellationException) throw e
+                failures++
+                if (failures > RESUMABLE_CHUNK_RETRIES) throw e
+                // Ask the session how far it got so a mid-chunk kill does not restart the zip.
+                when (val progress = queryResumableProgress(sessionUri, total)) {
+                    is ResumableProgress.Complete -> return progress.fileId
+                    is ResumableProgress.Incomplete -> offset = progress.nextOffset
+                }
+            }
+        }
+        error("Drive resumable upload finished without a file id")
+    }
+
+    private sealed class ResumableProgress {
+        data class Complete(val fileId: String) : ResumableProgress()
+        data class Incomplete(val nextOffset: Long) : ResumableProgress()
+    }
+
+    /** Streams [length] bytes from [file] starting at [offset] — never buffers a whole 8MB chunk. */
+    private fun fileSliceRequestBody(file: File, offset: Long, length: Int): RequestBody {
+        val mediaType = "application/zip".toMediaType()
+        return object : RequestBody() {
+            override fun contentType() = mediaType
+            override fun contentLength() = length.toLong()
+            override fun writeTo(sink: BufferedSink) {
+                RandomAccessFile(file, "r").use { raf ->
+                    raf.seek(offset)
+                    val buffer = ByteArray(64 * 1024)
+                    var remaining = length
+                    while (remaining > 0) {
+                        val read = raf.read(buffer, 0, minOf(buffer.size, remaining))
+                        if (read <= 0) error("Drive upload could not read zip at offset $offset")
+                        sink.write(buffer, 0, read)
+                        remaining -= read
+                    }
+                }
+            }
+        }
+    }
+
+    /** Range header is `bytes=0-N` (inclusive end). */
+    private fun nextOffsetFromRangeHeader(rangeHeader: String): Long {
+        val end = rangeHeader.substringAfterLast('-', missingDelimiterValue = "")
+            .trim()
+            .toLongOrNull()
+            ?: error("Drive resumable Range unreadable: $rangeHeader")
+        return end + 1
+    }
+
+    private fun queryResumableProgress(sessionUri: String, total: Long): ResumableProgress {
+        val statusRequest = Request.Builder()
+            .url(sessionUri)
+            .header("Content-Range", "bytes */$total")
+            .put(ByteArray(0).toRequestBody(null))
+            .build()
+        resumableHttpClient.newCall(statusRequest).execute().use { response ->
+            return when (response.code) {
+                200, 201 -> {
+                    val responseText = response.body?.string().orEmpty()
+                    ResumableProgress.Complete(JSONObject(responseText).getString("id"))
+                }
+                308 -> {
+                    val range = response.header("Range")
+                    if (range.isNullOrBlank()) {
+                        ResumableProgress.Incomplete(0L)
+                    } else {
+                        ResumableProgress.Incomplete(nextOffsetFromRangeHeader(range))
+                    }
+                }
+                else -> error(
+                    "Drive resumable status failed: ${response.code} ${response.body?.string().orEmpty()}"
+                )
+            }
         }
     }
 
