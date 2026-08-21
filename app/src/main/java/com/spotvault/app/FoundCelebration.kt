@@ -60,9 +60,12 @@ object FoundCelebration {
             // what the user actually picked in Settings, so "Found" sounded different from every
             // other alert the app makes.
             val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
-            val soundUriStr = prefs.getString("alarm_sound_uri", null)
+            val soundUriStr = prefs.getString("alarm_sound_uri", null)?.let { prefsSafeAlarmSoundUri(it) }
             val uri = if (!soundUriStr.isNullOrEmpty()) {
-                android.net.Uri.parse(soundUriStr)
+                val parsed = android.net.Uri.parse(soundUriStr)
+                val scheme = parsed.scheme?.lowercase()
+                if (scheme == "content" || scheme == "android.resource") parsed
+                else RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             } else {
                 RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             } ?: return

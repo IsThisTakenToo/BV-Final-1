@@ -1262,9 +1262,19 @@ object VaultBackupManager {
                     "long" -> editor.putLong(key, raw.getLong("v"))
                     "float" -> editor.putFloat(key, raw.getDouble("v").toFloat())
                     "string" -> {
-                        val value = raw.getString("v")
+                        var value = raw.getString("v")
                         // Match serializeAllPrefs — skip runaway strings that would bloat prefs.
-                        if (value.length <= 16_384) editor.putString(key, value)
+                        if (value.length > 16_384) return@forEach
+                        // Live writers already use prefsSafe* — restore must re-clamp so a
+                        // generous backup cannot reintroduce pin/Glance binder pressure.
+                        value = when (key) {
+                            "current_address" -> prefsSafeAddress(value)
+                            "location_details" -> prefsSafeLocationDetails(value)
+                            "photo_path" -> prefsSafePhotoPath(value)
+                            "alarm_sound_uri" -> prefsSafeAlarmSoundUri(value)
+                            else -> value
+                        }
+                        editor.putString(key, value)
                     }
                     "set" -> {
                         val arr = raw.getJSONArray("v")

@@ -1211,8 +1211,16 @@ object WidgetThemeHelper {
         val isTracking = ActiveTrackingHelper.isActive(appContext)
         val autoParkEnabled = isAutoParkEnabled(prefs)
         val motionEnabled = isMotionAutoParkEnabled(prefs)
-        val photoPath = if (isTracking) prefs.getString("photo_path", "") ?: "" else ""
-        val address = if (isTracking) prefs.getString("current_address", "") ?: "" else ""
+        val photoPath = if (isTracking) {
+            prefsSafePhotoPath(prefs.getString("photo_path", "") ?: "")
+        } else {
+            ""
+        }
+        val address = if (isTracking) {
+            prefsSafeAddress(prefs.getString("current_address", "") ?: "")
+        } else {
+            ""
+        }
         val coords = if (isTracking) ActiveTrackingHelper.pinnedCoordinates(appContext) else null
         val lat = coords?.first ?: 0.0
         val lng = coords?.second ?: 0.0

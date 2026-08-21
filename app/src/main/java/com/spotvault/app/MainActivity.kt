@@ -392,7 +392,7 @@ class MainActivity : FragmentActivity() {
                 @Suppress("DEPRECATION")
                 result.data?.getParcelableExtra(android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
             }
-            prefs.edit().putString("alarm_sound_uri", uri?.toString() ?: "").apply()
+            prefs.edit().putString("alarm_sound_uri", prefsSafeAlarmSoundUri(uri?.toString() ?: "")).apply()
             // The 10-minute timer-alert channel is keyed by this sound's hash (see
             // createNotificationChannel/fireTenMinuteAlert) — Android notification channels are
             // immutable once created, so a new sound needs its own new channel id, and that
@@ -3426,7 +3426,7 @@ fun HistoryDialogContent(
             dao = dao,
             isPinned = isPinned,
             searchQuery = searchQuery,
-            onSearchQueryChange = { searchQuery = it },
+            onSearchQueryChange = { searchQuery = prefsSafeSearchQuery(it) },
             sortBy = sortBy,
             onSortByChange = { sortBy = it },
             showFavoritesOnly = showFavoritesOnly,
@@ -7579,7 +7579,7 @@ fun SettingsDialog(
             if (category == null) {
                 SettingsCategoryListScreen(
                     searchQuery = settingsSearchQuery,
-                    onSearchQueryChange = { settingsSearchQuery = it },
+                    onSearchQueryChange = { settingsSearchQuery = prefsSafeSearchQuery(it) },
                     onCategoryClick = { settingsCategoryStack = settingsCategoryStack + it },
                     onSearchResultClick = { result ->
                         pendingHelpHighlight = result.highlight

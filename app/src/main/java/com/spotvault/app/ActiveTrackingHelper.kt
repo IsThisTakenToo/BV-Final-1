@@ -140,6 +140,21 @@ const val PREFS_ERROR_MAX_CHARS = 512
 
 fun prefsSafeError(message: String): String = message.take(PREFS_ERROR_MAX_CHARS)
 
+/** Vault / Favorites Hub search — paste/voice must not force a 3k-row full browse + Bundle bloat. */
+const val VAULT_SEARCH_QUERY_MAX_CHARS = 80
+
+fun prefsSafeSearchQuery(query: String): String = query.take(VAULT_SEARCH_QUERY_MAX_CHARS)
+
+/** Pinned tracking photo path in prefs / Glance — absolute paths stay short; restore can inflate. */
+const val PINNED_PREFS_PHOTO_PATH_MAX_CHARS = 1_024
+
+fun prefsSafePhotoPath(path: String): String = path.take(PINNED_PREFS_PHOTO_PATH_MAX_CHARS)
+
+/** Ringtone picker / restore URI stored in prefs — keep XML and MediaPlayer.create bounded. */
+const val ALARM_SOUND_URI_MAX_CHARS = 2_048
+
+fun prefsSafeAlarmSoundUri(uri: String): String = uri.take(ALARM_SOUND_URI_MAX_CHARS)
+
 /** Soft ceiling when copying a gallery pick into app storage before compress. */
 const val MAX_GALLERY_IMPORT_BYTES = 40L * 1024 * 1024
 

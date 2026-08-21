@@ -36,13 +36,42 @@ private const val PINNED_NOTIFICATION_NOTES_MAX_CHARS = 400
  * TimerService.fireTenMinuteAlert() (posts to it) — both must compute the exact same id, or the
  * notification silently fails to post to a channel that was never created. */
 fun timerAlertChannelId(prefs: android.content.SharedPreferences): String {
-    val soundUriStr = prefs.getString("alarm_sound_uri", null)
+    val soundUriStr = prefs.getString("alarm_sound_uri", null)?.let { prefsSafeAlarmSoundUri(it) }
     val vibrationEnabled = prefs.getBoolean("vibration_enabled", true)
     val baseId = "TIMER_ALERT"
     return buildString {
         append(baseId)
-        if (soundUriStr != null) append("_${soundUriStr.hashCode()}")
+        if (!soundUriStr.isNullOrEmpty()) append("_${soundUriStr.hashCode()}")
         append(if (vibrationEnabled) "_v1" else "_v0")
+    }
+}
+
+/** Prefer the user's ringtone URI when it looks safe; otherwise the system default alarm. */
+fun resolveAlarmSoundUri(prefs: android.content.SharedPreferences): android.net.Uri {
+    val fallback = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+    val raw = prefs.getString("alarm_sound_uri", null)?.let { prefsSafeAlarmSoundUri(it) }
+    if (raw.isNullOrEmpty()) return fallback
+    val uri = runCatching { android.net.Uri.parse(raw) }.getOrNull() ?: return fallback
+    val scheme = uri.scheme?.lowercase()
+    // Ringtone picker yields content:; reject exotic schemes that can point at huge binaries.
+    if (scheme != "content" && scheme != "android.resource") return fallback
+    return uri
+}
+
+/** Looping expiry alarm — falls back to the default alarm tone if create() fails on a bad URI. */
+fun startLoopingAlarmPlayer(context: android.content.Context, prefs: android.content.SharedPreferences): MediaPlayer? {
+    val preferred = resolveAlarmSoundUri(prefs)
+    val fallback = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+    return try {
+        val player = MediaPlayer.create(context, preferred)
+            ?: if (preferred != fallback) MediaPlayer.create(context, fallback) else null
+        player?.also {
+            it.isLooping = true
+            it.start()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
     }
 }
 
@@ -52,7 +81,7 @@ fun ensureTimerAlertChannel(
     prefs: android.content.SharedPreferences
 ) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val soundUriStr = prefs.getString("alarm_sound_uri", null)
+    val soundUriStr = prefs.getString("alarm_sound_uri", null)?.let { prefsSafeAlarmSoundUri(it) }
     val vibrationEnabled = prefs.getBoolean("vibration_enabled", true)
     val channelId = timerAlertChannelId(prefs)
 
@@ -252,19 +281,10 @@ class TimerService : Service() {
 
             override fun onFinish() {
                 val text = "Vault timer expired!"
-                val soundUriStr = prefs.getString("alarm_sound_uri", null)
-                val uri = if (!soundUriStr.isNullOrEmpty()) {
-                    android.net.Uri.parse(soundUriStr)
-                } else {
-                    android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
-                }
-
                 try {
                     mediaPlayer?.stop()
                     mediaPlayer?.release()
-                    mediaPlayer = MediaPlayer.create(this@TimerService, uri)
-                    mediaPlayer?.isLooping = true
-                    mediaPlayer?.start()
+                    mediaPlayer = startLoopingAlarmPlayer(this@TimerService, prefs)
                     // Only claim the alarm is ringing when audio actually started — otherwise the
                     // UI/resume path shows "Silence Alarm" / re-ring logic for a silent failure.
                     prefs.edit().putBoolean("is_alarm_ringing", mediaPlayer?.isPlaying == true).apply()
@@ -318,18 +338,10 @@ class TimerService : Service() {
     }
 
     private fun replayExpiredAlarmSound(prefs: android.content.SharedPreferences) {
-        val soundUriStr = prefs.getString("alarm_sound_uri", null)
-        val uri = if (!soundUriStr.isNullOrEmpty()) {
-            android.net.Uri.parse(soundUriStr)
-        } else {
-            android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
-        }
         try {
             mediaPlayer?.stop()
             mediaPlayer?.release()
-            mediaPlayer = MediaPlayer.create(this, uri)
-            mediaPlayer?.isLooping = true
-            mediaPlayer?.start()
+            mediaPlayer = startLoopingAlarmPlayer(this, prefs)
         } catch (e: Exception) {
             e.printStackTrace()
         }

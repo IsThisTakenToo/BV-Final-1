@@ -113,21 +113,10 @@ class AutoBackupWorker(private val context: Context, params: WorkerParameters) :
                 matches.add(BackupChild(documentId, name, lastModified))
             }
         } ?: run {
-            // Provider refused a query — fall back to listFiles but still filter immediately.
-            treeDoc.listFiles()
-                .filter { it.name?.startsWith("DropPinVault_AutoBackup_") == true }
-                .sortedByDescending { file ->
-                    val match = backupFilenameTimestamp.find(file.name ?: "")
-                    val parsed = match?.let {
-                        runCatching { backupFilenameFormat.parse(it.groupValues[1])?.time }.getOrNull()
-                    }
-                    parsed ?: file.lastModified()
-                }
-                .let { backups ->
-                    if (backups.size > keepCount) {
-                        backups.drop(keepCount).forEach { it.delete() }
-                    }
-                }
+            // Provider refused a query — do NOT fall back to DocumentFile.listFiles() on a
+            // years-old Downloads/Drive tree (that allocates every child and can OOM the worker).
+            // Skip prune this run; the next successful cursor query will catch up.
+            android.util.Log.w("AutoBackup", "Skipping prune: child-documents query unavailable")
             return
         }
 

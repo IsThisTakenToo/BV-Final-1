@@ -4504,7 +4504,7 @@ fun VaultFilterableSpotList(
     val headerContent: @Composable () -> Unit = {
         VaultSearchSortRow(
             searchQuery = searchQuery,
-            onSearchQueryChange = { searchQuery = it },
+            onSearchQueryChange = { searchQuery = prefsSafeSearchQuery(it) },
             sortBy = sortBy,
             onSortByChange = { sortBy = it },
             vaultViewMode = VaultViewMode.LIST,

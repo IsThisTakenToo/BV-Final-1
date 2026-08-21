@@ -2984,7 +2984,7 @@ fun HelpGuideSettingsContent(
         item(key = "help_search") {
             OutlinedTextField(
                 value = searchQuery,
-                onValueChange = { searchQuery = it },
+                onValueChange = { searchQuery = prefsSafeSearchQuery(it) },
                 placeholder = { Text("Search Guide…") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = SpotVaultColors.Teal) },
                 trailingIcon = if (searchQuery.isNotEmpty()) {

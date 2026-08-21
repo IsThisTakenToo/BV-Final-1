@@ -570,7 +570,7 @@ private fun postFallbackParkedNotification(context: Context) {
     // the moment it's first created and never updates in place, so picking a new Alert Sound needs
     // a new channel id, not just a new value passed to setSound() on the old one.
     val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
-    val soundUriStr = prefs.getString("alarm_sound_uri", null)
+    val soundUriStr = prefs.getString("alarm_sound_uri", null)?.let { prefsSafeAlarmSoundUri(it) }
     val channelId = if (!soundUriStr.isNullOrEmpty()) {
         "${FALLBACK_PARKED_CHANNEL_ID}_${soundUriStr.hashCode()}"
     } else {
