@@ -127,11 +127,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -157,6 +159,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -4826,29 +4829,83 @@ fun RecentlyDeletedDialog(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val coroutineScope = rememberCoroutineScope()
     var deletedSpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
-    var deletedTotalCount by remember { mutableStateOf(0) }
+    var deletedTotalCount by remember { mutableIntStateOf(0) }
+    var hasMoreDeleted by remember { mutableStateOf(true) }
+    var loadingMoreDeleted by remember { mutableStateOf(false) }
     var tagsBySpotId by remember { mutableStateOf<Map<Int, List<TagEntity>>>(emptyMap()) }
     var spotPendingPermanentDelete by remember { mutableStateOf<LocationSpot?>(null) }
     var showRestoreAllConfirm by remember { mutableStateOf(false) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
     val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     suspend fun refreshDeleted() {
         val (spots, total) = withContext(Dispatchers.IO) {
-            dao.getRecentlyDeleted() to dao.countRecentlyDeleted()
+            dao.getRecentlyDeletedPage(beforeDeletedAt = -1L, beforeId = 0, limit = SECONDARY_BROWSE_PAGE_SIZE) to
+                dao.countRecentlyDeleted()
         }
         val tags = withContext(Dispatchers.IO) {
             loadTagsBySpotIds(tagDao, spots.map { it.id })
         }
         deletedSpots = spots
         deletedTotalCount = total
-        // One batch of one-shot queries when the dialog opens/refreshes — not a live Flow per
-        // LazyColumn row (each of those held an InvalidationTracker subscription while scrolling).
+        hasMoreDeleted = spots.size >= SECONDARY_BROWSE_PAGE_SIZE && spots.size < total
         tagsBySpotId = tags
+    }
+
+    suspend fun loadMoreDeleted() {
+        if (loadingMoreDeleted || !hasMoreDeleted) return
+        if (deletedSpots.size >= SECONDARY_BROWSE_FULL_CAP) {
+            hasMoreDeleted = false
+            return
+        }
+        val anchor = deletedSpots.lastOrNull() ?: return
+        val beforeDeletedAt = anchor.deletedAt ?: return
+        loadingMoreDeleted = true
+        try {
+            val page = withContext(Dispatchers.IO) {
+                dao.getRecentlyDeletedPage(
+                    beforeDeletedAt = beforeDeletedAt,
+                    beforeId = anchor.id,
+                    limit = SECONDARY_BROWSE_PAGE_SIZE
+                )
+            }
+            if (page.isEmpty()) {
+                hasMoreDeleted = false
+            } else {
+                val existing = deletedSpots.map { it.id }.toHashSet()
+                val newRows = page.filter { it.id !in existing }
+                deletedSpots = (deletedSpots + newRows).take(SECONDARY_BROWSE_FULL_CAP)
+                val tags = withContext(Dispatchers.IO) {
+                    loadTagsBySpotIds(tagDao, newRows.map { it.id })
+                }
+                tagsBySpotId = tagsBySpotId + tags
+                hasMoreDeleted = page.size >= SECONDARY_BROWSE_PAGE_SIZE &&
+                    deletedSpots.size < deletedTotalCount &&
+                    deletedSpots.size < SECONDARY_BROWSE_FULL_CAP
+            }
+        } finally {
+            loadingMoreDeleted = false
+        }
     }
 
     LaunchedEffect(Unit) {
         refreshDeleted()
+    }
+
+    LaunchedEffect(listState, hasMoreDeleted, deletedSpots.size) {
+        if (!hasMoreDeleted) return@LaunchedEffect
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            last to info.totalItemsCount
+        }
+            .distinctUntilChanged()
+            .collect { (lastVisible, total) ->
+                if (total > 0 && lastVisible >= total - 8) {
+                    loadMoreDeleted()
+                }
+            }
     }
 
     if (showRestoreAllConfirm) {
@@ -4901,8 +4958,8 @@ fun RecentlyDeletedDialog(
                     ),
                     onClick = {
                         coroutineScope.launch(Dispatchers.IO) {
-                            // UI list is capped at 500 — page until empty so Delete All Forever
-                            // never leaves soft-deleted rows (and their JPEGs) behind.
+                            // Delete All Forever pages until empty so rows past the browse window
+                            // (and their JPEGs) are never left behind.
                             while (true) {
                                 val page = dao.getRecentlyDeleted()
                                 if (page.isEmpty()) break
@@ -4989,6 +5046,14 @@ fun RecentlyDeletedDialog(
                         color = SpotVaultColors.Muted,
                         lineHeight = 16.sp
                     )
+                    if (deletedTotalCount > deletedSpots.size) {
+                        Text(
+                            text = "Showing ${deletedSpots.size} of $deletedTotalCount",
+                            fontSize = 12.sp,
+                            color = SpotVaultColors.Muted,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
                 }
                 IconButton(
                     onClick = onDismiss,
@@ -5026,6 +5091,7 @@ fun RecentlyDeletedDialog(
                 )
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(bottom = 8.dp)
@@ -5134,6 +5200,7 @@ fun RecentlyDeletedDialog(
 @Composable
 fun FavoritesHubDialog(
     favoriteSpots: List<LocationSpot>,
+    favoriteTotalCount: Int = favoriteSpots.size,
     dao: LocationDao,
     prefs: SharedPreferences,
     onDismiss: () -> Unit,
@@ -5173,13 +5240,23 @@ fun FavoritesHubDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "⭐ Favorites",
-                    fontWeight = FontWeight.Black,
-                    fontSize = 18.sp,
-                    color = SpotVaultColors.Teal,
-                    letterSpacing = 0.5.sp
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "⭐ Favorites",
+                        fontWeight = FontWeight.Black,
+                        fontSize = 18.sp,
+                        color = SpotVaultColors.Teal,
+                        letterSpacing = 0.5.sp
+                    )
+                    if (favoriteTotalCount > favoriteSpots.size) {
+                        Text(
+                            text = "Showing ${favoriteSpots.size} of $favoriteTotalCount",
+                            fontSize = 12.sp,
+                            color = SpotVaultColors.Muted,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.Muted)
                 }
@@ -5884,27 +5961,82 @@ fun ArchivedSpotsDialog(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val coroutineScope = rememberCoroutineScope()
     var archivedSpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
-    var archivedTotalCount by remember { mutableStateOf(0) }
+    var archivedTotalCount by remember { mutableIntStateOf(0) }
+    var hasMoreArchived by remember { mutableStateOf(true) }
+    var loadingMoreArchived by remember { mutableStateOf(false) }
     var tagsBySpotId by remember { mutableStateOf<Map<Int, List<TagEntity>>>(emptyMap()) }
     var spotPendingPermanentDelete by remember { mutableStateOf<LocationSpot?>(null) }
     var showUnarchiveAllConfirm by remember { mutableStateOf(false) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
     val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     suspend fun refreshArchived() {
         val (spots, total) = withContext(Dispatchers.IO) {
-            dao.getArchivedSpots() to dao.countArchivedSpots()
+            dao.getArchivedSpotsPage(beforeTimestamp = -1L, beforeId = 0, limit = SECONDARY_BROWSE_PAGE_SIZE) to
+                dao.countArchivedSpots()
         }
         val tags = withContext(Dispatchers.IO) {
             loadTagsBySpotIds(tagDao, spots.map { it.id })
         }
         archivedSpots = spots
         archivedTotalCount = total
+        hasMoreArchived = spots.size >= SECONDARY_BROWSE_PAGE_SIZE && spots.size < total
         tagsBySpotId = tags
+    }
+
+    suspend fun loadMoreArchived() {
+        if (loadingMoreArchived || !hasMoreArchived) return
+        if (archivedSpots.size >= SECONDARY_BROWSE_FULL_CAP) {
+            hasMoreArchived = false
+            return
+        }
+        val anchor = archivedSpots.lastOrNull() ?: return
+        loadingMoreArchived = true
+        try {
+            val page = withContext(Dispatchers.IO) {
+                dao.getArchivedSpotsPage(
+                    beforeTimestamp = anchor.timestamp,
+                    beforeId = anchor.id,
+                    limit = SECONDARY_BROWSE_PAGE_SIZE
+                )
+            }
+            if (page.isEmpty()) {
+                hasMoreArchived = false
+            } else {
+                val existing = archivedSpots.map { it.id }.toHashSet()
+                val newRows = page.filter { it.id !in existing }
+                archivedSpots = (archivedSpots + newRows).take(SECONDARY_BROWSE_FULL_CAP)
+                val tags = withContext(Dispatchers.IO) {
+                    loadTagsBySpotIds(tagDao, newRows.map { it.id })
+                }
+                tagsBySpotId = tagsBySpotId + tags
+                hasMoreArchived = page.size >= SECONDARY_BROWSE_PAGE_SIZE &&
+                    archivedSpots.size < archivedTotalCount &&
+                    archivedSpots.size < SECONDARY_BROWSE_FULL_CAP
+            }
+        } finally {
+            loadingMoreArchived = false
+        }
     }
 
     LaunchedEffect(Unit) {
         refreshArchived()
+    }
+
+    LaunchedEffect(listState, hasMoreArchived, archivedSpots.size) {
+        if (!hasMoreArchived) return@LaunchedEffect
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            last to info.totalItemsCount
+        }
+            .distinctUntilChanged()
+            .collect { (lastVisible, total) ->
+                if (total > 0 && lastVisible >= total - 8) {
+                    loadMoreArchived()
+                }
+            }
     }
 
     if (showUnarchiveAllConfirm) {
@@ -6045,6 +6177,14 @@ fun ArchivedSpotsDialog(
                         color = SpotVaultColors.Muted,
                         lineHeight = 16.sp
                     )
+                    if (archivedTotalCount > archivedSpots.size) {
+                        Text(
+                            text = "Showing ${archivedSpots.size} of $archivedTotalCount",
+                            fontSize = 12.sp,
+                            color = SpotVaultColors.Muted,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
                 }
                 IconButton(
                     onClick = onDismiss,
@@ -6082,6 +6222,7 @@ fun ArchivedSpotsDialog(
                 )
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(bottom = 8.dp)
@@ -6309,8 +6450,14 @@ fun VaultLocationBrowserDialog(
     var stateRows by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     var cityRows by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     var entrySpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
+    var entryTotalCount by remember { mutableIntStateOf(0) }
+    var entryLimit by remember { mutableIntStateOf(SECONDARY_BROWSE_PAGE_SIZE) }
 
-    LaunchedEffect(level, vaultEpoch) {
+    LaunchedEffect(level) {
+        entryLimit = SECONDARY_BROWSE_PAGE_SIZE
+    }
+
+    LaunchedEffect(level, vaultEpoch, entryLimit) {
         when (val l = level) {
             is LocationBrowserLevel.States -> {
                 stateRows = withContext(Dispatchers.IO) {
@@ -6323,9 +6470,12 @@ fun VaultLocationBrowserDialog(
                 }
             }
             is LocationBrowserLevel.Entries -> {
-                entrySpots = withContext(Dispatchers.IO) {
-                    dao.getActiveVaultSpotsForCity(l.state, l.city)
+                val (spots, total) = withContext(Dispatchers.IO) {
+                    dao.getActiveVaultSpotsForCity(l.state, l.city, entryLimit) to
+                        dao.countActiveVaultSpotsForCity(l.state, l.city)
                 }
+                entrySpots = spots
+                entryTotalCount = total
             }
         }
     }
@@ -6414,7 +6564,16 @@ fun VaultLocationBrowserDialog(
                     )
                 }
                 is LocationBrowserLevel.Entries -> {
-                    VaultFilterableSpotList(
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
+                        if (entryTotalCount > entrySpots.size) {
+                            Text(
+                                text = "Showing ${entrySpots.size} of $entryTotalCount",
+                                fontSize = 12.sp,
+                                color = SpotVaultColors.Muted,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+                        }
+                        VaultFilterableSpotList(
                         baseSpots = entrySpots,
                         prefs = prefs,
                         dao = dao,
@@ -6447,7 +6606,21 @@ fun VaultLocationBrowserDialog(
                         modifier = Modifier.weight(1f, fill = false),
                         emptyTitle = "No spots here yet",
                         emptySubtitle = "Spots saved in ${l.city} will show up here."
-                    )
+                        )
+                        if (entrySpots.size < entryTotalCount &&
+                            entrySpots.size < SECONDARY_BROWSE_FULL_CAP
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    entryLimit = (entryLimit + SECONDARY_BROWSE_PAGE_SIZE)
+                                        .coerceAtMost(SECONDARY_BROWSE_FULL_CAP)
+                                },
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            ) {
+                                Text("Show more", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
             }
         }

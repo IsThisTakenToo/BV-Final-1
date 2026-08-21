@@ -26,6 +26,10 @@ internal const val VAULT_BROWSE_PAGE_SIZE = 150
 /** Hard ceiling for filter/search modes that still need an in-memory scan of active spots. */
 internal const val VAULT_BROWSE_FULL_CAP = 3000
 
+/** Archive / trash / city secondary lists — same page size and ceiling as main vault browse. */
+internal const val SECONDARY_BROWSE_PAGE_SIZE = VAULT_BROWSE_PAGE_SIZE
+internal const val SECONDARY_BROWSE_FULL_CAP = VAULT_BROWSE_FULL_CAP
+
 /**
  * True when in-memory filter/sort needs every active spot (not just a newest/oldest prefix).
  * Default Newest/Oldest browse stays windowed; these modes expand to a full (notes-stripped) load.
@@ -195,17 +199,27 @@ fun rememberCalendarDaySpots(dao: LocationDao, dayStartMillis: Long?): List<Loca
     return spots
 }
 
-/** Favorites hub — favorites only, notes-stripped. */
+/** Favorites hub — favorites only, notes-stripped, capped like vault full browse. */
+data class FavoriteOverlayState(
+    val spots: List<LocationSpot> = emptyList(),
+    val totalCount: Int = 0
+)
+
 @Composable
-fun rememberFavoriteOverlaySpots(dao: LocationDao, enabled: Boolean): List<LocationSpot> {
+fun rememberFavoriteOverlaySpots(dao: LocationDao, enabled: Boolean): FavoriteOverlayState {
     val vaultEpoch = rememberVaultInvalidationEpoch()
-    var spots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
+    var state by remember { mutableStateOf(FavoriteOverlayState()) }
     LaunchedEffect(enabled, vaultEpoch) {
         if (!enabled) {
-            spots = emptyList()
+            state = FavoriteOverlayState()
             return@LaunchedEffect
         }
-        spots = withContext(Dispatchers.IO) { dao.getFavoriteVaultSpotsForBrowse() }
+        state = withContext(Dispatchers.IO) {
+            FavoriteOverlayState(
+                spots = dao.getFavoriteVaultSpotsForBrowse(SECONDARY_BROWSE_FULL_CAP),
+                totalCount = dao.countFavoriteVaultSpots()
+            )
+        }
     }
-    return spots
+    return state
 }

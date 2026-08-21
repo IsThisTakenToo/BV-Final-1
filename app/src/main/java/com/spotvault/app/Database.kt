@@ -368,10 +368,10 @@ interface LocationDao {
         FROM location_history
         WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND isFavorite = 1
         ORDER BY timestamp DESC
-        LIMIT 500
+        LIMIT :limit
         """
     )
-    suspend fun getFavoriteVaultSpotsForBrowse(): List<LocationSpot>
+    suspend fun getFavoriteVaultSpotsForBrowse(limit: Int): List<LocationSpot>
 
     @Query(
         """
@@ -409,10 +409,10 @@ interface LocationDao {
           AND CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END = :state
           AND CASE WHEN length(trim(city)) = 0 THEN 'Unknown' ELSE city END = :city
         ORDER BY timestamp DESC
-        LIMIT 500
+        LIMIT :limit
         """
     )
-    suspend fun getActiveVaultSpotsForCity(state: String, city: String): List<LocationSpot>
+    suspend fun getActiveVaultSpotsForCity(state: String, city: String, limit: Int): List<LocationSpot>
 
     @Query(
         """
@@ -710,17 +710,48 @@ interface LocationDao {
                isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
         FROM location_history
         WHERE deletedAt IS NOT NULL
-        ORDER BY deletedAt DESC
+        ORDER BY deletedAt DESC, id DESC
         LIMIT 500
         """
     )
     suspend fun getRecentlyDeleted(): List<LocationSpot>
+
+    /** Keyset page for Recently Deleted browse — [beforeDeletedAt]/[beforeId] null/0 = first page. */
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE deletedAt IS NOT NULL
+          AND (
+            :beforeDeletedAt < 0
+            OR deletedAt < :beforeDeletedAt
+            OR (deletedAt = :beforeDeletedAt AND id < :beforeId)
+          )
+        ORDER BY deletedAt DESC, id DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getRecentlyDeletedPage(beforeDeletedAt: Long, beforeId: Int, limit: Int): List<LocationSpot>
 
     @Query("SELECT COUNT(*) FROM location_history WHERE deletedAt IS NOT NULL")
     suspend fun countRecentlyDeleted(): Int
 
     @Query("SELECT COUNT(*) FROM location_history WHERE isArchived = 1")
     suspend fun countArchivedSpots(): Int
+
+    @Query("SELECT COUNT(*) FROM location_history WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0 AND isFavorite = 1")
+    suspend fun countFavoriteVaultSpots(): Int
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM location_history
+        WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
+          AND CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END = :state
+          AND CASE WHEN length(trim(city)) = 0 THEN 'Unknown' ELSE city END = :city
+        """
+    )
+    suspend fun countActiveVaultSpotsForCity(state: String, city: String): Int
 
     @Query("UPDATE location_history SET deletedAt = :now WHERE id = :spotId")
     suspend fun softDeleteSpot(spotId: Int, now: Long = System.currentTimeMillis())
@@ -747,11 +778,29 @@ interface LocationDao {
                isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
         FROM location_history
         WHERE isArchived = 1
-        ORDER BY timestamp DESC
+        ORDER BY timestamp DESC, id DESC
         LIMIT 500
         """
     )
     suspend fun getArchivedSpots(): List<LocationSpot>
+
+    /** Keyset page for Archived browse — [beforeTimestamp] &lt; 0 = first page. */
+    @Query(
+        """
+        SELECT id, imagePath, SUBSTR(locationDetails, 1, 160) AS locationDetails, timestamp, lat, lng, address, isFavorite, title,
+               isWishlist, isVisited, deletedAt, vehicleId, city, state, isArchived, isPinned
+        FROM location_history
+        WHERE isArchived = 1
+          AND (
+            :beforeTimestamp < 0
+            OR timestamp < :beforeTimestamp
+            OR (timestamp = :beforeTimestamp AND id < :beforeId)
+          )
+        ORDER BY timestamp DESC, id DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getArchivedSpotsPage(beforeTimestamp: Long, beforeId: Int, limit: Int): List<LocationSpot>
 
     @Query("UPDATE location_history SET isArchived = 1 WHERE id = :spotId")
     suspend fun archiveSpot(spotId: Int)

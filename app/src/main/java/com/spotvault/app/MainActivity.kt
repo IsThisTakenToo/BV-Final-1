@@ -3201,7 +3201,8 @@ fun HistoryDialogContent(
 
     if (showFavoritesHub) {
         FavoritesHubDialog(
-            favoriteSpots = favoriteOverlaySpots,
+            favoriteSpots = favoriteOverlaySpots.spots,
+            favoriteTotalCount = favoriteOverlaySpots.totalCount,
             dao = dao,
             prefs = prefs,
             onDismiss = { showFavoritesHub = false },
