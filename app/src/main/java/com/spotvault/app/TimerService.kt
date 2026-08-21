@@ -240,12 +240,19 @@ class TimerService : Service() {
 
         if (timeMs <= 0) {
             if (isExpired && !prefs.getBoolean("is_alarm_ringing", false)) {
+                // Process died past timer_end_time before onFinish could run — same audible
+                // expiry path as a live countdown completing, not a silent "expired" label.
+                soundExpiredAlarm(prefs, photoPath)
+            } else if (isExpired) {
                 postPinnedNotification(photoPath, "Vault timer expired!")
             }
             return
         }
 
-        var hasFiredTenMinAlert = false
+        // Already at/under 10 minutes when this countdown starts (resume after kill, or a
+        // sub-10 start) — don't fire the early warning as if we just crossed the threshold.
+        // Exact 10:00 still fires on the first tick via the <= check below.
+        var hasFiredTenMinAlert = timeMs > 0 && timeMs < 10 * 60_000L
         countDownTimer = object : CountDownTimer(timeMs, 1000) {
             private var lastMinTick = -1L
 
@@ -273,29 +280,32 @@ class TimerService : Service() {
                     manager.notify(NOTIFICATION_ID, buildNotification(photoPath, text))
                 }
 
-                if (minsLeft == 10L && !hasFiredTenMinAlert) {
+                if (!hasFiredTenMinAlert && millisUntilFinished <= 10 * 60_000L) {
                     hasFiredTenMinAlert = true
                     fireTenMinuteAlert()
                 }
             }
 
             override fun onFinish() {
-                val text = "Vault timer expired!"
-                try {
-                    mediaPlayer?.stop()
-                    mediaPlayer?.release()
-                    mediaPlayer = startLoopingAlarmPlayer(this@TimerService, prefs)
-                    // Only claim the alarm is ringing when audio actually started — otherwise the
-                    // UI/resume path shows "Silence Alarm" / re-ring logic for a silent failure.
-                    prefs.edit().putBoolean("is_alarm_ringing", mediaPlayer?.isPlaying == true).apply()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    prefs.edit().putBoolean("is_alarm_ringing", false).apply()
-                }
-
-                postPinnedNotification(photoPath, text)
+                soundExpiredAlarm(prefs, photoPath)
             }
         }.start()
+    }
+
+    private fun soundExpiredAlarm(prefs: android.content.SharedPreferences, photoPath: String) {
+        val text = "Vault timer expired!"
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = startLoopingAlarmPlayer(this, prefs)
+            // Only claim the alarm is ringing when audio actually started — otherwise the
+            // UI/resume path shows "Silence Alarm" / re-ring logic for a silent failure.
+            prefs.edit().putBoolean("is_alarm_ringing", mediaPlayer?.isPlaying == true).apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            prefs.edit().putBoolean("is_alarm_ringing", false).apply()
+        }
+        postPinnedNotification(photoPath, text)
     }
 
     private fun restorePinnedNotification(prefs: android.content.SharedPreferences) {

@@ -1962,6 +1962,12 @@ fun TimerSettingsContent(
                 onCheckedChange = {
                     vibrationEnabled = it
                     prefs.edit().putBoolean("vibration_enabled", it).apply()
+                    // Channel id is keyed by vibration (and sound) — recreate so the next
+                    // 10-minute warning posts to a channel that actually exists with this setting.
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        val manager = settingsContext.getSystemService(android.app.NotificationManager::class.java)
+                        ensureTimerAlertChannel(manager, prefs)
+                    }
                 }
             )
             SettingsToggleRow(

@@ -1349,6 +1349,18 @@ class MainActivity : FragmentActivity() {
     private val prefListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { sharedPreferences, key ->
         if (key == "is_pinned") {
             isPinned.value = sharedPreferences.getBoolean("is_pinned", false)
+            applyKeepScreenOnFlag()
+        } else if (key == "keep_screen_on") {
+            applyKeepScreenOnFlag()
+        }
+    }
+
+    private fun applyKeepScreenOnFlag() {
+        if (!::prefs.isInitialized) return
+        if (prefs.getBoolean("keep_screen_on", false) && prefs.getBoolean("is_pinned", false)) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
@@ -1437,11 +1449,7 @@ class MainActivity : FragmentActivity() {
         if (prefs.getBoolean("is_pinned", false)) {
             ensureNotificationPermissionForActivePin()
         }
-        if (prefs.getBoolean("keep_screen_on", false) && prefs.getBoolean("is_pinned", false)) {
-            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
+        applyKeepScreenOnFlag()
         prefs.registerOnSharedPreferenceChangeListener(prefListener)
     }
 
