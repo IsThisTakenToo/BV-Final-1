@@ -74,8 +74,8 @@ object DriveSyncManager {
     private val httpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(120, TimeUnit.SECONDS)
-            .writeTimeout(120, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.MINUTES)
+            .writeTimeout(10, TimeUnit.MINUTES)
             .build()
     }
 
@@ -277,16 +277,36 @@ object DriveSyncManager {
      * left duplicates behind, silently eating into the user's Drive quota forever. Returning every
      * match lets [uploadBackup] clean all of them up, not just the first one found. */
     private fun findAllBackupFileIds(accessToken: String): List<String> {
-        // orderBy modifiedTime desc so findBackupFileId() / restore always pick the newest zip
-        // when interrupted uploads left duplicates — without this, firstOrNull() was an arbitrary
-        // Drive-order pick and could silently restore a stale backup.
-        val url = "$DRIVE_FILES_URL?spaces=appDataFolder&q=${Uri.encode("name = '$BACKUP_FILE_NAME' and trashed = false")}&orderBy=${Uri.encode("modifiedTime desc")}&fields=${Uri.encode("files(id,name,modifiedTime)")}"
-        val request = Request.Builder().url(url).header("Authorization", "Bearer $accessToken").get().build()
-        httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Drive list failed: ${response.code}")
-            val files = JSONObject(response.body?.string().orEmpty()).optJSONArray("files") ?: JSONArray()
-            return List(files.length()) { i -> files.getJSONObject(i).getString("id") }
-        }
+        // Paginate — after years of interrupted uploads, stale droppinvault_backup.zip copies can
+        // span more than one Drive list page; without pageToken those orphans never get deleted
+        // and silently eat appDataFolder quota.
+        // orderBy modifiedTime desc so findBackupFileId() / restore always pick the newest zip.
+        val ids = mutableListOf<String>()
+        var pageToken: String? = null
+        do {
+            val url = buildString {
+                append(DRIVE_FILES_URL)
+                append("?spaces=appDataFolder")
+                append("&pageSize=100")
+                append("&q=${Uri.encode("name = '$BACKUP_FILE_NAME' and trashed = false")}")
+                append("&orderBy=${Uri.encode("modifiedTime desc")}")
+                append("&fields=${Uri.encode("nextPageToken,files(id,name,modifiedTime)")}")
+                if (!pageToken.isNullOrBlank()) {
+                    append("&pageToken=${Uri.encode(pageToken)}")
+                }
+            }
+            val request = Request.Builder().url(url).header("Authorization", "Bearer $accessToken").get().build()
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) error("Drive list failed: ${response.code}")
+                val body = JSONObject(response.body?.string().orEmpty())
+                val files = body.optJSONArray("files") ?: JSONArray()
+                for (i in 0 until files.length()) {
+                    ids.add(files.getJSONObject(i).getString("id"))
+                }
+                pageToken = body.optString("nextPageToken", "").ifBlank { null }
+            }
+        } while (pageToken != null)
+        return ids
     }
 
     private fun deleteFile(accessToken: String, fileId: String) {

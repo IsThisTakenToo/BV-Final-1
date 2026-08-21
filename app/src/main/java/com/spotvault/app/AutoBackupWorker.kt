@@ -2,6 +2,7 @@ package com.spotvault.app
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -83,17 +84,65 @@ class AutoBackupWorker(private val context: Context, params: WorkerParameters) :
      * embedded in the filename (which this worker controls and always sets correctly) rather
      * than [DocumentFile.lastModified] — many cloud-backed SAF providers (Drive, OneDrive, etc.)
      * report 0 or otherwise unreliable modification times, which could otherwise prune the
-     * actual newest backups instead of the oldest. */
+     * actual newest backups instead of the oldest.
+     *
+     * Queries the tree via [ContentResolver] and only materializes [DocumentFile]s for matching
+     * auto-backup names — [DocumentFile.listFiles] on a years-old cloud root can allocate a huge
+     * array of every unrelated file in the folder. */
     private fun pruneOldBackups(treeDoc: DocumentFile, keepCount: Int) {
-        val backups = treeDoc.listFiles()
-            .filter { it.name?.startsWith("DropPinVault_AutoBackup_") == true }
-            .sortedByDescending { file ->
-                val match = backupFilenameTimestamp.find(file.name ?: "")
-                val parsed = match?.let { runCatching { backupFilenameFormat.parse(it.groupValues[1])?.time }.getOrNull() }
-                parsed ?: file.lastModified()
+        val treeUri = treeDoc.uri
+        val treeDocId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+            ?: return
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+        )
+        data class BackupChild(val documentId: String, val name: String, val lastModified: Long)
+        val matches = mutableListOf<BackupChild>()
+        context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val idIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val modIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(nameIdx) ?: continue
+                if (!name.startsWith("DropPinVault_AutoBackup_")) continue
+                val documentId = cursor.getString(idIdx) ?: continue
+                val lastModified = if (modIdx >= 0) cursor.getLong(modIdx) else 0L
+                matches.add(BackupChild(documentId, name, lastModified))
             }
-        if (backups.size > keepCount) {
-            backups.drop(keepCount).forEach { it.delete() }
+        } ?: run {
+            // Provider refused a query — fall back to listFiles but still filter immediately.
+            treeDoc.listFiles()
+                .filter { it.name?.startsWith("DropPinVault_AutoBackup_") == true }
+                .sortedByDescending { file ->
+                    val match = backupFilenameTimestamp.find(file.name ?: "")
+                    val parsed = match?.let {
+                        runCatching { backupFilenameFormat.parse(it.groupValues[1])?.time }.getOrNull()
+                    }
+                    parsed ?: file.lastModified()
+                }
+                .let { backups ->
+                    if (backups.size > keepCount) {
+                        backups.drop(keepCount).forEach { it.delete() }
+                    }
+                }
+            return
+        }
+
+        val sorted = matches.sortedByDescending { child ->
+            val match = backupFilenameTimestamp.find(child.name)
+            val parsed = match?.let {
+                runCatching { backupFilenameFormat.parse(it.groupValues[1])?.time }.getOrNull()
+            }
+            parsed ?: child.lastModified
+        }
+        if (sorted.size > keepCount) {
+            sorted.drop(keepCount).forEach { child ->
+                val childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, child.documentId)
+                runCatching { DocumentsContract.deleteDocument(context.contentResolver, childUri) }
+            }
         }
     }
 }

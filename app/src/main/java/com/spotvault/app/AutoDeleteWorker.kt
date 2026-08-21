@@ -116,24 +116,26 @@ class AutoDeleteWorker(private val context: Context, params: WorkerParameters) :
             val db = AppDatabase.getDatabase(context)
             val dao = db.locationDao()
 
-            // Hard-purge Recently Deleted older than 30 days even when Auto Delete is off —
-            // MainActivity.onCreate used to be the only place this ran, so widget-/BT-only users
-            // who rarely open the app kept deleted photo files on disk indefinitely.
-            val recentlyDeletedCutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(30)
-            if (purgeExpiredDeletedSpots(dao, recentlyDeletedCutoff)) {
-                db.tagDao().recomputeAllUsageCounts()
-            }
-
-            if (prefs.getBoolean("auto_delete_enabled", false)) {
-                val interval = AutoDeleteInterval.fromId(prefs.getString("auto_delete_interval", AutoDeleteInterval.MONTH.id))
-                val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(interval.days)
-                val now = System.currentTimeMillis()
-                // Batch UPDATEs — a multi-year vault can have thousands of candidates.
-                while (true) {
-                    val updated = dao.softDeleteAutoDeleteBatch(cutoff, now, limit = 200)
-                    if (updated == 0) break
+            WidgetThemeHelper.withBulkVaultMutation(context) {
+                // Hard-purge Recently Deleted older than 30 days even when Auto Delete is off —
+                // MainActivity.onCreate used to be the only place this ran, so widget-/BT-only users
+                // who rarely open the app kept deleted photo files on disk indefinitely.
+                val recentlyDeletedCutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(30)
+                if (purgeExpiredDeletedSpots(dao, recentlyDeletedCutoff)) {
+                    db.tagDao().recomputeAllUsageCounts()
                 }
-                prefs.edit().putLong("auto_delete_last_run", System.currentTimeMillis()).apply()
+
+                if (prefs.getBoolean("auto_delete_enabled", false)) {
+                    val interval = AutoDeleteInterval.fromId(prefs.getString("auto_delete_interval", AutoDeleteInterval.MONTH.id))
+                    val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(interval.days)
+                    val now = System.currentTimeMillis()
+                    // Batch UPDATEs — a multi-year vault can have thousands of candidates.
+                    while (true) {
+                        val updated = dao.softDeleteAutoDeleteBatch(cutoff, now, limit = 200)
+                        if (updated == 0) break
+                    }
+                    prefs.edit().putLong("auto_delete_last_run", System.currentTimeMillis()).apply()
+                }
             }
 
             Result.success()

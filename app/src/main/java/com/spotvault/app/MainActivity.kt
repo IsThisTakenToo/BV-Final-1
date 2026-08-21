@@ -861,21 +861,29 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val exportsDir = File(filesDir, "exports")
             val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1)
-            exportsDir.listFiles()?.forEach { file ->
-                if (file.lastModified() < cutoff) {
-                    runCatching { file.delete() }
+            if (exportsDir.isDirectory) {
+                java.nio.file.Files.newDirectoryStream(exportsDir.toPath()).use { stream ->
+                    for (path in stream) {
+                        val file = path.toFile()
+                        if (file.isFile && file.lastModified() < cutoff) {
+                            runCatching { file.delete() }
+                        }
+                    }
                 }
             }
             // Process-death mid Drive upload/restore can leave multi-MB zip temps in cacheDir.
             // Delete drive_*.zip / *_cmp.jpg on every launch (no age gate) — a failed export
             // should not sit around until tomorrow reclaiming disk.
-            cacheDir.listFiles()?.forEach { file ->
-                val name = file.name
-                if (file.isFile &&
-                    (name.startsWith("drive_") && name.endsWith(".zip") ||
-                        name.endsWith("_cmp.jpg"))
-                ) {
-                    runCatching { file.delete() }
+            java.nio.file.Files.newDirectoryStream(cacheDir.toPath()).use { stream ->
+                for (path in stream) {
+                    val file = path.toFile()
+                    val name = file.name
+                    if (file.isFile &&
+                        (name.startsWith("drive_") && name.endsWith(".zip") ||
+                            name.endsWith("_cmp.jpg"))
+                    ) {
+                        runCatching { file.delete() }
+                    }
                 }
             }
         }
@@ -1792,7 +1800,7 @@ class MainActivity : FragmentActivity() {
                     // skip the "Loading address..." placeholder entirely instead of leaving it
                     // stuck since the address-refresh block below is skipped for merges.
                     prefs.edit()
-                        .putString("current_address", resultSpot.address)
+                        .putString("current_address", prefsSafeAddress(resultSpot.address))
                         .putString("location_details", prefsSafeLocationDetails(resultSpot.locationDetails))
                         .apply()
                 }
@@ -1841,7 +1849,7 @@ class MainActivity : FragmentActivity() {
                     val dao = AppDatabase.getDatabase(this@MainActivity).locationDao()
                     val geocoded = reverseGeocodeAddress(this@MainActivity, pinWork.lat, pinWork.lng)
 
-                    prefs.edit().putString("current_address", geocoded.full).apply()
+                    prefs.edit().putString("current_address", prefsSafeAddress(geocoded.full)).apply()
 
                     // Snap and Pin share the same notes field now (Snap's scanned text goes to
                     // title instead) — pinWork.note is always what got saved as locationDetails,
@@ -1928,7 +1936,7 @@ class MainActivity : FragmentActivity() {
                 .putCoord("lat", lat)
                 .putCoord("lng", lng)
                 .putString("location_details", prefsSafeLocationDetails(effectiveDetails))
-                .putString("current_address", spot.address.ifBlank { "Loading address..." })
+                .putString("current_address", prefsSafeAddress(spot.address.ifBlank { "Loading address..." }))
                 .remove("timer_end_time")
                 .apply()
 
@@ -1941,7 +1949,7 @@ class MainActivity : FragmentActivity() {
             if ((lat != 0.0 || lng != 0.0) && spot.address.isBlank() && prefs.getBoolean("auto_fetch_address", true)) {
                 lifecycleScope.launch(Dispatchers.IO) {
                     val geocoded = reverseGeocodeAddress(this@MainActivity, lat, lng)
-                    prefs.edit().putString("current_address", geocoded.full).apply()
+                    prefs.edit().putString("current_address", prefsSafeAddress(geocoded.full)).apply()
 
                     val spotToUpdate = dao.getSpotById(spotId)
                     if (spotToUpdate != null) {

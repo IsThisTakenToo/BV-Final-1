@@ -67,9 +67,43 @@ object WidgetThemeHelper {
     @Volatile
     private var refreshRequestedAgain = false
     private var debounceJob: kotlinx.coroutines.Job? = null
+    /** Depth of bulk DB mutations (AutoDelete batches, etc.) — InvalidationTracker still fires,
+     * but we coalesce to a single refresh when the bulk work ends. */
+    @Volatile
+    private var bulkMutationDepth = 0
+    @Volatile
+    private var refreshDeferredDuringBulk = false
+
+    /** Suppress widget repaints while [block] mutates many vault rows (AutoDelete, etc.). */
+    suspend fun <T> withBulkVaultMutation(context: Context, block: suspend () -> T): T {
+        beginBulkVaultMutation()
+        return try {
+            block()
+        } finally {
+            endBulkVaultMutation(context)
+        }
+    }
+
+    fun beginBulkVaultMutation() {
+        bulkMutationDepth++
+    }
+
+    fun endBulkVaultMutation(context: Context) {
+        val depth = --bulkMutationDepth
+        if (depth > 0) return
+        bulkMutationDepth = 0
+        if (refreshDeferredDuringBulk) {
+            refreshDeferredDuringBulk = false
+            refreshAllWidgetsDebounced(context, delayMs = 1_500L)
+        }
+    }
 
     /** Fire-and-forget refresh — safe to call from any thread, including hot paths. */
     fun refreshAllWidgets(context: Context) {
+        if (bulkMutationDepth > 0) {
+            refreshDeferredDuringBulk = true
+            return
+        }
         val appContext = context.applicationContext
         widgetRefreshScope.launch {
             refreshAllWidgetsAwait(appContext)
@@ -80,6 +114,10 @@ object WidgetThemeHelper {
      * location_history/tags many times in a row; without this each one kicked off the full
      * ~1.6s/5-pass widget chain. Final state still lands via [refreshRequestedAgain] coalesce. */
     fun refreshAllWidgetsDebounced(context: Context, delayMs: Long = 750L) {
+        if (bulkMutationDepth > 0) {
+            refreshDeferredDuringBulk = true
+            return
+        }
         val appContext = context.applicationContext
         debounceJob?.cancel()
         debounceJob = widgetRefreshScope.launch {

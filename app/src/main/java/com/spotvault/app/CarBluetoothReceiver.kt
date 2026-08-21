@@ -11,6 +11,9 @@ import android.os.Process
 
 private const val CONNECTED_AT_PREF_PREFIX = "bt_connected_at_"
 internal const val AUTO_PARK_PENDING_SPOT_PREF_PREFIX = "auto_park_pending_spot_"
+/** Cached uppercase MACs of active Bluetooth-linked vehicles — [CarBluetoothReceiver] reads this
+ * without touching Room so headphone/speaker connects don't write prefs or enqueue work. */
+private const val AUTO_PARK_LINKED_MACS_PREF = "auto_park_linked_macs"
 
 /** True if [mac] is currently marked connected in [CarBluetoothReceiver]'s own per-device
  * tracking — i.e. it reconnected some time after whatever disconnect triggered the caller's
@@ -24,12 +27,13 @@ internal fun isMacCurrentlyConnected(prefs: SharedPreferences, mac: String): Boo
 /**
  * Drops per-MAC auto-park prefs whose MAC no longer belongs to any active vehicle — pairing
  * changes over years otherwise leave `bt_connected_at_*` / `auto_park_pending_spot_*` keys
- * accumulating forever in SpotVaultPrefs.
+ * accumulating forever in SpotVaultPrefs. Also refreshes [AUTO_PARK_LINKED_MACS_PREF] so the
+ * receiver can gate on linked vehicles without a Room lookup.
  */
 fun pruneStaleAutoParkMacPrefs(prefs: SharedPreferences, activeMacs: Collection<String>) {
     val keep = activeMacs.mapNotNull { it.takeIf { m -> m.isNotBlank() }?.uppercase() }.toSet()
     val editor = prefs.edit()
-    var changed = false
+    editor.putStringSet(AUTO_PARK_LINKED_MACS_PREF, keep)
     prefs.all.keys.forEach { key ->
         val mac = when {
             key.startsWith(CONNECTED_AT_PREF_PREFIX) ->
@@ -40,10 +44,23 @@ fun pruneStaleAutoParkMacPrefs(prefs: SharedPreferences, activeMacs: Collection<
         }
         if (mac !in keep) {
             editor.remove(key)
-            changed = true
         }
     }
-    if (changed) editor.apply()
+    editor.apply()
+}
+
+/** True when [mac] belongs to a currently linked vehicle (or legacy single-MAC pref). */
+internal fun isLinkedAutoParkMac(prefs: SharedPreferences, mac: String): Boolean {
+    val upper = mac.uppercase()
+    val linked = prefs.getStringSet(AUTO_PARK_LINKED_MACS_PREF, null)
+    if (linked != null) {
+        if (upper in linked) return true
+        // Linked set is authoritative once written (including empty = no BT vehicles).
+        return false
+    }
+    // Pref not synced yet this install — fall back to legacy single-car MAC only.
+    val legacy = loadAutoParkCarMac(prefs)?.uppercase()
+    return legacy != null && legacy == upper
 }
 
 // The minimum-hold-duration threshold itself now lives in AutoParkingStore
@@ -90,6 +107,9 @@ class CarBluetoothReceiver : BroadcastReceiver() {
         } ?: return
 
         val mac = device.address?.uppercase() ?: return
+        // Headphones, speakers, and other non-vehicle devices must not write bt_connected_at_*
+        // or enqueue AutoPark/Motion work — the linked-MAC set is synced whenever vehicles change.
+        if (!isLinkedAutoParkMac(prefs, mac)) return
         val connectedAtKey = CONNECTED_AT_PREF_PREFIX + mac
 
         if (action == BluetoothDevice.ACTION_ACL_CONNECTED) {

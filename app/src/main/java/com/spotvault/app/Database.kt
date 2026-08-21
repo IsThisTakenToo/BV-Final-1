@@ -381,6 +381,7 @@ interface LocationDao {
         WHERE deletedAt IS NULL AND isArchived = 0 AND isWishlist = 0
         GROUP BY CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END
         ORDER BY name COLLATE NOCASE ASC
+        LIMIT 500
         """
     )
     suspend fun getActiveStateCounts(): List<NamedCount>
@@ -394,6 +395,7 @@ interface LocationDao {
           AND CASE WHEN length(trim(state)) = 0 THEN 'Unknown' ELSE state END = :state
         GROUP BY CASE WHEN length(trim(city)) = 0 THEN 'Unknown' ELSE city END
         ORDER BY name COLLATE NOCASE ASC
+        LIMIT 500
         """
     )
     suspend fun getActiveCityCounts(state: String): List<NamedCount>
