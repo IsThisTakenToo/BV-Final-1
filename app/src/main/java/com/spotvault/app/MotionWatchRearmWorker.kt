@@ -39,5 +39,11 @@ class MotionWatchRearmWorker(
 }
 
 fun enqueueMotionWatchRearm(context: Context) {
-    WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<MotionWatchRearmWorker>().build())
+    // Unique — BOOT_COMPLETED / MY_PACKAGE_REPLACED used to stack a new one-shot on every reboot
+    // for the life of the install.
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        "motion_watch_rearm",
+        androidx.work.ExistingWorkPolicy.REPLACE,
+        OneTimeWorkRequestBuilder<MotionWatchRearmWorker>().build()
+    )
 }

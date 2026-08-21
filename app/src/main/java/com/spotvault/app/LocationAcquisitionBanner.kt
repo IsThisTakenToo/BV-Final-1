@@ -1,5 +1,7 @@
 package com.spotvault.app
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * App-wide "acquiring GPS fix" signal. [resolveCurrentLocation] is the single chokepoint every
@@ -42,16 +45,28 @@ import androidx.compose.ui.unit.sp
  * them for free and can't drift out of sync as new callers are added.
  */
 object LocationAcquisitionStatus {
+    private val activeCountAtomic = AtomicInteger(0)
     private val activeCount = mutableStateOf(0)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val derivedIsActive = derivedStateOf { activeCount.value > 0 }
     val isActive: State<Boolean> get() = derivedIsActive
 
     fun begin() {
-        activeCount.value++
+        publish(activeCountAtomic.incrementAndGet())
     }
 
     fun end() {
-        activeCount.value = (activeCount.value - 1).coerceAtLeast(0)
+        publish(activeCountAtomic.updateAndGet { (it - 1).coerceAtLeast(0) })
+    }
+
+    /** Compose state must only mutate on the main thread — resolveCurrentLocation / AutoPark /
+     * MotionBookmark call begin/end from Dispatchers.IO. */
+    private fun publish(count: Int) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            activeCount.value = count
+        } else {
+            mainHandler.post { activeCount.value = count }
+        }
     }
 }
 

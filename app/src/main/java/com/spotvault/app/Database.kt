@@ -1071,7 +1071,7 @@ interface TagDao {
      * anything, unlike [assignTag] which always creates-and-attaches in one step. */
     @Transaction
     suspend fun createTag(name: String): TagEntity? {
-        val trimmed = name.trim()
+        val trimmed = name.trim().take(MAX_TAG_NAME_CHARS)
         if (trimmed.isEmpty()) return null
         findByName(trimmed)?.let { return it }
         if (countTags() >= MAX_TAGS) return null
@@ -1092,7 +1092,7 @@ interface TagDao {
      * cross-refs). */
     @Transaction
     suspend fun renameTag(tagId: Int, newName: String) {
-        val trimmed = newName.trim()
+        val trimmed = newName.trim().take(MAX_TAG_NAME_CHARS)
         if (trimmed.isEmpty()) return
         val existing = findByName(trimmed)
         if (existing == null || existing.id == tagId) {
@@ -1155,7 +1155,7 @@ interface TagDao {
      * silently ignored on a duplicate and usage is only bumped when that insert actually landed. */
     @Transaction
     suspend fun assignTag(locationId: Int, tagName: String) {
-        val trimmed = tagName.trim()
+        val trimmed = tagName.trim().take(MAX_TAG_NAME_CHARS)
         if (trimmed.isEmpty()) return
         val existing = findByName(trimmed)
         val tagId = if (existing != null) {
@@ -1261,6 +1261,8 @@ const val MAX_EXTRA_PHOTOS_PER_SPOT = 24
 const val MAX_TAGS = 500
 /** Per-spot assignment cap — matches backup import. */
 const val MAX_TAGS_PER_SPOT = 40
+/** Tag name length — typed UI uses 30; DAO enforces this so voice/import can't store giants. */
+const val MAX_TAG_NAME_CHARS = 40
 
 /** Insert an extra photo; when at cap, drop the oldest file+row so the new shot is kept. */
 suspend fun SpotPhotoDao.insertExtraPhotoCapped(spotId: Int, path: String) {

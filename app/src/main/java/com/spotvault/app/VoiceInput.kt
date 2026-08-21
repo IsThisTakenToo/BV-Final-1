@@ -12,11 +12,14 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Launches the device's built-in speech-recognition UI ([RecognizerIntent.ACTION_RECOGNIZE_SPEECH])
@@ -32,6 +35,14 @@ import java.util.Locale
 @Composable
 fun rememberVoiceInputLauncher(prompt: String = "Speak now…", onResult: (String) -> Unit): () -> Unit {
     val context = LocalContext.current
+    val gatePending = remember { AtomicBoolean(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            // Host torn down before the recognizer result (nav/recompose) — without this,
+            // AppLockGate.begin() would leave App Lock suppressed for the rest of the process.
+            if (gatePending.getAndSet(false)) AppLockGate.end()
+        }
+    }
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -39,7 +50,7 @@ fun rememberVoiceInputLauncher(prompt: String = "Speak now…", onResult: (Strin
         // re-locked while the system recognizer had the foreground, AppLockScreen swapping in
         // would tear that composable down, unregistering the launcher before the recognizer's
         // result could be delivered, silently dropping the dictated text.
-        AppLockGate.end()
+        if (gatePending.getAndSet(false)) AppLockGate.end()
         if (result.resultCode == Activity.RESULT_OK) {
             val spoken = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
@@ -56,6 +67,7 @@ fun rememberVoiceInputLauncher(prompt: String = "Speak now…", onResult: (Strin
         }
         if (intent.resolveActivity(context.packageManager) != null) {
             AppLockGate.begin()
+            gatePending.set(true)
             launcher.launch(intent)
         } else {
             Toast.makeText(context, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show()
