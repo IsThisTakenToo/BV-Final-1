@@ -1503,7 +1503,14 @@ class MainActivity : FragmentActivity() {
             .setAllowedAuthenticators(authenticators)
             .build()
 
-        prompt.authenticate(promptInfo)
+        try {
+            prompt.authenticate(promptInfo)
+        } catch (e: Exception) {
+            // authenticate() can throw (IllegalStateException, etc.) — leaving
+            // isShowingBiometricPrompt true forever stuck the user on AppLockScreen.
+            isShowingBiometricPrompt = false
+            Toast.makeText(this, "Couldn't open unlock prompt — try again.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     /** Warms up the GPS radio the moment Snap/Pin is tapped, so it has a head start on a lock
@@ -4066,7 +4073,9 @@ fun TimerSelectionDialog(
         selectedVehicleId = activeVehicles.firstOrNull { it.isDefault }?.id
     }
 
-    val defaultMins = prefs.getString("default_timer_mins", "") ?: ""
+    val defaultMins = (prefs.getString("default_timer_mins", "") ?: "")
+        .filter { it.isDigit() }
+        .take(4)
     var timerMins by rememberSaveable { mutableStateOf(defaultMins) }
     // Explicit name for the pin, separate from Notes below it. On the Snap flow it starts
     // prefilled with the scanned text (still fully editable) so OCR output lands as the pin's

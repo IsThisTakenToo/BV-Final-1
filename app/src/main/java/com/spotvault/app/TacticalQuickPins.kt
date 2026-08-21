@@ -535,6 +535,7 @@ private fun buildQuickPinSpot(
 }
 
 private const val FALLBACK_PARKED_CHANNEL_ID = "auto_park_fallback"
+private const val FALLBACK_PARKED_CHANNEL_PREF = "auto_park_fallback_channel_id"
 private const val FALLBACK_PARKED_NOTIFICATION_ID = 9201
 
 /** Posted only when starting the live "Active Tracking" foreground service gets rejected outright
@@ -580,6 +581,13 @@ private fun postFallbackParkedNotification(context: Context) {
                 .build()
         )
         manager.createNotificationChannel(channel)
+        // Mirror ensureTimerAlertChannel — without this, every Alert Sound change left another
+        // permanent auto_park_fallback_* channel in the system forever.
+        val previousId = prefs.getString(FALLBACK_PARKED_CHANNEL_PREF, null)
+        if (!previousId.isNullOrEmpty() && previousId != channelId) {
+            runCatching { manager.deleteNotificationChannel(previousId) }
+        }
+        prefs.edit().putString(FALLBACK_PARKED_CHANNEL_PREF, channelId).apply()
     }
     val openIntent = android.content.Intent(context, MainActivity::class.java).apply {
         flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP

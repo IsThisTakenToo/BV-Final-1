@@ -13,6 +13,9 @@ import java.util.concurrent.ConcurrentHashMap
  * which is simpler but has more per-play setup cost than a pooled/preloaded SoundPool sample. */
 object AppSounds {
 
+    @Volatile
+    private var vaultMediaPlayer: MediaPlayer? = null
+
     /** [rawRes] is null only for NONE. */
     enum class ClickSound(val id: String, val label: String, val rawRes: Int?) {
         NONE("none", "None", null),
@@ -112,9 +115,24 @@ object AppSounds {
     private fun playRawSound(context: Context, rawRes: Int?) {
         if (rawRes == null) return
         try {
+            // Single-flight — rapid Settings previews used to stack MediaPlayers until each
+            // completion listener ran, stressing low-RAM devices.
+            runCatching {
+                vaultMediaPlayer?.stop()
+                vaultMediaPlayer?.release()
+            }
+            vaultMediaPlayer = null
             val player = MediaPlayer.create(context.applicationContext, rawRes) ?: return
-            player.setOnCompletionListener { it.release() }
-            player.setOnErrorListener { mp, _, _ -> mp.release(); true }
+            vaultMediaPlayer = player
+            player.setOnCompletionListener { mp ->
+                mp.release()
+                if (vaultMediaPlayer === mp) vaultMediaPlayer = null
+            }
+            player.setOnErrorListener { mp, _, _ ->
+                mp.release()
+                if (vaultMediaPlayer === mp) vaultMediaPlayer = null
+                true
+            }
             player.start()
         } catch (e: Exception) {
             e.printStackTrace()

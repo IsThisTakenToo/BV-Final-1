@@ -415,9 +415,11 @@ object PremiumWidgetRenderer {
         overlayColorArgb: Int = Color.WHITE
     ): Bitmap? {
         if (photoPath.isBlank()) return null
-        val source = loadScaledPhoto(photoPath, widthPx, heightPx) ?: return null
         val density = context.resources.displayMetrics.density
+        // Clamp before decode — Exact tablet widget sizes used to drive an uncapped JPEG decode
+        // plus a second ARGB bitmap at the clamped size.
         val (safeW, safeH) = WidgetThemeHelper.clampWidgetBitmapDims(widthPx, heightPx)
+        val source = loadScaledPhoto(photoPath, safeW, safeH) ?: return null
         val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val w = safeW.toFloat()
@@ -983,8 +985,11 @@ object PremiumWidgetRenderer {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(path, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            // Hard-cap decode edge so a huge Exact widget size can't still overshoot.
+            val targetW = maxW.coerceIn(1, 1024)
+            val targetH = maxH.coerceIn(1, 1024)
             var sample = 1
-            while (bounds.outWidth / sample > maxW * 1.5 || bounds.outHeight / sample > maxH * 1.5) {
+            while (bounds.outWidth / sample > targetW * 1.5 || bounds.outHeight / sample > targetH * 1.5) {
                 sample *= 2
             }
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }

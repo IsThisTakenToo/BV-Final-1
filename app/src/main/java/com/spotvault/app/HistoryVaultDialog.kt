@@ -6207,27 +6207,31 @@ internal fun spotLocationParts(spot: LocationSpot): SpotLocationParts {
 suspend fun resolveStuckSpotAddresses(context: Context, dao: LocationDao) {
     // Cap per launch so a vault with hundreds of stuck rows cannot storm the geocoder + Room
     // invalidation tracker for minutes. Prefer active vault spots; deleted/archived can wait.
-    val needsResolution = dao.getSpotsNeedingAddressResolution(MAX_STUCK_ADDRESS_RESOLUTIONS_PER_LAUNCH)
-    needsResolution.forEach { spot ->
-        val geocoded = reverseGeocodeAddress(context, spot.lat, spot.lng)
-        if (!geocoded.full.startsWith("Lat:")) {
-            // address/city/state used to be the only fields this touched — the spot's displayed
-            // title (what actually shows in the Vault list) was left permanently stuck on its
-            // original "30.3536, -88.5245" placeholder even after this resolved a real address
-            // behind the scenes. Only overwrites the title when it's still that exact placeholder,
-            // so a title the user typed or edited is never touched.
-            val newTitle = if (isPlaceholderCoordinateTitle(spot.title, spot.lat, spot.lng)) {
-                quickActionSpotTitle(geocoded, spot.lat, spot.lng)
-            } else {
-                spot.title
+    // Bulk-mutation suppress — each updateSpot used to debounce-kick a full widget refresh chain
+    // (often once per geocode) on every cold start for spots that stay stuck offline.
+    WidgetThemeHelper.withBulkVaultMutation(context) {
+        val needsResolution = dao.getSpotsNeedingAddressResolution(MAX_STUCK_ADDRESS_RESOLUTIONS_PER_LAUNCH)
+        needsResolution.forEach { spot ->
+            val geocoded = reverseGeocodeAddress(context, spot.lat, spot.lng)
+            if (!geocoded.full.startsWith("Lat:")) {
+                // address/city/state used to be the only fields this touched — the spot's displayed
+                // title (what actually shows in the Vault list) was left permanently stuck on its
+                // original "30.3536, -88.5245" placeholder even after this resolved a real address
+                // behind the scenes. Only overwrites the title when it's still that exact placeholder,
+                // so a title the user typed or edited is never touched.
+                val newTitle = if (isPlaceholderCoordinateTitle(spot.title, spot.lat, spot.lng)) {
+                    quickActionSpotTitle(geocoded, spot.lat, spot.lng)
+                } else {
+                    spot.title
+                }
+                // Re-fetches rather than spot.copy(...) — this loops over every stuck spot doing a
+                // real network geocode per iteration, easily slow enough for the user to edit (or
+                // attach a photo to) the exact spot this is currently resolving in the background.
+                // copy()-ing the snapshot taken at the top of this function would silently revert
+                // whatever they'd just changed.
+                val current = dao.getSpotById(spot.id) ?: return@forEach
+                dao.updateSpot(current.copy(address = geocoded.full, city = geocoded.city, state = geocoded.state, title = newTitle))
             }
-            // Re-fetches rather than spot.copy(...) — this loops over every stuck spot doing a
-            // real network geocode per iteration, easily slow enough for the user to edit (or
-            // attach a photo to) the exact spot this is currently resolving in the background.
-            // copy()-ing the snapshot taken at the top of this function would silently revert
-            // whatever they'd just changed.
-            val current = dao.getSpotById(spot.id) ?: return@forEach
-            dao.updateSpot(current.copy(address = geocoded.full, city = geocoded.city, state = geocoded.state, title = newTitle))
         }
     }
 }

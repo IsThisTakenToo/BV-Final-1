@@ -1504,7 +1504,9 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
     val coroutineScope = rememberCoroutineScope()
     var spotCount by remember { mutableStateOf(0) }
     var defaultActiveTracking by remember { mutableStateOf(prefs.getBoolean("default_active_tracking", true)) }
-    var defaultTimerMins by remember { mutableStateOf(prefs.getString("default_timer_mins", "") ?: "") }
+    var defaultTimerMins by remember {
+        mutableStateOf((prefs.getString("default_timer_mins", "") ?: "").filter { it.isDigit() }.take(4))
+    }
     var defaultSort by remember { mutableStateOf(prefs.getString("default_sort_order", "Newest") ?: "Newest") }
     var confirmDelete by remember { mutableStateOf(prefs.getBoolean("confirm_delete", true)) }
     var autoDeleteEnabled by remember { mutableStateOf(prefs.getBoolean("auto_delete_enabled", false)) }
@@ -1736,8 +1738,11 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
             OutlinedTextField(
                 value = defaultTimerMins,
                 onValueChange = {
-                    defaultTimerMins = it
-                    prefs.edit().putString("default_timer_mins", it).apply()
+                    // Digits only, short — uncapped paste used to bloat SpotVaultPrefs and later
+                    // the timer dialog's rememberSaveable/binder path.
+                    val sanitized = it.filter { ch -> ch.isDigit() }.take(4)
+                    defaultTimerMins = sanitized
+                    prefs.edit().putString("default_timer_mins", sanitized).apply()
                 },
                 label = { Text("Default Timer (minutes)") },
                 modifier = Modifier.fillMaxWidth(),
