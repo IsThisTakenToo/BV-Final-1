@@ -3,8 +3,12 @@ package com.spotvault.app
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import java.util.concurrent.TimeUnit
 
 class WatchdogWorker(private val context: Context, workerParams: WorkerParameters) : Worker(context, workerParams) {
     override fun doWork(): Result {
@@ -28,7 +32,27 @@ class WatchdogWorker(private val context: Context, workerParams: WorkerParameter
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+        } else {
+            // Idle installs used to keep this unique periodic work forever — cancel when nothing
+            // is pinned so years of 15-minute no-op wakes stop.
+            cancelWatchdog(context)
         }
         return Result.success()
     }
+}
+
+private const val WATCHDOG_UNIQUE_WORK = "SpotVaultWatchdog"
+
+/** Arms the 15-minute revive worker while Active Tracking is on. */
+fun scheduleWatchdog(context: Context) {
+    val workRequest = PeriodicWorkRequestBuilder<WatchdogWorker>(15, TimeUnit.MINUTES).build()
+    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+        WATCHDOG_UNIQUE_WORK,
+        ExistingPeriodicWorkPolicy.KEEP,
+        workRequest
+    )
+}
+
+fun cancelWatchdog(context: Context) {
+    WorkManager.getInstance(context).cancelUniqueWork(WATCHDOG_UNIQUE_WORK)
 }

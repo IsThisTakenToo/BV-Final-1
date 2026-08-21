@@ -8,7 +8,9 @@ import android.os.SystemClock
 
 object NotificationGuard {
     private const val REQUEST_CODE = 1001
-    private const val INTERVAL_MS = 2 * 60 * 1000L
+    /** Align with Watchdog's 15-minute cadence — 2-minute wakes for multi-hour airport/hotel
+     * tracks stacked years of unnecessary startForegroundService attempts. */
+    private const val INTERVAL_MS = 15 * 60 * 1000L
 
     fun schedule(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -19,11 +21,13 @@ object NotificationGuard {
             INTERVAL_MS,
             pendingIntent
         )
+        scheduleWatchdog(context)
     }
 
     fun cancel(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         pendingIntent(context)?.let { alarmManager.cancel(it) }
+        cancelWatchdog(context)
     }
 
     private fun pendingIntent(context: Context): PendingIntent? {

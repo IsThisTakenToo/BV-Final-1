@@ -527,8 +527,11 @@ private fun rememberDeviceAzimuth(): DeviceAzimuthState {
         val remappedRotationMatrix = FloatArray(9)
         val inclinationMatrix = FloatArray(9)
         val orientationAngles = FloatArray(3)
-        var lastAccel: FloatArray? = null
-        var lastMag: FloatArray? = null
+        // Reused buffers — copyOf() at SENSOR_DELAY_GAME (~50 Hz) allocated for the whole walk back.
+        val accelValues = FloatArray(3)
+        val magValues = FloatArray(3)
+        var hasAccel = false
+        var hasMag = false
         // Plain local, not Compose state — SENSOR_DELAY_GAME fires up to ~50 times/sec, and
         // publishing every single one to `azimuth` would mean a recomposition (plus a
         // LaunchedEffect relaunch and spring re-target downstream in CompassNavigationScreen)
@@ -543,26 +546,28 @@ private fun rememberDeviceAzimuth(): DeviceAzimuthState {
                         SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
                     }
                     Sensor.TYPE_ACCELEROMETER -> {
-                        lastAccel = event.values.copyOf()
-                        if (lastMag != null &&
+                        System.arraycopy(event.values, 0, accelValues, 0, 3)
+                        hasAccel = true
+                        if (hasMag &&
                             SensorManager.getRotationMatrix(
                                 rotationMatrix,
                                 inclinationMatrix,
-                                lastAccel,
-                                lastMag
+                                accelValues,
+                                magValues
                             )
                         ) {
                             // matrix updated
                         }
                     }
                     Sensor.TYPE_MAGNETIC_FIELD -> {
-                        lastMag = event.values.copyOf()
-                        if (lastAccel != null &&
+                        System.arraycopy(event.values, 0, magValues, 0, 3)
+                        hasMag = true
+                        if (hasAccel &&
                             SensorManager.getRotationMatrix(
                                 rotationMatrix,
                                 inclinationMatrix,
-                                lastAccel,
-                                lastMag
+                                accelValues,
+                                magValues
                             )
                         ) {
                             // matrix updated

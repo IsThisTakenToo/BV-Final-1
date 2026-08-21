@@ -79,6 +79,19 @@ object FoundCelebration {
             activeRingtone?.stop()
             activeRingtone = ringtone
             ringtone.play()
+            // Ringtone has no completion listener — cap play so a long custom alert tone can't
+            // keep holding the Ringtone after the celebration UI is gone.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (activeRingtone === ringtone) {
+                    runCatching { ringtone.stop() }
+                    activeRingtone = null
+                }
+            }, 5_000L)
         }
+    }
+
+    fun stop() {
+        runCatching { activeRingtone?.stop() }
+        activeRingtone = null
     }
 }

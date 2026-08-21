@@ -258,9 +258,11 @@ suspend fun handleSharedMapsText(context: Context, sharedText: String) {
         // fallback path makes a genuinely blocking geocoder call with no dispatch of its own, so
         // without this it would freeze the UI thread on every device below API 33.
         withContext(Dispatchers.IO) {
-            val parsed = parseSharedMapsText(sharedText)
-            var rawName = parsed.name
-            val rawUrl = parsed.url
+            // Bound pathological EXTRA_TEXT before any regex/URL parse work.
+            val boundedShared = sharedText.take(8_192)
+            val parsed = parseSharedMapsText(boundedShared)
+            var rawName = parsed.name.take(512)
+            val rawUrl = parsed.url?.take(2_048)
 
             var coordinates = rawUrl?.let { extractLatLngFromMapsUrl(it) }
             var resolvedUrl: String? = null
@@ -278,13 +280,13 @@ suspend fun handleSharedMapsText(context: Context, sharedText: String) {
             // No URL at all in the share — the only other shape worth recognizing is the share
             // being nothing but a bare coordinate pair.
             if (coordinates == null && rawUrl == null) {
-                coordinates = extractBareLatLng(sharedText)
+                coordinates = extractBareLatLng(boundedShared)
             }
             // The best available text to search on if the URL didn't already hand over exact
             // coordinates — the parsed address line when there was real leftover text, otherwise
             // whatever's in name (parseSharedMapsText sets these to the same string for a
             // single-line share, so this is effectively just "whichever one is non-blank").
-            val searchText = parsed.addressLine.ifBlank { rawName }.trim()
+            val searchText = parsed.addressLine.ifBlank { rawName }.trim().take(512)
 
             // Nothing usable found anywhere — rather than deliver an empty/near-empty payload
             // (which would still pop the Add Spot form open over whatever the user was doing),

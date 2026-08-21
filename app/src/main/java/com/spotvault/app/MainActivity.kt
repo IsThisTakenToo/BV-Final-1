@@ -32,9 +32,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 import android.provider.Settings
 import androidx.fragment.app.FragmentActivity
@@ -1314,12 +1311,13 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun setupWatchdog() {
-        val workRequest = PeriodicWorkRequestBuilder<WatchdogWorker>(15, TimeUnit.MINUTES).build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "SpotVaultWatchdog",
-            ExistingPeriodicWorkPolicy.KEEP,
-            workRequest
-        )
+        // Only keep the periodic revive worker while a track is live — idle installs used to
+        // enqueue it forever from every cold start.
+        if (prefs.getBoolean("is_pinned", false)) {
+            scheduleWatchdog(this)
+        } else {
+            cancelWatchdog(this)
+        }
     }
 
 

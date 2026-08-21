@@ -430,7 +430,8 @@ data class ForwardGeocodeResult(
  * Dispatchers.IO since it's a blocking network call — pre-33. Returns null for a blank query, no
  * geocoder backend on this device, no match, or a timeout. */
 suspend fun geocodeAddress(context: Context, addressText: String): ForwardGeocodeResult? {
-    val query = addressText.trim()
+    // Cap before Geocoder — a pathological share/paste can be binder-sized and hammer regex+network.
+    val query = addressText.trim().take(512)
     if (query.isEmpty()) return null
     if (!android.location.Geocoder.isPresent()) return null
     val geocoder = android.location.Geocoder(context, Locale.getDefault())
