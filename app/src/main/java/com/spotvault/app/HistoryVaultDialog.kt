@@ -6089,8 +6089,8 @@ fun ArchivedSpotsDialog(
                     ),
                     onClick = {
                         coroutineScope.launch(Dispatchers.IO) {
-                            // UI list is capped at 500 — page until empty so archive #501+
-                            // (and photos) are not left undeletable forever.
+                            // Delete All Forever pages until empty so archive rows past the
+                            // browse window (and photos) are never left undeletable.
                             while (true) {
                                 val page = dao.getArchivedSpots()
                                 if (page.isEmpty()) break
