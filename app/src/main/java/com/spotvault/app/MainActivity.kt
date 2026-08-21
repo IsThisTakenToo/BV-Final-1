@@ -148,6 +148,7 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.tasks.await
@@ -423,6 +424,14 @@ class MainActivity : FragmentActivity() {
         pendingWidgetSharePhotoFile = null
         if (success && file != null && file.exists()) {
             lifecycleScope.launch {
+                val compressed = withContext(Dispatchers.IO) {
+                    compressCapturedPhoto(file.absolutePath)
+                }
+                if (!compressed) {
+                    runCatching { file.delete() }
+                    Toast.makeText(this@MainActivity, "Couldn't share that photo. Try again.", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
                 val located = withContext(Dispatchers.IO) {
                     val coords = resolveCurrentLocation(this@MainActivity, prefs) ?: return@withContext null
                     val (lat, lng) = coords
@@ -432,10 +441,17 @@ class MainActivity : FragmentActivity() {
                     Triple(lat, lng, address)
                 }
                 if (located == null) {
+                    runCatching { file.delete() }
                     Toast.makeText(this@MainActivity, "Location unavailable — enable GPS to share.", Toast.LENGTH_SHORT).show()
                 } else {
                     val (lat, lng, address) = located
                     shareLocation(this@MainActivity, lat, lng, address, imagePath = file.absolutePath, includePhoto = true)
+                    // Chooser/target apps need the FileProvider URI briefly; don't wait for the
+                    // 24h orphan sweep to reclaim a share capture.
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        delay(60_000)
+                        runCatching { file.delete() }
+                    }
                 }
             }
         } else {
@@ -2062,15 +2078,10 @@ class MainActivity : FragmentActivity() {
                     // `finally` instead, so every exit path — success or exception — releases it.
                     var workingBitmap: Bitmap? = null
                     try {
-                        // Low-RAM: skip the second ARGB contrast copy — upright decode alone is
-                        // enough for plate/sign OCR and halves peak bitmap RAM on Snap.
-                        val bitmap = if (ThemeState.lowRamDevice) {
-                            rawBitmap
-                        } else {
-                            enhanceBitmapForOCR(rawBitmap)
-                        }
+                        // Skip the second ARGB contrast copy — upright decode alone is enough for
+                        // plate/sign OCR and halves peak bitmap RAM on every Snap (not just low-RAM).
+                        val bitmap = rawBitmap
                         workingBitmap = bitmap
-                        if (bitmap != rawBitmap) rawBitmap.recycle()
                         val image = InputImage.fromBitmap(bitmap, 0)
                         val result = recognizer.process(image).await()
 
@@ -2110,10 +2121,6 @@ class MainActivity : FragmentActivity() {
                         e.printStackTrace()
                     } finally {
                         workingBitmap?.takeIf { !it.isRecycled }?.recycle()
-                        // enhanceBitmapForOCR can throw before ownership moves off rawBitmap.
-                        if (!rawBitmap.isRecycled && workingBitmap !== rawBitmap) {
-                            rawBitmap.recycle()
-                        }
                         recognizer.close()
                     }
                 }
@@ -2130,29 +2137,6 @@ class MainActivity : FragmentActivity() {
             }
             showTimerDialog.value = true
         }
-    }
-
-    private fun enhanceBitmapForOCR(original: Bitmap): Bitmap {
-        val contrastBmp = Bitmap.createBitmap(original.width, original.height, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(contrastBmp)
-        val cm = android.graphics.ColorMatrix()
-        cm.setSaturation(0f)
-        val cmContrast = android.graphics.ColorMatrix()
-        val contrast = 1.8f
-        val offset = (-.5f * contrast + .5f) * 255f
-        cmContrast.set(
-            floatArrayOf(
-                contrast, 0f, 0f, 0f, offset,
-                0f, contrast, 0f, 0f, offset,
-                0f, 0f, contrast, 0f, offset,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-        cm.postConcat(cmContrast)
-        val paint = android.graphics.Paint()
-        paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
-        canvas.drawBitmap(original, 0f, 0f, paint)
-        return contrastBmp
     }
 
     private fun getUprightBitmap(filePath: String, maxDimension: Int = 1600): Bitmap? {

@@ -719,6 +719,9 @@ interface LocationDao {
     @Query("SELECT COUNT(*) FROM location_history WHERE deletedAt IS NOT NULL")
     suspend fun countRecentlyDeleted(): Int
 
+    @Query("SELECT COUNT(*) FROM location_history WHERE isArchived = 1")
+    suspend fun countArchivedSpots(): Int
+
     @Query("UPDATE location_history SET deletedAt = :now WHERE id = :spotId")
     suspend fun softDeleteSpot(spotId: Int, now: Long = System.currentTimeMillis())
 

@@ -4826,6 +4826,7 @@ fun RecentlyDeletedDialog(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val coroutineScope = rememberCoroutineScope()
     var deletedSpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
+    var deletedTotalCount by remember { mutableStateOf(0) }
     var tagsBySpotId by remember { mutableStateOf<Map<Int, List<TagEntity>>>(emptyMap()) }
     var spotPendingPermanentDelete by remember { mutableStateOf<LocationSpot?>(null) }
     var showRestoreAllConfirm by remember { mutableStateOf(false) }
@@ -4833,11 +4834,14 @@ fun RecentlyDeletedDialog(
     val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
 
     suspend fun refreshDeleted() {
-        val spots = withContext(Dispatchers.IO) { dao.getRecentlyDeleted() }
+        val (spots, total) = withContext(Dispatchers.IO) {
+            dao.getRecentlyDeleted() to dao.countRecentlyDeleted()
+        }
         val tags = withContext(Dispatchers.IO) {
             loadTagsBySpotIds(tagDao, spots.map { it.id })
         }
         deletedSpots = spots
+        deletedTotalCount = total
         // One batch of one-shot queries when the dialog opens/refreshes — not a live Flow per
         // LazyColumn row (each of those held an InvalidationTracker subscription while scrolling).
         tagsBySpotId = tags
@@ -4855,7 +4859,7 @@ fun RecentlyDeletedDialog(
             },
             content = {
                 Text(
-                    "All ${deletedSpots.size} spot${if (deletedSpots.size == 1) "" else "s"} in Recently Deleted will be restored to the Vault.",
+                    "All $deletedTotalCount spot${if (deletedTotalCount == 1) "" else "s"} in Recently Deleted will be restored to the Vault.",
                     color = SpotVaultColors.Muted
                 )
             },
@@ -4886,7 +4890,7 @@ fun RecentlyDeletedDialog(
             },
             content = {
                 Text(
-                    "All ${deletedSpots.size} spot${if (deletedSpots.size == 1) "" else "s"} will be permanently deleted and cannot be recovered.",
+                    "All $deletedTotalCount spot${if (deletedTotalCount == 1) "" else "s"} will be permanently deleted and cannot be recovered.",
                     color = SpotVaultColors.Muted
                 )
             },
@@ -4896,9 +4900,14 @@ fun RecentlyDeletedDialog(
                         containerColor = MaterialTheme.colorScheme.error
                     ),
                     onClick = {
-                        val toDelete = deletedSpots
                         coroutineScope.launch(Dispatchers.IO) {
-                            permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, toDelete)
+                            // UI list is capped at 500 — page until empty so Delete All Forever
+                            // never leaves soft-deleted rows (and their JPEGs) behind.
+                            while (true) {
+                                val page = dao.getRecentlyDeleted()
+                                if (page.isEmpty()) break
+                                permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, page)
+                            }
                             tagDao.recomputeAllUsageCounts()
                             refreshDeleted()
                         }
@@ -5875,6 +5884,7 @@ fun ArchivedSpotsDialog(
     val tagDao = remember { AppDatabase.getDatabase(context).tagDao() }
     val coroutineScope = rememberCoroutineScope()
     var archivedSpots by remember { mutableStateOf<List<LocationSpot>>(emptyList()) }
+    var archivedTotalCount by remember { mutableStateOf(0) }
     var tagsBySpotId by remember { mutableStateOf<Map<Int, List<TagEntity>>>(emptyMap()) }
     var spotPendingPermanentDelete by remember { mutableStateOf<LocationSpot?>(null) }
     var showUnarchiveAllConfirm by remember { mutableStateOf(false) }
@@ -5882,11 +5892,14 @@ fun ArchivedSpotsDialog(
     val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
 
     suspend fun refreshArchived() {
-        val spots = withContext(Dispatchers.IO) { dao.getArchivedSpots() }
+        val (spots, total) = withContext(Dispatchers.IO) {
+            dao.getArchivedSpots() to dao.countArchivedSpots()
+        }
         val tags = withContext(Dispatchers.IO) {
             loadTagsBySpotIds(tagDao, spots.map { it.id })
         }
         archivedSpots = spots
+        archivedTotalCount = total
         tagsBySpotId = tags
     }
 
@@ -5902,7 +5915,7 @@ fun ArchivedSpotsDialog(
             },
             content = {
                 Text(
-                    "All ${archivedSpots.size} spot${if (archivedSpots.size == 1) "" else "s"} will return to the main Vault.",
+                    "All $archivedTotalCount spot${if (archivedTotalCount == 1) "" else "s"} will return to the main Vault.",
                     color = SpotVaultColors.Muted
                 )
             },
@@ -5933,7 +5946,7 @@ fun ArchivedSpotsDialog(
             },
             content = {
                 Text(
-                    "All ${archivedSpots.size} spot${if (archivedSpots.size == 1) "" else "s"} will be permanently deleted and cannot be recovered.",
+                    "All $archivedTotalCount spot${if (archivedTotalCount == 1) "" else "s"} will be permanently deleted and cannot be recovered.",
                     color = SpotVaultColors.Muted
                 )
             },
@@ -5943,9 +5956,14 @@ fun ArchivedSpotsDialog(
                         containerColor = MaterialTheme.colorScheme.error
                     ),
                     onClick = {
-                        val toDelete = archivedSpots
                         coroutineScope.launch(Dispatchers.IO) {
-                            permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, toDelete)
+                            // UI list is capped at 500 — page until empty so archive #501+
+                            // (and photos) are not left undeletable forever.
+                            while (true) {
+                                val page = dao.getArchivedSpots()
+                                if (page.isEmpty()) break
+                                permanentlyDeleteSpotsAndPhotos(dao, spotPhotoDao, page)
+                            }
                             tagDao.recomputeAllUsageCounts()
                             refreshArchived()
                         }
