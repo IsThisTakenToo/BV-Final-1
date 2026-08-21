@@ -49,10 +49,12 @@ fun buildGoogleMapsLink(lat: Double, lng: Double, address: String = ""): String 
  * spammy in a text message, whereas raw coordinates stay short and clean. The readable address
  * is already covered by the address line above; the links just need to open the right pin. */
 fun buildShareText(lat: Double, lng: Double, address: String, title: String = ""): String {
-    val hasAddress = isResolvedShareAddress(address)
-    val addressLine = if (hasAddress) address.trim() else ""
+    val safeAddress = prefsSafeAddress(address)
+    val safeTitle = prefsSafeTitle(title)
+    val hasAddress = isResolvedShareAddress(safeAddress)
+    val addressLine = if (hasAddress) safeAddress.trim() else ""
     val coordinateLine = String.format(Locale.US, "%.5f, %.5f", lat, lng)
-    val titleLine = title.trim().ifBlank { addressLine.ifBlank { coordinateLine } }
+    val titleLine = safeTitle.trim().ifBlank { addressLine.ifBlank { coordinateLine } }
     val showAddressLine = addressLine.isNotEmpty() && !addressLine.equals(titleLine, ignoreCase = true)
 
     return buildString {

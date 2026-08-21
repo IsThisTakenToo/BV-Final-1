@@ -38,7 +38,7 @@ class DriveAutoBackupWorker(private val context: Context, params: WorkerParamete
             }
             // Transient Play Services / network failures should retry, not look "healthy".
             val message = e.message ?: e.javaClass.simpleName
-            prefs.edit().putString("drive_last_backup_error", message).apply()
+            prefs.edit().putString("drive_last_backup_error", prefsSafeError(message)).apply()
             return if (runAttemptCount >= MAX_DRIVE_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
         }
 
@@ -66,12 +66,12 @@ class DriveAutoBackupWorker(private val context: Context, params: WorkerParamete
             } else {
                 val message = result.exceptionOrNull()?.message ?: "Drive upload failed"
                 android.util.Log.e("DriveAutoBackup", "Drive auto-backup failed", result.exceptionOrNull())
-                prefs.edit().putString("drive_last_backup_error", message).apply()
+                prefs.edit().putString("drive_last_backup_error", prefsSafeError(message)).apply()
                 if (runAttemptCount >= MAX_DRIVE_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
             }
         } catch (e: Exception) {
             android.util.Log.e("DriveAutoBackup", "Drive auto-backup crashed", e)
-            prefs.edit().putString("drive_last_backup_error", e.message ?: e.javaClass.simpleName).apply()
+            prefs.edit().putString("drive_last_backup_error", prefsSafeError(e.message ?: e.javaClass.simpleName)).apply()
             if (runAttemptCount >= MAX_DRIVE_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
         }
     }

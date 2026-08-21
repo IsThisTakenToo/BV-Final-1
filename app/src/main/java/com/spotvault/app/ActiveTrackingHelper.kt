@@ -135,6 +135,11 @@ fun prefsSafeAddress(address: String): String = address.take(PINNED_PREFS_ADDRES
 
 fun prefsSafeTitle(title: String): String = title.take(SPOT_TITLE_MAX_CHARS)
 
+/** SAF/Drive error strings shown in Settings — keep prefs XML bounded. */
+const val PREFS_ERROR_MAX_CHARS = 512
+
+fun prefsSafeError(message: String): String = message.take(PREFS_ERROR_MAX_CHARS)
+
 /** Soft ceiling when copying a gallery pick into app storage before compress. */
 const val MAX_GALLERY_IMPORT_BYTES = 40L * 1024 * 1024
 

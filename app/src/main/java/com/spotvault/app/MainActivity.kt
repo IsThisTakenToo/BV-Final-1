@@ -978,6 +978,22 @@ class MainActivity : FragmentActivity() {
             prefs.edit().putLong("orphan_photo_sweep_at", now).apply()
         }
 
+        // Interrupted Drive upload/restore can leave multi‑hundred‑MB zips in cacheDir until the
+        // next successful finally{} — reclaim them on open so a kill mid-upload can't starve disk.
+        lifecycleScope.launch(Dispatchers.IO) {
+            val cache = cacheDir
+            if (!cache.isDirectory) return@launch
+            val cutoff = System.currentTimeMillis() - TimeUnit.HOURS.toMillis(6)
+            cache.listFiles()?.forEach { file ->
+                val name = file.name
+                if (!file.isFile) return@forEach
+                if (!name.startsWith("drive_upload_") && !name.startsWith("drive_restore_")) return@forEach
+                if (!name.endsWith(".zip")) return@forEach
+                if (file.lastModified() >= cutoff) return@forEach
+                runCatching { file.delete() }
+            }
+        }
+
         if (prefs.getBoolean("widget_refresh_on_open", true)) {
             WidgetThemeHelper.refreshAllWidgets(this)
         }
@@ -2099,7 +2115,7 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                                 // Cap as we go — OCR can emit huge walls of text before trim/take.
-                                if (fullTextBuilder.length < NOTEPAD_MAX_CHARS) {
+                                if (fullTextBuilder.length < OCR_EXTRACT_MAX_CHARS) {
                                     fullTextBuilder.append(line.text).append(' ')
                                 }
                             }
@@ -2110,7 +2126,7 @@ class MainActivity : FragmentActivity() {
                                 .replace(Regex("[^A-Za-z0-9\\-\\s]"), " ")
                                 .replace(Regex("\\s+"), " ")
                                 .trim()
-                                .take(NOTEPAD_MAX_CHARS)
+                                .take(OCR_EXTRACT_MAX_CHARS)
                             prominentText = prominentText
                                 .replace(Regex("[^A-Za-z0-9\\-\\s]"), " ")
                                 .replace(Regex("\\s+"), " ")

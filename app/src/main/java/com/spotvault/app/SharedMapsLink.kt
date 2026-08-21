@@ -304,9 +304,9 @@ suspend fun handleSharedMapsText(context: Context, sharedText: String) {
                 // than being dropped — without them, a spot saved this way would show up in the
                 // Vault with no city/state at all, unlike any other spot.
                 val reverseGeocoded = runCatching { reverseGeocodeAddress(context, coordinates.first, coordinates.second) }.getOrNull()
-                addressHint = reverseGeocoded?.full ?: searchText
-                city = reverseGeocoded?.city.orEmpty()
-                state = reverseGeocoded?.state.orEmpty()
+                addressHint = prefsSafeAddress(reverseGeocoded?.full ?: searchText)
+                city = reverseGeocoded?.city.orEmpty().take(SPOT_CITY_STATE_MAX_CHARS)
+                state = reverseGeocoded?.state.orEmpty().take(SPOT_CITY_STATE_MAX_CHARS)
             } else if (searchText.isNotBlank()) {
                 // No coordinates in the URL — either it was a shortlink that never resolved to a
                 // "@lat,lng"-bearing page (maps.app.goo.gl links commonly don't, and neither do a
@@ -320,11 +320,11 @@ suspend fun handleSharedMapsText(context: Context, sharedText: String) {
                 val geocoded = geocodeAddress(context, searchText)
                 if (geocoded != null) {
                     coordinates = geocoded.lat to geocoded.lng
-                    addressHint = geocoded.formattedAddress
-                    city = geocoded.city
-                    state = geocoded.state
+                    addressHint = prefsSafeAddress(geocoded.formattedAddress)
+                    city = geocoded.city.take(SPOT_CITY_STATE_MAX_CHARS)
+                    state = geocoded.state.take(SPOT_CITY_STATE_MAX_CHARS)
                 } else {
-                    addressHint = searchText
+                    addressHint = prefsSafeAddress(searchText)
                 }
             } else {
                 addressHint = ""
@@ -332,7 +332,7 @@ suspend fun handleSharedMapsText(context: Context, sharedText: String) {
 
             PendingSharedSpot.deliver(
                 SharedSpotPayload(
-                    title = rawName.ifBlank { "Shared Spot" },
+                    title = prefsSafeTitle(rawName.ifBlank { "Shared Spot" }),
                     // Used to prefill Notes with "Shared link: <url>" — nothing in the app or the
                     // saved spot itself ever reads that back out, so it was just clutter sitting
                     // in the one field the user would actually want to type their own notes into.

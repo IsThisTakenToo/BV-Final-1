@@ -77,6 +77,8 @@ import java.util.Locale
 
 /** Soft cap so a huge paste can't balloon Room + undo history for the life of the install. */
 const val NOTEPAD_MAX_CHARS = 50_000
+/** Snap OCR into timer/notes — enough for plate/sign text without a 50k Activity string. */
+const val OCR_EXTRACT_MAX_CHARS = 2_048
 private const val NOTEPAD_UNDO_MAX_ENTRIES = 40
 private const val NOTEPAD_UNDO_MAX_CHARS = 200_000
 

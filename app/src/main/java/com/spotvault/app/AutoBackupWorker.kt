@@ -21,7 +21,7 @@ class AutoBackupWorker(private val context: Context, params: WorkerParameters) :
 
         fun giveUp(message: String): Result {
             android.util.Log.e("AutoBackup", message)
-            prefs.edit().putString("auto_backup_last_error", message).apply()
+            prefs.edit().putString("auto_backup_last_error", prefsSafeError(message)).apply()
             // Cap retries so a revoked SAF tree does not burn battery forever.
             return if (runAttemptCount >= MAX_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
         }
@@ -66,12 +66,12 @@ class AutoBackupWorker(private val context: Context, params: WorkerParameters) :
                 newFile.delete()
                 val message = result.exceptionOrNull()?.message ?: "Export failed"
                 android.util.Log.e("AutoBackup", "SAF auto-backup failed", result.exceptionOrNull())
-                prefs.edit().putString("auto_backup_last_error", message).apply()
+                prefs.edit().putString("auto_backup_last_error", prefsSafeError(message)).apply()
                 if (runAttemptCount >= MAX_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
             }
         } catch (e: Exception) {
             android.util.Log.e("AutoBackup", "SAF auto-backup crashed", e)
-            prefs.edit().putString("auto_backup_last_error", e.message ?: e.javaClass.simpleName).apply()
+            prefs.edit().putString("auto_backup_last_error", prefsSafeError(e.message ?: e.javaClass.simpleName)).apply()
             if (runAttemptCount >= MAX_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
         }
     }

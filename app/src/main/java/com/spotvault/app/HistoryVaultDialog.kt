@@ -5770,11 +5770,11 @@ private fun AddFavoriteSpotDialog(
                                             timestamp = System.currentTimeMillis(),
                                             lat = resolved.lat,
                                             lng = resolved.lng,
-                                            address = resolved.address,
+                                            address = prefsSafeAddress(resolved.address),
                                             isFavorite = true,
-                                            title = trimmedTitle,
-                                            city = resolved.city,
-                                            state = resolved.state
+                                            title = prefsSafeTitle(trimmedTitle),
+                                            city = resolved.city.take(SPOT_CITY_STATE_MAX_CHARS),
+                                            state = resolved.state.take(SPOT_CITY_STATE_MAX_CHARS)
                                         )
                                     ).toInt()
                                     selectedTags.forEach { tagName -> tagDao.assignTag(newId, tagName) }
