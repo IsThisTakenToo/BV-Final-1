@@ -913,8 +913,9 @@ interface TagDao {
     @Query("SELECT * FROM tags ORDER BY usageCount DESC, name COLLATE NOCASE ASC LIMIT 5")
     fun getTopTags(): Flow<List<TagEntity>>
 
-    /** Every tag, A-Z, for the full tag-cloud filter sheet. */
-    @Query("SELECT * FROM tags ORDER BY name COLLATE NOCASE ASC")
+    /** Every tag, A-Z, for tag-cloud / manage / widget pickers — capped so tag spam can't
+     * grow Compose state without bound. Search still filters within this window. */
+    @Query("SELECT * FROM tags ORDER BY name COLLATE NOCASE ASC LIMIT 500")
     fun getAllTags(): Flow<List<TagEntity>>
 
     @Transaction
@@ -1012,8 +1013,11 @@ interface TagDao {
     )
     suspend fun getSpotsForTagsOldest(tagIds: List<Int>, limit: Int): List<LocationSpot>
 
-    @Query("SELECT * FROM tags ORDER BY name COLLATE NOCASE ASC")
+    @Query("SELECT * FROM tags ORDER BY name COLLATE NOCASE ASC LIMIT 500")
     suspend fun getAllTagsList(): List<TagEntity>
+
+    @Query("SELECT COUNT(*) FROM tags")
+    suspend fun countTags(): Int
 
     @Query("SELECT * FROM tags WHERE id = :tagId LIMIT 1")
     suspend fun getTagById(tagId: Int): TagEntity?
@@ -1025,6 +1029,7 @@ interface TagDao {
         INNER JOIN location_tag_cross_ref ON tags.id = location_tag_cross_ref.tagId
         WHERE location_tag_cross_ref.locationId = :spotId
         ORDER BY tags.name COLLATE NOCASE ASC
+        LIMIT 40
         """
     )
     fun getTagsForSpotFlow(spotId: Int): Flow<List<TagEntity>>
@@ -1037,6 +1042,7 @@ interface TagDao {
         INNER JOIN location_tag_cross_ref ON tags.id = location_tag_cross_ref.tagId
         WHERE location_tag_cross_ref.locationId = :spotId
         ORDER BY tags.name COLLATE NOCASE ASC
+        LIMIT 40
         """
     )
     suspend fun getTagsForSpot(spotId: Int): List<TagEntity>
@@ -1055,6 +1061,9 @@ interface TagDao {
     )
     suspend fun getTagAssignmentsForSpots(spotIds: List<Int>): List<SpotTagAssignment>
 
+    @Query("SELECT COUNT(*) FROM location_tag_cross_ref WHERE locationId = :locationId")
+    suspend fun countTagsForSpot(locationId: Int): Int
+
     /** Creates a tag with zero spots attached yet — used by "+ New Tag" entry points (the tag
      * filter sheet, the tag manager) where the user wants a tag to exist before assigning it to
      * anything, unlike [assignTag] which always creates-and-attaches in one step. */
@@ -1063,6 +1072,7 @@ interface TagDao {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return null
         findByName(trimmed)?.let { return it }
+        if (countTags() >= MAX_TAGS) return null
         val id = insertTag(TagEntity(name = trimmed)).toInt()
         return TagEntity(id = id, name = trimmed)
     }
@@ -1145,11 +1155,21 @@ interface TagDao {
     suspend fun assignTag(locationId: Int, tagName: String) {
         val trimmed = tagName.trim()
         if (trimmed.isEmpty()) return
-        val tagId = findByName(trimmed)?.id ?: insertTag(TagEntity(name = trimmed)).toInt()
-        val inserted = insertCrossRef(LocationTagCrossRef(locationId, tagId))
-        if (inserted != -1L) {
-            incrementUsage(tagId)
+        val existing = findByName(trimmed)
+        val tagId = if (existing != null) {
+            existing.id
+        } else {
+            if (countTags() >= MAX_TAGS) return
+            insertTag(TagEntity(name = trimmed)).toInt()
         }
+        val inserted = insertCrossRef(LocationTagCrossRef(locationId, tagId))
+        if (inserted == -1L) return // already attached
+        // Roll back a brand-new assignment that would push the spot past the per-spot ceiling.
+        if (countTagsForSpot(locationId) > MAX_TAGS_PER_SPOT) {
+            deleteCrossRef(locationId, tagId)
+            return
+        }
+        incrementUsage(tagId)
     }
 
     @Transaction
@@ -1166,7 +1186,7 @@ interface SpotPhotoDao {
     @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 24")
     fun observeForSpot(spotId: Int): Flow<List<SpotPhoto>>
 
-    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC")
+    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 24")
     suspend fun getForSpot(spotId: Int): List<SpotPhoto>
 
     @Query("SELECT path FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 24")
@@ -1235,6 +1255,10 @@ interface SpotPhotoDao {
 
 /** Extra gallery photos per spot (beyond cover [LocationSpot.imagePath]). Matches detail strip. */
 const val MAX_EXTRA_PHOTOS_PER_SPOT = 24
+/** Soft ceiling for the tags table / Compose collectors — spam or years of one-offs stay bounded. */
+const val MAX_TAGS = 500
+/** Per-spot assignment cap — matches backup import. */
+const val MAX_TAGS_PER_SPOT = 40
 
 /** Insert an extra photo; when at cap, drop the oldest file+row so the new shot is kept. */
 suspend fun SpotPhotoDao.insertExtraPhotoCapped(spotId: Int, path: String) {
