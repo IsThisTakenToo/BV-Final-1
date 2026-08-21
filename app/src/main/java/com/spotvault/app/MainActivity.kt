@@ -883,6 +883,15 @@ class MainActivity : FragmentActivity() {
                 // single app launch. See TagDao.recomputeAllUsageCounts's own doc for the full picture
                 // (this is one of four call sites that needed it).
                 db.tagDao().recomputeAllUsageCounts()
+                // Years of soft-delete → 30-day hard-purge leave free SQLite pages; VACUUM only
+                // after a purge that actually deleted rows, and at most once a week so cold start
+                // never pays for a full rewrite when nothing changed.
+                val lastVacuum = prefs.getLong("room_reclaim_after_purge_at", 0L)
+                val now = System.currentTimeMillis()
+                if (now - lastVacuum >= TimeUnit.DAYS.toMillis(7)) {
+                    db.reclaimDiskAfterBulkWipe()
+                    prefs.edit().putLong("room_reclaim_after_purge_at", now).apply()
+                }
             }
         }
 
