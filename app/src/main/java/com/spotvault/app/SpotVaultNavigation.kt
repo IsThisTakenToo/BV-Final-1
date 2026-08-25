@@ -268,6 +268,15 @@ fun SpotVaultMainScaffold(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .navigationBarsPadding()
+                                    // navigationBarsPadding() alone lands this bar's bottom edge
+                                    // flush against the gesture inset boundary — fine on a device
+                                    // with soft nav buttons (there's a solid nav bar to rest on),
+                                    // but on edge-to-edge gesture nav the VAULT label ended up
+                                    // right at the swipe-up strip with zero breathing room. The
+                                    // disclaimer strip this bar used to sit above happened to
+                                    // supply that cushion as a side effect; restoring it directly
+                                    // now that the disclaimer's gone.
+                                    .padding(bottom = 8.dp)
                             ) {
                                 SpotVaultBottomBar(
                                     onVaultClick = { navController.navigateMainTab(SpotVaultRoutes.VAULT) },
