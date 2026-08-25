@@ -587,6 +587,13 @@ fun VehicleEditScreen(
                     )
                     if (isDefault) vehicleDao.setDefault(savedId)
                     pruneAutoParkMacPrefsAfterVehicleChange(context, vehicleDao)
+                    // Every widget caches a rendered vehicleName string per row (Vault Favorites,
+                    // Tag Filter, the Premium widget's Recent/tracking rows) — nothing else on this
+                    // save path ever told a widget to refresh, so renaming or recoloring a vehicle
+                    // here used to leave every already-rendered widget row showing the old name
+                    // until some unrelated event happened to bump the widget revision.
+                    WidgetThemeHelper.bumpWidgetRevision(prefs)
+                    WidgetThemeHelper.refreshAllWidgets(context.applicationContext)
                     onSaved(savedId)
                     onBack()
                 }
@@ -610,6 +617,8 @@ fun VehicleEditScreen(
                         stopMotionWatchIfArmedFor(context, prefs, existing?.bluetoothMac)
                         archiveVehicle(vehicleDao, vehicleId)
                         pruneAutoParkMacPrefsAfterVehicleChange(context, vehicleDao)
+                        WidgetThemeHelper.bumpWidgetRevision(prefs)
+                        WidgetThemeHelper.refreshAllWidgets(context.applicationContext)
                         onBack()
                     }
                 },
@@ -646,11 +655,18 @@ fun VehicleEditScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    // Dismissed synchronously, not after the suspend calls below — same reason
+                    // ClearAllVaultDataButton dismisses its own confirmation before launching:
+                    // a fast double-tap on Delete while the coroutine is still in flight used to
+                    // stay clickable (the dialog only closed once everything finished), so it
+                    // could enqueue a second coroutine and call onBack() twice.
+                    showDeleteConfirm = false
                     scope.launch {
                         stopMotionWatchIfArmedFor(context, prefs, existing?.bluetoothMac)
                         deleteVehicleKeepingHistory(vehicleDao, locationDao, vehicleId)
                         pruneAutoParkMacPrefsAfterVehicleChange(context, vehicleDao)
-                        showDeleteConfirm = false
+                        WidgetThemeHelper.bumpWidgetRevision(prefs)
+                        WidgetThemeHelper.refreshAllWidgets(context.applicationContext)
                         onBack()
                     }
                 }) {

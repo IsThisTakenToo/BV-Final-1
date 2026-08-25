@@ -170,7 +170,8 @@ fun ColorWheelPicker(
                     // covers the one color this control can't otherwise reach non-visually.
                     .semantics {
                         contentDescription = "Color wheel. Drag to choose a hue and saturation; " +
-                            "use the brightness slider below and the black swatch for black."
+                            "use the brightness slider below" +
+                            (if (blackShortcut) " and the black swatch for black." else ".")
                     }
                     .pointerInput(Unit) {
                         awaitEachGesture {

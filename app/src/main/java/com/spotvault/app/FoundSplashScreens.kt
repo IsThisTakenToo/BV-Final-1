@@ -366,7 +366,7 @@ fun FoundSplashOverlay(
             .fillMaxSize()
             .zIndex(40f)
     ) {
-        Box(
+        HingeAvoidingCenterBox(
             modifier = Modifier
                 .fillMaxSize()
                 .background(SpotVaultColors.Deep.copy(alpha = 0.72f))
@@ -374,8 +374,7 @@ fun FoundSplashOverlay(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = { dismissed = true }
-                ),
-            contentAlignment = Alignment.Center
+                )
         ) {
             if (!reducedMotion) {
                 // Lambdas, not progress.value directly — reading .value right here would

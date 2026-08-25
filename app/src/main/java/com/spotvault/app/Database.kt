@@ -46,7 +46,12 @@ data class LocationSpot(
     // principle be both, though the UI never offers that combination directly.
     val isArchived: Boolean = false,
     /** Surfaces the spot in the Vault's pinned "bitty squares" row, independent of isFavorite. */
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    /** Free-text floor level or landmark note (e.g. "P3", "B-2", "Roof", "near the trailhead
+     * sign") captured at save time when GPS accuracy was degraded (parking garages, dense woods,
+     * anywhere GPS struggles) — surfaced again on arrival in CompassNavigationScreen. Null for
+     * every save path that doesn't show this prompt (quick pins, quiet tactical saves). */
+    val floorLevel: String? = null
 )
 
 @Entity(
@@ -161,6 +166,17 @@ interface VehicleDao {
     @Query("SELECT * FROM vehicles WHERE UPPER(bluetoothMac) = UPPER(:mac) AND isArchived = 0 LIMIT 1")
     suspend fun findByBluetoothMac(mac: String): Vehicle?
 
+    // One MAC should only ever resolve to one active vehicle — findByBluetoothMac's own LIMIT 1
+    // means whichever row happened to match first if two vehicles shared a MAC, which is exactly
+    // what let AutoPark credit the wrong vehicle. Called from saveVehicle() whenever a MAC is
+    // assigned, so any other vehicle that used to carry it gets unlinked in the same write.
+    // isArchived = 0 matters here: findByBluetoothMac already excludes archived vehicles from the
+    // conflict this is guarding against, and archive() deliberately preserves an archived
+    // vehicle's pairing so it comes back on unarchive — without this filter, saving a MAC onto a
+    // vehicle would silently strip that pairing from an archived one too, undoing that on fix.
+    @Query("UPDATE vehicles SET bluetoothMac = NULL, bluetoothName = NULL WHERE UPPER(bluetoothMac) = UPPER(:mac) AND id != :exceptId AND isArchived = 0")
+    suspend fun clearBluetoothMacFromOthers(mac: String, exceptId: Int)
+
     @Query("SELECT * FROM vehicles WHERE isArchived = 0 ORDER BY createdAt DESC LIMIT 1")
     suspend fun getMostRecentActive(): Vehicle?
 
@@ -186,6 +202,65 @@ interface VehicleDao {
     suspend fun setDefault(id: Int) {
         clearAllDefaults()
         markDefault(id)
+    }
+
+    // The four @Transaction methods below replace what VehicleStore.kt used to do as several
+    // separate, un-transacted DAO calls in a row (read-current-default, write, maybe
+    // read-and-write again) — a process death/crash partway through any of those sequences could
+    // leave two vehicles both marked default (getDefault()'s LIMIT 1 then returns whichever one
+    // arbitrarily, silently mis-tagging future hands-off saves) or, after an archive/delete/
+    // un-default, no default vehicle at all until the app happened to reopen and self-heal. Room
+    // runs everything inside one of these in a single SQLite transaction, including the nested
+    // calls to other @Transaction methods on this same dao (setDefault, promoteDefaultIfNeeded) —
+    // those correctly join the already-open transaction rather than starting a new one.
+
+    @Transaction
+    suspend fun promoteDefaultIfNeeded() {
+        if (getDefault() != null) return
+        val next = getMostRecentActive() ?: return
+        setDefault(next.id)
+    }
+
+    @Transaction
+    suspend fun insertAndReconcileDefault(vehicle: Vehicle): Int {
+        val rowId = insert(vehicle).toInt()
+        if (vehicle.isDefault) {
+            setDefault(rowId)
+        }
+        return rowId
+    }
+
+    @Transaction
+    suspend fun updateAndReconcileDefault(vehicle: Vehicle) {
+        val wasDefault = getById(vehicle.id)?.isDefault == true
+        update(vehicle)
+        if (vehicle.isDefault) {
+            setDefault(vehicle.id)
+        } else if (wasDefault) {
+            promoteDefaultIfNeeded()
+        }
+    }
+
+    @Transaction
+    suspend fun archiveAndReconcileDefault(id: Int) {
+        val vehicle = getById(id) ?: return
+        val wasDefault = vehicle.isDefault
+        archive(id)
+        if (wasDefault) promoteDefaultIfNeeded()
+    }
+
+    @Transaction
+    suspend fun saveAndReconcile(vehicle: Vehicle): Int {
+        val mac = vehicle.bluetoothMac?.takeIf { it.isNotBlank() }
+        if (mac != null) {
+            clearBluetoothMacFromOthers(mac, exceptId = vehicle.id)
+        }
+        return if (vehicle.id == 0) {
+            insertAndReconcileDefault(vehicle)
+        } else {
+            updateAndReconcileDefault(vehicle)
+            vehicle.id
+        }
     }
 
     // Deliberately does NOT clear bluetoothMac/bluetoothName — AutoParkWorker already checks
@@ -287,6 +362,7 @@ data class SpotFingerprintRow(
     val isVisited: Boolean,
     val deletedAt: Long?,
     val vehicleId: Int?,
+    val floorLevel: String?,
     val city: String,
     val state: String,
     val isArchived: Boolean,
@@ -485,7 +561,7 @@ interface LocationDao {
                CASE WHEN length(locationDetails) <= 64 THEN ''
                     ELSE substr(locationDetails, length(locationDetails) - 63, 64) END AS notesSuffix,
                timestamp, lat, lng, address, isFavorite, title, isWishlist, isVisited, deletedAt,
-               vehicleId, city, state, isArchived, isPinned
+               vehicleId, city, state, isArchived, isPinned, floorLevel
         FROM location_history
         ORDER BY id ASC
         """
@@ -501,7 +577,7 @@ interface LocationDao {
                CASE WHEN length(locationDetails) <= 64 THEN ''
                     ELSE substr(locationDetails, length(locationDetails) - 63, 64) END AS notesSuffix,
                timestamp, lat, lng, address, isFavorite, title, isWishlist, isVisited, deletedAt,
-               vehicleId, city, state, isArchived, isPinned
+               vehicleId, city, state, isArchived, isPinned, floorLevel
         FROM location_history
         WHERE id > :afterId
         ORDER BY id ASC
@@ -910,6 +986,11 @@ interface LocationDao {
     @Query("UPDATE location_history SET isFavorite = :favorite WHERE id = :spotId")
     suspend fun setFavorite(spotId: Int, favorite: Boolean)
 
+    // Single-column UPDATE, same reasoning as setPinned/setFavorite above — used to clear or
+    // promote a spot's cover photo when one of its photos is deleted (see deleteSpotPhoto).
+    @Query("UPDATE location_history SET imagePath = :path WHERE id = :spotId")
+    suspend fun setImagePath(spotId: Int, path: String)
+
     @Query("UPDATE location_history SET isFavorite = NOT isFavorite WHERE id = :spotId")
     suspend fun toggleFavorite(spotId: Int)
 
@@ -1246,20 +1327,25 @@ interface TagDao {
 
 @Dao
 interface SpotPhotoDao {
+    // id ASC as a secondary tiebreaker on every one of these (not just createdAt, which is only
+    // millisecond-resolution) — a restore/import can insert several of a spot's photos within the
+    // same millisecond, and getOldestForSpot/getForSpot's "oldest" (used to pick which photo to
+    // promote when the cover is deleted, see deleteSpotPhoto) needs a deterministic answer rather
+    // than whatever order SQLite happens to return ties in.
     /** Matches the detail strip display cap — do not load unlimited extras into Compose. */
-    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 24")
+    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC, id ASC LIMIT 24")
     fun observeForSpot(spotId: Int): Flow<List<SpotPhoto>>
 
-    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 24")
+    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC, id ASC LIMIT 24")
     suspend fun getForSpot(spotId: Int): List<SpotPhoto>
 
-    @Query("SELECT path FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 24")
+    @Query("SELECT path FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC, id ASC LIMIT 24")
     suspend fun getPathsForSpotCapped(spotId: Int): List<String>
 
     @Query("SELECT COUNT(*) FROM spot_photos WHERE spotId = :spotId")
     suspend fun countForSpot(spotId: Int): Int
 
-    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC LIMIT 1")
+    @Query("SELECT * FROM spot_photos WHERE spotId = :spotId ORDER BY createdAt ASC, id ASC LIMIT 1")
     suspend fun getOldestForSpot(spotId: Int): SpotPhoto?
 
     @Query("SELECT path FROM spot_photos WHERE spotId IN (:spotIds)")
@@ -1341,7 +1427,7 @@ suspend fun SpotPhotoDao.insertExtraPhotoCapped(spotId: Int, path: String) {
         LocationSpot::class, Vehicle::class, SpotPhoto::class,
         TagEntity::class, LocationTagCrossRef::class
     ],
-    version = 18,
+    version = 19,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1563,6 +1649,12 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_18_19 = object : androidx.room.migration.Migration(18, 19) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE location_history ADD COLUMN floorLevel TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             // The inner check matters: without it, two threads that both observe INSTANCE == null
             // before either enters the synchronized block would — once serialized by the lock —
@@ -1575,7 +1667,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "spotvault_database"
-                ).addMigrations(MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
+                ).addMigrations(MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
                     // Destructive fallback only on a *downgrade* (schema version decreases —
                     // realistically only a dev/debug scenario, never an organic user update). A
                     // forward schema bump with no matching Migration now crashes loudly instead

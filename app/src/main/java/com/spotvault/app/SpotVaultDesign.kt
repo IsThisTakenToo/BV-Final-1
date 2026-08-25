@@ -27,8 +27,11 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -1266,7 +1269,8 @@ fun GradientCtaCard(
     titleColor: Color? = null,
     dense: Boolean = false,
     showSubtitle: Boolean = true,
-    titleFontSize: androidx.compose.ui.unit.TextUnit = androidx.compose.ui.unit.TextUnit.Unspecified
+    titleFontSize: androidx.compose.ui.unit.TextUnit = androidx.compose.ui.unit.TextUnit.Unspecified,
+    subtitleFontSize: androidx.compose.ui.unit.TextUnit = androidx.compose.ui.unit.TextUnit.Unspecified
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -1366,7 +1370,7 @@ fun GradientCtaCard(
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White.copy(alpha = 0.92f),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        fontSize = if (dense) 12.sp else 14.sp,
+                        fontSize = if (subtitleFontSize != androidx.compose.ui.unit.TextUnit.Unspecified) subtitleFontSize else if (dense) 12.sp else 14.sp,
                         modifier = Modifier.padding(top = if (dense) 2.dp else 4.dp),
                         style = wildPortalFloatingTextStyle(TextStyle()).copy(
                             fontWeight = FontWeight.SemiBold,
@@ -1412,6 +1416,7 @@ fun GradientCtaCard(
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodyMedium,
+                        fontSize = subtitleFontSize,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         // Full opacity, not the faded alpha this used to carry — against a solid
                         // gradient card (as opposed to a neutral surface) that fade read as washed
@@ -4341,7 +4346,12 @@ fun SpotVaultBottomBar(
     val vaultSoundContext = LocalContext.current
     val vaultSoundPrefs = remember { vaultSoundContext.getSharedPreferences("SpotVaultPrefs", android.content.Context.MODE_PRIVATE) }
     val navScale = rememberShortScreenNavScale()
-    val barHeight = (96f * navScale).dp
+    // Grown from its original 96dp to make room for the "VAULT" label under the center button —
+    // first-time users routinely mistook that button for decoration (a spinning logo, not
+    // navigation), since it was the only piece of chrome on this screen with no text anywhere near
+    // it. Added here rather than by shrinking vaultIconSize, so the icon's own visual identity —
+    // the glowing hub graphic — stays exactly the size it already was.
+    val barHeight = (120f * navScale).dp
     val pillHeight = (60f * navScale).dp
     val vaultButtonSize = (96f * navScale).dp
     val sideButtonSize = (48f * navScale).dp
@@ -4398,23 +4408,13 @@ fun SpotVaultBottomBar(
             }
         }
 
-        // Center Vault Button, visually popping out
-        Box(
+        // Center Vault button + label, visually popping out of the pill. semantics/clickable live
+        // on this outer Column (not just the icon's own Box below) so tapping the "VAULT" label
+        // opens the Vault exactly the same as tapping the icon itself — the label exists
+        // specifically so the button reads as tappable navigation, not a decorative logo.
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
-                .size(vaultButtonSize)
-                .then(
-                    if (activeDestination == BottomNavDestination.VAULT) {
-                        Modifier.border(
-                            width = 2.dp,
-                            brush = Brush.linearGradient(
-                                listOf(SpotVaultColors.PrimaryBright, SpotVaultColors.Teal)
-                            ),
-                            shape = CircleShape
-                        )
-                    } else {
-                        Modifier
-                    }
-                )
                 .semantics {
                     contentDescription = "Open Vault"
                     role = Role.Button
@@ -4427,13 +4427,184 @@ fun SpotVaultBottomBar(
                         AppSounds.playVaultSound(vaultSoundContext, vaultSoundPrefs)
                         onVaultClick()
                     }
-                ),
-            contentAlignment = Alignment.Center
+                )
         ) {
-            AnimatedVaultIcon(
-                modifier = Modifier.fillMaxSize(),
-                iconSize = vaultIconSize
+            Box(
+                modifier = Modifier
+                    .size(vaultButtonSize)
+                    .then(
+                        if (activeDestination == BottomNavDestination.VAULT) {
+                            Modifier.border(
+                                width = 2.dp,
+                                brush = Brush.linearGradient(
+                                    listOf(SpotVaultColors.PrimaryBright, SpotVaultColors.Teal)
+                                ),
+                                shape = CircleShape
+                            )
+                        } else {
+                            Modifier
+                        }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                AnimatedVaultIcon(
+                    modifier = Modifier.fillMaxSize(),
+                    iconSize = vaultIconSize
+                )
+            }
+            Spacer(modifier = Modifier.height((3f * navScale).dp))
+            Text(
+                text = "VAULT",
+                fontSize = (11f * navScale).sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+                color = if (activeDestination == BottomNavDestination.VAULT) {
+                    SpotVaultColors.Teal
+                } else {
+                    SpotVaultColors.Muted.copy(alpha = 0.85f)
+                }
             )
+        }
+    }
+}
+
+/** Vertical equivalent of [SpotVaultBottomBar] for genuine tablets/unfolded foldables (see
+ * [isGenuineTablet]) — Material 3's large-screen guidance calls for a side rail once there's
+ * enough width, since a bottom bar stretched across a 600dp+ window wastes most of its own span
+ * and sits awkwardly far from either thumb. Same three destinations, same click handlers, same
+ * haptic/sound feedback as [SpotVaultBottomBar] — reuses [BottomNavSideButton] and
+ * [AnimatedVaultIcon] directly rather than re-implementing them, so a future visual change to
+ * either only has to happen once. Deliberately carries no disclaimer text of its own — unlike the
+ * bottom bar, where the legal disclaimer scrolls with it as one animated unit, the rail is narrow
+ * (88dp) and would have to badly truncate that text to fit; SpotVaultMainScaffold instead renders
+ * it as a separate full-width footer strip in rail mode. */
+@Composable
+fun SpotVaultNavigationRail(
+    onVaultClick: () -> Unit,
+    onSettingsClick: () -> Unit,
+    onAppearanceClick: () -> Unit = {},
+    activeDestination: BottomNavDestination? = null,
+    showSettings: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val vaultSoundContext = LocalContext.current
+    val vaultSoundPrefs = remember { vaultSoundContext.getSharedPreferences("SpotVaultPrefs", android.content.Context.MODE_PRIVATE) }
+    // Resolved here, in the composable's own body, not inside drawBehind below — SpotVaultColors.*
+    // are @Composable getters (they read LocalSpotVaultColors.current), and drawBehind's lambda
+    // runs in the draw phase, not composition, so it can't call them directly.
+    val railHairlineColor = SpotVaultColors.Teal.copy(alpha = 0.2f)
+
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(88.dp)
+            .background(SpotVaultColors.Surface.copy(alpha = 0.5f))
+            .drawBehind {
+                // Trailing-edge hairline only (not a full border) — this rail sits flush against
+                // the screen's leading edge, so a border on all four sides would double up with
+                // the window edge on three of them for no visible reason.
+                drawLine(
+                    color = railHairlineColor,
+                    start = androidx.compose.ui.geometry.Offset(size.width, 0f),
+                    end = androidx.compose.ui.geometry.Offset(size.width, size.height),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+            // Unlike the phone bottom bar, this rail is NOT a Scaffold slot — it's a sibling of
+            // the Scaffold in a Row (see SpotVaultMainScaffold), so it gets none of Scaffold's own
+            // inset handling. Without these, the Settings button at the top rendered underneath
+            // the status bar/camera cutout and the Appearance button at the bottom rendered
+            // underneath the navigation bar/gesture inset, both real risks on an edge-to-edge
+            // window (see MainActivity's enableEdgeToEdge()) — the bottom bar avoids the same
+            // problem for its own bottom edge via the identical .navigationBarsPadding() call.
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (showSettings) {
+            BottomNavSideButton(
+                icon = Icons.Default.Settings,
+                contentDescription = "Settings",
+                selected = activeDestination == BottomNavDestination.SETTINGS,
+                onClick = onSettingsClick,
+                buttonSize = 48.dp
+            )
+        } else {
+            Spacer(modifier = Modifier.size(48.dp))
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Same "wrap the icon in a labeled Column" treatment as the phone bottom bar's Vault
+        // button, for the same reason — an unlabeled spinning logo reads as decorative rather
+        // than as navigation, even alongside the Settings/Appearance icon buttons above and below it.
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .semantics {
+                    contentDescription = "Open Vault"
+                    role = Role.Button
+                }
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = {
+                        performAppHaptic(vaultSoundContext, vaultSoundPrefs)
+                        AppSounds.playVaultSound(vaultSoundContext, vaultSoundPrefs)
+                        onVaultClick()
+                    }
+                )
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(76.dp)
+                    .then(
+                        if (activeDestination == BottomNavDestination.VAULT) {
+                            Modifier.border(
+                                width = 2.dp,
+                                brush = Brush.linearGradient(
+                                    listOf(SpotVaultColors.PrimaryBright, SpotVaultColors.Teal)
+                                ),
+                                shape = CircleShape
+                            )
+                        } else {
+                            Modifier
+                        }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                AnimatedVaultIcon(
+                    modifier = Modifier.fillMaxSize(),
+                    iconSize = 60.dp
+                )
+            }
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = "VAULT",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp,
+                color = if (activeDestination == BottomNavDestination.VAULT) {
+                    SpotVaultColors.Teal
+                } else {
+                    SpotVaultColors.Muted.copy(alpha = 0.85f)
+                }
+            )
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        if (showSettings) {
+            BottomNavSideButton(
+                icon = Icons.Default.Palette,
+                contentDescription = "Appearance & Themes",
+                selected = false,
+                onClick = onAppearanceClick,
+                buttonSize = 48.dp
+            )
+        } else {
+            Spacer(modifier = Modifier.size(48.dp))
         }
     }
 }

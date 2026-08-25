@@ -49,6 +49,16 @@ import kotlin.coroutines.resumeWithException
  * the background. See [DriveSyncManager.silentAccessToken]. */
 class DriveReauthRequiredException : Exception("Drive access needs re-authorization; can't do that from the background")
 
+/** [DriveSyncManager.uploadBackup] found that the remote backup's own fingerprint (tagged on the
+ * file via Drive `appProperties` at upload time) no longer matches what this device last knew to
+ * be there — i.e. some other device or session signed into the same account has backed up
+ * different data since this device's own last successful sync. Uploading anyway would silently
+ * overwrite that other device's data with no warning to either side; downloading anyway would do
+ * the same to this device's. Carries the [accessToken] already in hand so the caller can offer
+ * [DriveSyncManager.ConflictChoice] via [DriveSyncManager.resolveConflict] without a fresh
+ * consent round-trip — same resolution flow already used for the connect-time conflict case. */
+class DriveSyncConflictException(val accessToken: String) : Exception("Local and Drive backups have diverged")
+
 object DriveSyncManager {
     private const val DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata"
     private const val BACKUP_FILE_NAME = "droppinvault_backup.zip"
@@ -215,6 +225,10 @@ object DriveSyncManager {
         runCatching { findBackupFileId(accessToken) != null }
     }
 
+    /** [forceOverwrite] skips the divergence check below — only [resolveConflict]'s
+     * OVERWRITE_DRIVE_BACKUP branch sets it, since by that point the user has already been shown
+     * the conflict and explicitly chosen to overwrite; re-throwing the same conflict from inside
+     * that same resolution would make the choice impossible to act on. */
     suspend fun uploadBackup(
         context: Context,
         dao: LocationDao,
@@ -222,20 +236,44 @@ object DriveSyncManager {
         spotPhotoDao: SpotPhotoDao,
         tagDao: TagDao,
         prefs: SharedPreferences,
-        accessToken: String
+        accessToken: String,
+        forceOverwrite: Boolean = false
     ): Result<Unit> = withContext(Dispatchers.IO) {
         backupMutex.withLock { runCatching {
             val tempFile = File(context.cacheDir, "drive_upload_${System.currentTimeMillis()}.zip")
             try {
                 VaultBackupManager.exportBackup(context, dao, vehicleDao, spotPhotoDao, tagDao, prefs, Uri.fromFile(tempFile))
                     .getOrThrow()
+                val fingerprint = VaultBackupManager.computeFingerprint(dao, vehicleDao, spotPhotoDao, tagDao, prefs)
+
+                // Divergence check: drive_last_known_remote_fingerprint is what THIS device
+                // believes is currently sitting in Drive, set from the fingerprint tagged on
+                // whatever it last uploaded or downloaded. If the file actually in Drive right now
+                // carries a different fingerprint than that AND isn't already what we're about to
+                // upload, some other device/session on this same account backed up different data
+                // since this device's last sync — uploading now would silently discard it with no
+                // trace, the exact silent-overwrite risk this whole check exists to catch. A first
+                // upload (drive_last_known_remote_fingerprint not set yet) never trips this.
+                if (!forceOverwrite) {
+                    val existingFileId = findBackupFileId(accessToken)
+                    if (existingFileId != null) {
+                        val remoteFingerprint = fetchRemoteFingerprint(accessToken, existingFileId)
+                        val lastKnownRemote = prefs.getString("drive_last_known_remote_fingerprint", null)
+                        if (remoteFingerprint != null && remoteFingerprint != fingerprint &&
+                            lastKnownRemote != null && remoteFingerprint != lastKnownRemote
+                        ) {
+                            throw DriveSyncConflictException(accessToken)
+                        }
+                    }
+                }
+
                 // Upload the new backup *before* touching the old one — deleting first and
                 // uploading second would leave a window where a dropped connection or interrupted
                 // upload wipes the account's only backup and replaces it with nothing. Each Drive
                 // upload creates a new file rather than overwriting by name, so old copies (the
                 // previous backup, plus any orphaned duplicates left by earlier interruptions) are
                 // only removed once the new one is confirmed to exist.
-                val newFileId = uploadFile(accessToken, tempFile)
+                val newFileId = uploadFile(accessToken, tempFile, fingerprint)
                 // Best-effort cleanup: the new backup already exists at this point, which is the
                 // part that actually matters, so a failure removing an old/duplicate copy (a
                 // network hiccup, a stale id that's already gone) shouldn't turn a successful
@@ -251,10 +289,11 @@ object DriveSyncManager {
                 // "Last backup" timestamp — previously only the Worker persisted this, so a
                 // manual upload looked successful in the moment but silently reverted to "No
                 // backup uploaded yet" the next time Settings was reopened.
-                val fingerprint = VaultBackupManager.computeFingerprint(dao, vehicleDao, spotPhotoDao, tagDao, prefs)
                 prefs.edit()
                     .putLong("drive_last_backup_success", System.currentTimeMillis())
                     .putString("drive_last_backup_fingerprint", fingerprint)
+                    .putString("drive_last_known_remote_fingerprint", fingerprint)
+                    .remove("drive_sync_conflict_pending")
                     .apply()
             } finally {
                 tempFile.delete()
@@ -280,12 +319,43 @@ object DriveSyncManager {
                 // First-run restore only: an empty vault is being hydrated from the user's own
                 // prior backup, not merged with anything — same "replace" semantics the manual
                 // Import Backup flow uses when the user explicitly chooses to replace.
-                VaultBackupManager.importBackup(context, db, dao, vehicleDao, spotPhotoDao, tagDao, prefs, Uri.fromFile(tempFile), replaceExisting = true)
+                val result = VaultBackupManager.importBackup(context, db, dao, vehicleDao, spotPhotoDao, tagDao, prefs, Uri.fromFile(tempFile), replaceExisting = true)
                     .getOrThrow()
+                // Local now matches what's actually in Drive — record the file's own tagged
+                // fingerprint (not a value recomputed from local state) as what this device knows
+                // to be there, so uploadBackup's divergence check has a correct baseline for its
+                // *next* upload instead of treating this device as never having synced.
+                fetchRemoteFingerprint(accessToken, fileId)?.let { remoteFingerprint ->
+                    prefs.edit()
+                        .putString("drive_last_known_remote_fingerprint", remoteFingerprint)
+                        .remove("drive_sync_conflict_pending")
+                        .apply()
+                }
+                result
             } finally {
                 tempFile.delete()
             }
         } }
+    }
+
+    /** Metadata-only read (no file content) of the fingerprint [uploadFile] tags onto a backup at
+     * upload time via Drive `appProperties` — the app-private key/value store Drive attaches to a
+     * file, invisible in the user's own Drive UI. Null if the file has none (a backup uploaded
+     * before this check existed) or the request fails, both of which [uploadBackup] treats as "no
+     * known baseline to compare against," never as a false conflict. */
+    private fun fetchRemoteFingerprint(accessToken: String, fileId: String): String? {
+        val request = Request.Builder()
+            .url("$DRIVE_FILES_URL/$fileId?fields=${Uri.encode("appProperties")}")
+            .header("Authorization", "Bearer $accessToken")
+            .get()
+            .build()
+        return runCatching {
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val body = JSONObject(response.body?.string().orEmpty())
+                body.optJSONObject("appProperties")?.optString("fingerprint", "")?.ifBlank { null }
+            }
+        }.getOrNull()
     }
 
     private fun findBackupFileId(accessToken: String): String? = findAllBackupFileIds(accessToken).firstOrNull()
@@ -339,21 +409,25 @@ object DriveSyncManager {
     }
 
     /** Returns the newly-created file's Drive id, so the caller can tell it apart from any other
-     * (old or orphaned) file sharing the same [BACKUP_FILE_NAME] when cleaning those up. */
-    private fun uploadFile(accessToken: String, file: File): String {
+     * (old or orphaned) file sharing the same [BACKUP_FILE_NAME] when cleaning those up.
+     * [fingerprint] is tagged onto the uploaded file's `appProperties` so a later upload from any
+     * device signed into this same account can tell whether this exact file is still there
+     * unmodified — see [uploadBackup]'s divergence check and [fetchRemoteFingerprint]. */
+    private fun uploadFile(accessToken: String, file: File, fingerprint: String): String {
         // Years of photos make a 100–512MB zip common. Multipart must restart from byte 0 after
         // any stall; resumable uploads 8MB chunks and can query the session after a blip.
         return if (file.length() <= RESUMABLE_UPLOAD_THRESHOLD_BYTES) {
-            uploadFileMultipart(accessToken, file)
+            uploadFileMultipart(accessToken, file, fingerprint)
         } else {
-            uploadFileResumable(accessToken, file)
+            uploadFileResumable(accessToken, file, fingerprint)
         }
     }
 
-    private fun uploadFileMultipart(accessToken: String, file: File): String {
+    private fun uploadFileMultipart(accessToken: String, file: File, fingerprint: String): String {
         val metadata = JSONObject().apply {
             put("name", BACKUP_FILE_NAME)
             put("parents", JSONArray().put("appDataFolder"))
+            put("appProperties", JSONObject().put("fingerprint", fingerprint))
         }
         val body = MultipartBody.Builder()
             .setType("multipart/related".toMediaType())
@@ -378,11 +452,12 @@ object DriveSyncManager {
         }
     }
 
-    private fun uploadFileResumable(accessToken: String, file: File): String {
+    private fun uploadFileResumable(accessToken: String, file: File, fingerprint: String): String {
         val total = file.length()
         val metadata = JSONObject().apply {
             put("name", BACKUP_FILE_NAME)
             put("parents", JSONArray().put("appDataFolder"))
+            put("appProperties", JSONObject().put("fingerprint", fingerprint))
         }.toString()
         val initRequest = Request.Builder()
             .url("$DRIVE_UPLOAD_URL?uploadType=resumable&fields=${Uri.encode("id")}")
@@ -597,7 +672,10 @@ object DriveSyncManager {
             ConflictChoice.RESTORE_FROM_DRIVE ->
                 downloadAndRestore(context, db, dao, vehicleDao, spotPhotoDao, tagDao, prefs, accessToken).getOrThrow()
             ConflictChoice.OVERWRITE_DRIVE_BACKUP -> {
-                uploadBackup(context, dao, vehicleDao, spotPhotoDao, tagDao, prefs, accessToken).getOrThrow()
+                // forceOverwrite: the user was just shown this exact divergence and chose to
+                // overwrite it — re-running uploadBackup's own divergence check here would throw
+                // DriveSyncConflictException right back at the choice that was meant to resolve it.
+                uploadBackup(context, dao, vehicleDao, spotPhotoDao, tagDao, prefs, accessToken, forceOverwrite = true).getOrThrow()
                 null
             }
         }

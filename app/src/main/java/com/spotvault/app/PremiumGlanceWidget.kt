@@ -460,7 +460,7 @@ private fun PremiumTrackingContent(state: PremiumWidgetState) {
                 buttonHeightDp = PremiumTrackingSubActionHeight,
                 expandVertically = false,
                 compactLabel = false,
-                onClick = actionStartActivity(showMapIntent(context, state.trackingLat, state.trackingLng, state.trackingAddress))
+                onClick = actionStartActivity(showMapIntent(context, state.trackingLat, state.trackingLng))
             )
         }
         Spacer(modifier = GlanceModifier.height(6.dp))
@@ -861,17 +861,17 @@ private fun BoxClickable(
  * the tracked location to an external maps app straight off the home screen with no unlock at
  * all — same bypass TimerService's "Show Map" notification action guards against — so it routes
  * through MainActivity's own App Lock gate instead, same as the Compass button beside it. */
-private fun showMapIntent(context: Context, lat: Double, lng: Double, address: String): Intent {
-    val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
-    if (prefs.getBoolean(APP_LOCK_ENABLED_PREF, false)) {
-        return PremiumWidgetIntents.openMapsShow(context, lat, lng)
-    }
-    val label = address.ifBlank { "Tracked Spot" }
-    val uri = android.net.Uri.parse("geo:0,0?q=$lat,$lng(${android.net.Uri.encode(label)})")
-    return Intent(Intent.ACTION_VIEW, uri).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-}
+// Always routes through MainActivity (openMapsShow), not just when App Lock happens to be on
+// at the moment this widget last rendered — that "only when currently on" branch baked the
+// App-Lock decision into the PendingIntent at render time, which could go stale: turning App
+// Lock on after the widget last rendered left its "Show Map" PendingIntent still pointing
+// straight at Maps until the next widget refresh (up to ~1.6s per refreshAllWidgetsAwait, or
+// longer waiting on the periodic update) actually rebuilt it. MainActivity's own handling of
+// ACTION_SHOW_MAP already re-checks the LIVE App Lock state (LaunchedEffect keyed on
+// isAppUnlocked.value) before acting, so routing through it unconditionally closes that window
+// instead of trusting a snapshot from whenever the widget was last drawn.
+private fun showMapIntent(context: Context, lat: Double, lng: Double): Intent =
+    PremiumWidgetIntents.openMapsShow(context, lat, lng)
 
 private fun relayIntent(context: Context, action: String): Intent =
     QuickActionRelayActivity.intentForAction(context, action)

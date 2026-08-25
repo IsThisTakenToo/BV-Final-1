@@ -47,6 +47,7 @@ object ActiveTrackingHelper {
             .remove("timer_end_time")
             .remove("current_address")
             .remove(PINNED_VEHICLE_ID_PREF)
+            .remove("floor_level")
             .putBoolean("is_alarm_ringing", false)
             .commit()
 
@@ -63,9 +64,14 @@ object ActiveTrackingHelper {
                 .remove("timer_end_time")
                 .remove("current_address")
                 .remove(PINNED_VEHICLE_ID_PREF)
+                .remove("floor_level")
                 .putBoolean("is_alarm_ringing", false)
                 .commit()
         }
+        // Single shared chokepoint for every "stop tracking" path (Found, auto-park auto-clear,
+        // manual cancel, settings reset) — covers all of them for the watch tile without needing a
+        // push call at each individual caller.
+        TrackingWearSync.pushTrackingState(context)
     }
 
     fun stopTrackingServiceAndNotifications(context: Context) {

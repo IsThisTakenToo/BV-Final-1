@@ -169,8 +169,14 @@ fun VaultCompassDial(
         val radius = size.minDimension / 2f
         val dialDeg = dialRotationDegrees()
         val needleDeg = needleRotationDegrees()
-        val pulsePhase = pulsePhaseState?.value ?: 0f
-        val sweepPhase = sweepPhaseState?.value ?: 0f
+        // ThemeState.reduceAnimations frozen constants, not pulsePhaseState/sweepPhaseState's own
+        // live .value — those State objects stay subscribed to their rememberInfiniteTransition
+        // regardless (harmless on its own, same reasoning as the rest of this file), but reading
+        // .value here unconditionally meant this draw phase re-ran on every animation frame even
+        // with Reduce Animations on, unlike every ambient background in AppBackgroundPatterns.kt,
+        // which this same setting is documented elsewhere as freezing.
+        val pulsePhase = if (ThemeState.reduceAnimations) 0.5f else (pulsePhaseState?.value ?: 0f)
+        val sweepPhase = if (ThemeState.reduceAnimations) 0f else (sweepPhaseState?.value ?: 0f)
 
         when (style) {
             CompassStyle.CLASSIC -> drawClassicCompass(center, radius, palette, dialDeg, needleDeg)

@@ -79,6 +79,7 @@ fun CompassNavigationScreen(
     targetLng: Double,
     targetTitle: String,
     targetSubtitle: String = "",
+    floorLevel: String? = null,
     prefs: android.content.SharedPreferences,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -190,7 +191,14 @@ fun CompassNavigationScreen(
         bearing?.let { formatBearingLabel(it.toDouble()) } ?: "—"
     }
 
-    Box(
+    // AdaptiveTabletContainer, not a plain Box — every other full-screen destination in the nav
+    // graph (Vault, Settings, the photo viewer, the home screen) already caps and centers its
+    // content on genuine tablets/unfolded foldables via this same wrapper; this screen was the one
+    // gap, so its CompassTopBar/OpenInMapsButton fillMaxWidth() rows would stretch edge-to-edge on
+    // a wide window instead of matching the same capped width every other screen already gets. The
+    // 300dp dial itself was never affected (it's a fixed size, not fillMaxWidth), only the bar and
+    // button around it.
+    AdaptiveTabletContainer(
         modifier = modifier.fillMaxSize()
     ) {
         Column(
@@ -206,9 +214,17 @@ fun CompassNavigationScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Column(
+            // HingeAvoidingCenterBox wraps this instead of the Column's own contentAlignment —
+            // a clamshell phone unfolded still has a horizontal hinge running through roughly the
+            // middle of this weight(1f) region, and Center arrangement aims the dial/distance/
+            // bearing stack directly at it, the one thing this screen exists to show clearly.
+            HingeAvoidingCenterBox(
                 modifier = Modifier
                     .weight(1f)
+                    .fillMaxWidth()
+            ) {
+            Column(
+                modifier = Modifier
                     .fillMaxWidth()
                     // No scroll fallback before this — the 300dp dial, 52sp distance text, and
                     // bearing/GPS-status lines don't shrink with a larger system font size, so on
@@ -216,8 +232,7 @@ fun CompassNavigationScreen(
                     // bar and "Open in Maps" button, with Center arrangement silently cropping
                     // both ends instead of anything being reachable.
                     .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 GlassSurface(
                     modifier = Modifier
@@ -261,6 +276,25 @@ fun CompassNavigationScreen(
                     fontWeight = FontWeight.SemiBold,
                     color = if (hasArrived) SpotVaultColors.PrimaryBright else SpotVaultColors.Teal
                 )
+
+                // GPS is at its least reliable exactly where this matters most (parking garages,
+                // dense woods, urban canyons) — a saved floor/landmark note is the one thing that
+                // still reliably tells you where the spot is once lat/lng alone has gotten you close.
+                if (hasArrived && !floorLevel.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = floorLevel,
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SpotVaultColors.OnSurface
+                    )
+                    Text(
+                        text = "your saved note",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = SpotVaultColors.Muted,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
 
                 if (userLocation == null) {
                     Spacer(modifier = Modifier.height(12.dp))
@@ -322,6 +356,7 @@ fun CompassNavigationScreen(
                     )
                 }
             }
+            } // close HingeAvoidingCenterBox
 
             Spacer(modifier = Modifier.height(16.dp))
             OpenInMapsButton(targetLat = targetLat, targetLng = targetLng)

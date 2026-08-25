@@ -48,7 +48,13 @@ class AutoBackupWorker(private val context: Context, params: WorkerParameters) :
             // ("DropPinVault_Backup_...") — sharing one meant a manual export saved into the same
             // auto-backup folder could get silently deleted by pruneOldBackups below once it
             // aged past the keep-count, the same as any other auto-generated file.
-            val fileName = "DropPinVault_AutoBackup_${SimpleDateFormat("yyyy-MM-dd_HHmm", Locale.US).format(Date())}.zip"
+            // Fixed UTC, not the device's current default zone — this embedded timestamp is only
+            // ever read back by pruneOldBackups' own parser below to sort files oldest-to-newest;
+            // anchoring both to UTC keeps that ordering correct even if the device's timezone
+            // changes between backups (travel, DST) instead of drifting the two out of sync.
+            val fileName = "DropPinVault_AutoBackup_${
+                SimpleDateFormat("yyyy-MM-dd_HHmm", Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(Date())
+            }.zip"
             val newFile = treeDoc.createFile("application/zip", fileName)
                 ?: return giveUp("Could not create backup file in the chosen folder")
 
@@ -77,7 +83,11 @@ class AutoBackupWorker(private val context: Context, params: WorkerParameters) :
     }
 
     private val backupFilenameTimestamp = Regex("""AutoBackup_(\d{4}-\d{2}-\d{2}_\d{4})\.zip$""")
-    private val backupFilenameFormat = SimpleDateFormat("yyyy-MM-dd_HHmm", Locale.US)
+    // Must match the UTC zone the filename was generated with above, or parsing re-interprets the
+    // embedded timestamp against the device's current zone instead of the one it was written in.
+    private val backupFilenameFormat = SimpleDateFormat("yyyy-MM-dd_HHmm", Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("UTC")
+    }
 
     /** Keeps only the most recent N auto-backups so the chosen destination doesn't grow
      * forever either — same "years of use" thinking as everywhere else. Sorted by the timestamp

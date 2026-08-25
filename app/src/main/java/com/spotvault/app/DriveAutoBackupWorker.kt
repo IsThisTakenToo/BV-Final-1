@@ -60,12 +60,23 @@ class DriveAutoBackupWorker(private val context: Context, params: WorkerParamete
             // so every caller (this worker, onboarding's connect, Settings' "Back Up Now") gets
             // consistent bookkeeping from one place — nothing left to write here.
             val result = DriveSyncManager.uploadBackup(context, dao, vehicleDao, spotPhotoDao, tagDao, prefs, accessToken)
+            val failure = result.exceptionOrNull()
             if (result.isSuccess) {
                 prefs.edit().remove("drive_last_backup_error").apply()
                 Result.success()
+            } else if (failure is DriveSyncConflictException) {
+                // Another device/session backed up different data since this one last synced —
+                // retrying won't resolve that, only the user choosing a side can (Settings surfaces
+                // this flag as a conflict banner, same RESTORE_FROM_DRIVE/OVERWRITE_DRIVE_BACKUP
+                // choice as the connect-time conflict). Not treated as an error state either —
+                // "Last backup" stays whatever it last legitimately was rather than showing a scary
+                // failure message for something that isn't a failure so much as a decision pending.
+                android.util.Log.w("DriveAutoBackup", "Drive sync conflict detected — awaiting user resolution")
+                prefs.edit().putBoolean("drive_sync_conflict_pending", true).apply()
+                Result.success()
             } else {
-                val message = result.exceptionOrNull()?.message ?: "Drive upload failed"
-                android.util.Log.e("DriveAutoBackup", "Drive auto-backup failed", result.exceptionOrNull())
+                val message = failure?.message ?: "Drive upload failed"
+                android.util.Log.e("DriveAutoBackup", "Drive auto-backup failed", failure)
                 prefs.edit().putString("drive_last_backup_error", prefsSafeError(message)).apply()
                 if (runAttemptCount >= MAX_DRIVE_AUTO_BACKUP_ATTEMPTS) Result.success() else Result.retry()
             }

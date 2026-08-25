@@ -57,6 +57,7 @@ object VaultBackupManager {
     private const val MAX_IMPORT_TITLE_CHARS = 200
     private const val MAX_IMPORT_ADDRESS_CHARS = 400
     private const val MAX_IMPORT_CITY_STATE_CHARS = 80
+    private const val MAX_IMPORT_FLOOR_LEVEL_CHARS = 80
     private const val MAX_IMPORT_VEHICLES = 80
     /** Hard ceiling for spots imported from one backup — bounds Room WAL on replace restores. */
     private const val MAX_IMPORT_SPOTS = 10_000
@@ -467,7 +468,8 @@ object VaultBackupManager {
                 feed(s.city); feedSep()
                 feed(s.state); feedSep()
                 feed(s.isArchived.toString()); feedSep()
-                feed(s.isPinned.toString())
+                feed(s.isPinned.toString()); feedSep()
+                feed(s.floorLevel.orEmpty())
                 feedEnd()
             }
             afterSpotId = page.last().id
@@ -1200,7 +1202,8 @@ object VaultBackupManager {
                 city = item.optString("city", "").take(MAX_IMPORT_CITY_STATE_CHARS),
                 state = item.optString("state", "").take(MAX_IMPORT_CITY_STATE_CHARS),
                 isArchived = isArchived,
-                isPinned = item.optBoolean("isPinned", false)
+                isPinned = item.optBoolean("isPinned", false),
+                floorLevel = item.optString("floorLevel", "").take(MAX_IMPORT_FLOOR_LEVEL_CHARS).ifBlank { null }
             )
         )
         return newId.toInt()
@@ -1336,6 +1339,7 @@ object VaultBackupManager {
             put("deletedAt", spot.deletedAt ?: JSONObject.NULL)
             put("isArchived", spot.isArchived)
             put("isPinned", spot.isPinned)
+            put("floorLevel", spot.floorLevel.orEmpty())
             put("vehicleExportIndex", vehicleExportIndex ?: JSONObject.NULL)
         }
     }

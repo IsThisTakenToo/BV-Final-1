@@ -2,4 +2,8 @@
 <paths>
     <files-path name="spotvault_photos" path="images/" />
     <files-path name="spotvault_exports" path="exports/" />
+    <!-- Photos restored from a local/Drive backup land in filesDir/vault_images/ (see
+         VaultBackupManager's backupImagesDir), not images/ above — sharing one of those photos
+         without this root throws "Failed to find configured root that contains the file". -->
+    <files-path name="spotvault_vault_images" path="vault_images/" />
 </paths>

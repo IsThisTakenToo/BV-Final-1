@@ -125,7 +125,9 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
@@ -149,10 +151,12 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.tasks.await
+import androidx.room.withTransaction
 import java.io.File
 
 @Composable
@@ -278,6 +282,7 @@ private const val KEY_SHOW_TIMER_DIALOG = "show_timer_dialog"
 private const val KEY_PENDING_GALLERY_SPOT_ID = "pending_gallery_spot_id"
 private const val KEY_PENDING_CAMERA_SPOT_ID = "pending_camera_spot_id"
 private const val KEY_PENDING_CAMERA_PHOTO_PATH = "pending_camera_photo_path"
+private const val KEY_WAS_PROCESSING_PHOTO = "was_processing_photo"
 private const val TAG_CLOUD_CHIP_CAP = 80
 
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
@@ -292,6 +297,12 @@ class MainActivity : FragmentActivity() {
     private var tempOcrTextForDialog: String = ""
     private var tempProminentOcrTextForDialog: String = ""
     private var isProcessingPhoto = mutableStateOf(false)
+    // Best-effort last-known-location accuracy, used only to decide whether the save dialog's
+    // floor-level prompt auto-expands — never the coordinate actually saved (that's always a
+    // fresh resolveCurrentLocation() call at Pin-confirm time, see processPhotoAndPin). A
+    // mutableState (not a plain var like tempOcrTextForDialog above) because this can resolve
+    // slightly after the dialog is already showing, and needs to trigger recomposition when it does.
+    private var pinFlowAccuracyHint = mutableStateOf<Float?>(null)
     private var instantLat: Double = 0.0
     private var instantLng: Double = 0.0
 
@@ -680,8 +691,16 @@ class MainActivity : FragmentActivity() {
                 // A Toast alone left a user who'd permanently denied either permission
                 // permanently stuck — Android will never show the system prompt again once
                 // that's happened, so the only way back in is the app's own Settings page.
+                // Checks both location permissions, not just fine — on Android 12+ a user can
+                // deny "Precise location" specifically (leaving ACCESS_FINE_LOCATION permanently
+                // denied) while ACCESS_COARSE_LOCATION's own rationale is still show-able, or vice
+                // versa; checking only one could miss routing to Settings for the one that's
+                // actually stuck.
                 val permanentlyDenied = (!cameraGranted && isPermissionPermanentlyDenied(this, prefs, Manifest.permission.CAMERA)) ||
-                    (!locGranted && isPermissionPermanentlyDenied(this, prefs, Manifest.permission.ACCESS_FINE_LOCATION))
+                    (!locGranted && (
+                        isPermissionPermanentlyDenied(this, prefs, Manifest.permission.ACCESS_FINE_LOCATION) ||
+                            isPermissionPermanentlyDenied(this, prefs, Manifest.permission.ACCESS_COARSE_LOCATION)
+                        ))
                 if (permanentlyDenied) {
                     showPermissionSettingsDialog(this, "Camera and location access are needed to Snap. Enable them for DropPin Vault in Settings.")
                 } else {
@@ -696,7 +715,9 @@ class MainActivity : FragmentActivity() {
                 dialogSessionKey = System.currentTimeMillis()
                 showTimerDialog.value = true
             } else {
-                if (isPermissionPermanentlyDenied(this, prefs, Manifest.permission.ACCESS_FINE_LOCATION)) {
+                if (isPermissionPermanentlyDenied(this, prefs, Manifest.permission.ACCESS_FINE_LOCATION) ||
+                    isPermissionPermanentlyDenied(this, prefs, Manifest.permission.ACCESS_COARSE_LOCATION)
+                ) {
                     showPermissionSettingsDialog(this, "Location access is needed to Pin. Enable it for DropPin Vault in Settings.")
                 } else {
                     Toast.makeText(this, "Location permission is required to Pin.", Toast.LENGTH_SHORT).show()
@@ -852,6 +873,14 @@ class MainActivity : FragmentActivity() {
             state.getString(KEY_PENDING_CAMERA_PHOTO_PATH)?.let { path ->
                 pendingCameraPhotoFile = File(path)
             }
+            // A config change landing mid-OCR (see onSaveInstanceState's comment) killed the
+            // coroutine doing the work with no dialog ever having appeared to restore in the first
+            // place — photoFile is already back by this point, so simply running OCR again on it
+            // picks the flow back up instead of leaving the user stuck with a photo already
+            // captured but no way forward except retaking it.
+            if (state.getBoolean(KEY_WAS_PROCESSING_PHOTO, false) && photoFile != null && !showTimerDialog.value) {
+                extractOcrAndShowDialog()
+            }
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
@@ -979,7 +1008,22 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         setContent {
             val windowSizeClass = calculateWindowSizeClass(this@MainActivity)
-            CompositionLocalProvider(LocalWindowSizeClass provides windowSizeClass) {
+            // Collected once per Activity instance (this@MainActivity as the remember key), not
+            // re-created every recomposition — WindowInfoTracker's Flow is cold and cheap to
+            // resubscribe to, but there's no reason to. collectAsStateWithLifecycle handles
+            // start/stop around STARTED automatically, same pattern already used for the
+            // auto-park/motion prefs Flows elsewhere in this file.
+            val windowLayoutInfo by remember(this@MainActivity) {
+                androidx.window.layout.WindowInfoTracker.getOrCreate(this@MainActivity)
+                    .windowLayoutInfo(this@MainActivity)
+            }.collectAsStateWithLifecycle(initialValue = null)
+            val foldingFeature = windowLayoutInfo?.displayFeatures
+                ?.filterIsInstance<androidx.window.layout.FoldingFeature>()
+                ?.firstOrNull()
+            CompositionLocalProvider(
+                LocalWindowSizeClass provides windowSizeClass,
+                LocalFoldingFeature provides foldingFeature
+            ) {
             val baseDensity = LocalDensity.current
             CompositionLocalProvider(
                 LocalDensity provides Density(
@@ -1263,6 +1307,8 @@ class MainActivity : FragmentActivity() {
                             photoPath = photoFile?.absolutePath ?: "",
                             ocrText = tempOcrTextForDialog,
                             prominentOcrText = tempProminentOcrTextForDialog,
+                            accuracyHintMeters = pinFlowAccuracyHint.value,
+                            onRunOcr = { path -> runTextRecognition(path) },
                             onDismiss = {
                                 showTimerDialog.value = false
                                 photoFile?.delete()
@@ -1274,10 +1320,11 @@ class MainActivity : FragmentActivity() {
                                 photoFile = null
                                 checkPermissionsAndAction(isCamera = true)
                             },
-                            onPin = { mins: Int, title: String, note: String, isActiveTracking: Boolean, vehicleId: Int?, tags: List<String> ->
+                            onPin = { mins: Int, title: String, note: String, isActiveTracking: Boolean, vehicleId: Int?, tags: List<String>, floorLevel: String ->
                                 showTimerDialog.value = false
-                                processPhotoAndPin(mins.toLong() * 60 * 1000L, title, note, isActiveTracking, vehicleId, tags)
-                            }
+                                processPhotoAndPin(mins.toLong() * 60 * 1000L, title, note, isActiveTracking, vehicleId, tags, floorLevel)
+                            },
+                            scaffoldBottomInset = bottomInset
                         )
                         }
                     }
@@ -1296,7 +1343,7 @@ class MainActivity : FragmentActivity() {
                     }
                     
                     if (isProcessingPhoto.value) {
-                        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)), contentAlignment = Alignment.Center) {
+                        HingeAvoidingCenterBox(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f))) {
                             GlassSurface(
                                 modifier = Modifier.padding(32.dp).fillMaxWidth(0.7f).adaptiveMaxContentWidth(),
                                 shape = RoundedCornerShape(24.dp)
@@ -1379,6 +1426,12 @@ class MainActivity : FragmentActivity() {
         pendingCameraPhotoFile?.absolutePath?.let {
             outState.putString(KEY_PENDING_CAMERA_PHOTO_PATH, it)
         }
+        // See the matching restore in onCreate — without this, a config change landing mid-OCR
+        // (isProcessingPhoto true, showTimerDialog not yet true) had nothing telling the new
+        // instance to pick that work back up: photoFile/tempOcrTextForDialog above only capture
+        // OCR's *finished* output, not "OCR was still running," so the timer dialog just never
+        // appeared and the user was stuck on the home screen with an orphaned photo already on disk.
+        outState.putBoolean(KEY_WAS_PROCESSING_PHOTO, isProcessingPhoto.value)
     }
 
     override fun onStop() {
@@ -1451,6 +1504,10 @@ class MainActivity : FragmentActivity() {
         }
         applyKeepScreenOnFlag()
         prefs.registerOnSharedPreferenceChangeListener(prefListener)
+        // Catch-up for a paired watch's tile — covers any tracking start/stop that happened through
+        // a path that doesn't already push directly (or while the watch was unpaired/off).
+        TrackingWearSync.pushTrackingState(this)
+        ThemeWearSync.pushThemeState(this, prefs)
     }
 
     override fun onPause() {
@@ -1634,6 +1691,19 @@ class MainActivity : FragmentActivity() {
 
     private fun ingestWidgetIntent(intent: Intent?) {
         if (intent == null) return
+        // MainActivity is exported=true only for the Maps share-sheet SEND filter — but exported
+        // is component-wide, so any other app on the device can still start it directly with an
+        // explicit intent carrying these same extra keys (fire the camera via ACTION_SNAP, open
+        // navigation to attacker-chosen coordinates via ACTION_NAVIGATE_MAPS, etc.), bypassing the
+        // widget/tile entirely. Every legitimate widget/tile/notification-action intent to this
+        // Activity is built through PremiumWidgetIntents, which stamps a random per-install token
+        // nothing outside this process can know — reject silently (fall through to a normal plain
+        // launch) rather than acting on these extras if it's missing or wrong.
+        val expectedToken = getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+            .getString("widget_intent_token", null)
+        if (expectedToken == null || intent.getStringExtra(PremiumWidgetIntents.EXTRA_INTERNAL_TOKEN) != expectedToken) {
+            return
+        }
         var changed = false
         val spotId = intent.getIntExtra(PremiumWidgetIntents.EXTRA_SPOT_ID, -1)
         if (spotId >= 0) {
@@ -1736,9 +1806,19 @@ class MainActivity : FragmentActivity() {
         note: String,
         isActiveTracking: Boolean = true,
         vehicleId: Int? = null,
-        tags: List<String> = emptyList()
+        tags: List<String> = emptyList(),
+        floorLevel: String = ""
     ) {
         lifecycleScope.launch {
+            // NonCancellable: rotation (or any other config change) during the up-to-~7s
+            // resolveCurrentLocation() call below used to destroy this Activity, cancel
+            // lifecycleScope, and abort this coroutine before the DB insert / is_pinned prefs
+            // write ever ran — silently losing a confirmed Pin/Snap save with no error and no
+            // trace left behind. Everything through the TimerService start at the end of this
+            // function only touches prefs/Room/system services (not Activity-instance Compose
+            // state), so it's safe to guarantee it all runs to completion regardless of what
+            // happens to this particular Activity instance in the meantime.
+            withContext(NonCancellable) {
             val vehicleDao = AppDatabase.getDatabase(this@MainActivity).vehicleDao()
             val pinWork = withContext(Dispatchers.IO) {
                 // Fetch fresh right now, at the moment the user actually confirms the pin —
@@ -1786,6 +1866,11 @@ class MainActivity : FragmentActivity() {
                         .putString("location_details", prefsSafeLocationDetails(initialLocationDetails))
                         .putString("current_address", "Loading address...")
                         .also { applyPinnedVehiclePrefs(it, pinnedVehicle) }
+                    if (floorLevel.isNotBlank()) {
+                        editor.putString("floor_level", floorLevel)
+                    } else {
+                        editor.remove("floor_level")
+                    }
                     if (timeMs > 0) {
                         editor.putLong("timer_end_time", System.currentTimeMillis() + timeMs)
                     } else {
@@ -1807,7 +1892,8 @@ class MainActivity : FragmentActivity() {
                         newImagePath = currentPhotoPath,
                         newLocationDetails = initialLocationDetails,
                         newTitle = title,
-                        newVehicleId = resolvedVehicleId
+                        newVehicleId = resolvedVehicleId,
+                        newFloorLevel = floorLevel.ifBlank { null }
                     )
                     Triple(merged.id, merged, true)
                 } else {
@@ -1820,7 +1906,8 @@ class MainActivity : FragmentActivity() {
                         address = "",
                         isFavorite = false,
                         title = title,
-                        vehicleId = resolvedVehicleId
+                        vehicleId = resolvedVehicleId,
+                        floorLevel = floorLevel.ifBlank { null }
                     )
                     // Needs the real generated id (not the 0 default still sitting on newSpot) —
                     // tags are assigned through the junction table by locationId, so this has to
@@ -1937,6 +2024,7 @@ class MainActivity : FragmentActivity() {
                 ContextCompat.startForegroundService(this@MainActivity, intent)
                 }
             }
+            } // end withContext(NonCancellable) — see comment at the top of this launch block
         }
     }
 
@@ -1978,6 +2066,7 @@ class MainActivity : FragmentActivity() {
                 .apply()
 
             isPinned.value = true
+            TrackingWearSync.pushTrackingState(this@MainActivity)
 
             withContext(Dispatchers.IO) {
                 WidgetThemeHelper.refreshAllWidgets(this@MainActivity)
@@ -2024,6 +2113,12 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun extractOcrAndShowDialog() {
+        // Reset from any previous Pin flow, then kick off a fresh best-effort peek in parallel
+        // with whatever follows (OCR, dialog show) — this never gates showing the dialog, it just
+        // may fill in a moment after the dialog is already up via the mutableState above.
+        pinFlowAccuracyHint.value = null
+        lifecycleScope.launch { pinFlowAccuracyHint.value = peekAccuracyHintMeters(this@MainActivity) }
+
         val currentPhotoPath = photoFile?.absolutePath ?: ""
         // Captured AND cleared synchronously right here, before anything suspends — a second
         // quick-pin tile tap landing while this capture's OCR coroutine below is still running
@@ -2058,76 +2153,7 @@ class MainActivity : FragmentActivity() {
                 compressCapturedPhoto(currentPhotoPath)
             }
 
-            val ocrResult = withContext(Dispatchers.Default) {
-                var extractedText = ""
-                var prominentText = ""
-                val rawBitmap = getUprightBitmap(
-                    currentPhotoPath,
-                    // OCR doesn't need the full 1600 archive size — smaller peak with upright +
-                    // contrast copies alive together, same readable plate/sign text for Snap.
-                    maxDimension = if (ThemeState.lowRamDevice) 1024 else 1280
-                )
-                if (rawBitmap != null) {
-                    // A new client is created per capture (there's no long-lived shared instance
-                    // to reuse), so each one has to close itself when done — ML Kit's own docs
-                    // call this out as necessary to free the underlying detector resources;
-                    // leaving it open here leaked one on every single photo capture.
-                    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-                    // Was recycled inline right after the OCR text loop — meaning any exception
-                    // thrown by recognizer.process(), or while walking result.textBlocks (both
-                    // already anticipated by the catch below), skipped past that recycle() call
-                    // entirely and leaked the enhanced bitmap. Tracked in a var and recycled in
-                    // `finally` instead, so every exit path — success or exception — releases it.
-                    var workingBitmap: Bitmap? = null
-                    try {
-                        // Skip the second ARGB contrast copy — upright decode alone is enough for
-                        // plate/sign OCR and halves peak bitmap RAM on every Snap (not just low-RAM).
-                        val bitmap = rawBitmap
-                        workingBitmap = bitmap
-                        val image = InputImage.fromBitmap(bitmap, 0)
-                        val result = recognizer.process(image).await()
-
-                        var maxBoxHeight = 0
-                        val fullTextBuilder = java.lang.StringBuilder()
-
-                        for (block in result.textBlocks) {
-                            for (line in block.lines) {
-                                val bbox = line.boundingBox
-                                if (bbox != null) {
-                                    val height = bbox.bottom - bbox.top
-                                    if (height > maxBoxHeight) {
-                                        maxBoxHeight = height
-                                        prominentText = line.text
-                                    }
-                                }
-                                // Cap as we go — OCR can emit huge walls of text before trim/take.
-                                if (fullTextBuilder.length < OCR_EXTRACT_MAX_CHARS) {
-                                    fullTextBuilder.append(line.text).append(' ')
-                                }
-                            }
-                        }
-
-                        if (fullTextBuilder.isNotEmpty()) {
-                            extractedText = fullTextBuilder.toString()
-                                .replace(Regex("[^A-Za-z0-9\\-\\s]"), " ")
-                                .replace(Regex("\\s+"), " ")
-                                .trim()
-                                .take(OCR_EXTRACT_MAX_CHARS)
-                            prominentText = prominentText
-                                .replace(Regex("[^A-Za-z0-9\\-\\s]"), " ")
-                                .replace(Regex("\\s+"), " ")
-                                .trim()
-                                .take(200)
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    } finally {
-                        workingBitmap?.takeIf { !it.isRecycled }?.recycle()
-                        recognizer.close()
-                    }
-                }
-                extractedText to prominentText
-            }
+            val ocrResult = runTextRecognition(currentPhotoPath)
 
             tempOcrTextForDialog = ocrResult.first
             tempProminentOcrTextForDialog = ocrResult.second
@@ -2139,6 +2165,80 @@ class MainActivity : FragmentActivity() {
             }
             showTimerDialog.value = true
         }
+    }
+
+    /** Runs ML Kit OCR on a captured photo — extracted out of extractOcrAndShowDialog() above so
+     * both the main Snap flow and the Garage Flow floor-level "Snap sign" capture
+     * (TimerSelectionDialog) can share it without duplicating the ML Kit boilerplate. Returns
+     * (extractedText, prominentText) — prominentText is the tallest text line found (the biggest
+     * text on a sign/plate), extractedText is every recognized line concatenated. Both empty on
+     * any failure — callers already treat blank OCR output as "nothing detected." */
+    private suspend fun runTextRecognition(filePath: String): Pair<String, String> = withContext(Dispatchers.Default) {
+        var extractedText = ""
+        var prominentText = ""
+        val rawBitmap = getUprightBitmap(
+            filePath,
+            // OCR doesn't need the full 1600 archive size — smaller peak with upright +
+            // contrast copies alive together, same readable plate/sign text for Snap.
+            maxDimension = if (ThemeState.lowRamDevice) 1024 else 1280
+        )
+        if (rawBitmap != null) {
+            // A new client is created per capture (there's no long-lived shared instance
+            // to reuse), so each one has to close itself when done — ML Kit's own docs
+            // call this out as necessary to free the underlying detector resources;
+            // leaving it open here leaked one on every single photo capture.
+            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            // Tracked in a var and recycled in `finally` so every exit path — success or
+            // exception — releases the bitmap, not just the happy path.
+            var workingBitmap: Bitmap? = null
+            try {
+                // Skip the second ARGB contrast copy — upright decode alone is enough for
+                // plate/sign OCR and halves peak bitmap RAM on every capture (not just low-RAM).
+                val bitmap = rawBitmap
+                workingBitmap = bitmap
+                val image = InputImage.fromBitmap(bitmap, 0)
+                val result = recognizer.process(image).await()
+
+                var maxBoxHeight = 0
+                val fullTextBuilder = java.lang.StringBuilder()
+
+                for (block in result.textBlocks) {
+                    for (line in block.lines) {
+                        val bbox = line.boundingBox
+                        if (bbox != null) {
+                            val height = bbox.bottom - bbox.top
+                            if (height > maxBoxHeight) {
+                                maxBoxHeight = height
+                                prominentText = line.text
+                            }
+                        }
+                        // Cap as we go — OCR can emit huge walls of text before trim/take.
+                        if (fullTextBuilder.length < OCR_EXTRACT_MAX_CHARS) {
+                            fullTextBuilder.append(line.text).append(' ')
+                        }
+                    }
+                }
+
+                if (fullTextBuilder.isNotEmpty()) {
+                    extractedText = fullTextBuilder.toString()
+                        .replace(Regex("[^A-Za-z0-9\\-\\s]"), " ")
+                        .replace(Regex("\\s+"), " ")
+                        .trim()
+                        .take(OCR_EXTRACT_MAX_CHARS)
+                    prominentText = prominentText
+                        .replace(Regex("[^A-Za-z0-9\\-\\s]"), " ")
+                        .replace(Regex("\\s+"), " ")
+                        .trim()
+                        .take(200)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                workingBitmap?.takeIf { !it.isRecycled }?.recycle()
+                recognizer.close()
+            }
+        }
+        extractedText to prominentText
     }
 
     private fun getUprightBitmap(filePath: String, maxDimension: Int = 1600): Bitmap? {
@@ -2263,39 +2363,64 @@ private suspend fun sweepOrphanPhotoFiles(
     }
     try {
         SQLiteDatabase.openOrCreateDatabase(spillFile, null).use { spill ->
-            spill.execSQL("CREATE TABLE refs (path TEXT PRIMARY KEY NOT NULL)")
-            spill.beginTransaction()
-            try {
-                val insert = spill.compileStatement("INSERT OR IGNORE INTO refs(path) VALUES (?)")
-                fun addReferenced(path: String) {
-                    if (path.isEmpty()) return
-                    insert.bindString(1, path)
-                    insert.executeInsert()
-                    runCatching {
-                        val abs = File(path).absolutePath
-                        if (abs != path) {
-                            insert.bindString(1, abs)
-                            insert.executeInsert()
-                        }
+            // IF NOT EXISTS — the timestamped filename is normally unique per run, but a process
+            // killed mid-sweep (SIGKILL, e.g. an install/relaunch cycle overlapping itself) skips
+            // deleteSpillArtifacts() entirely, leaving a half-built file with this table already
+            // in it for the very next launch to collide with. This is a throwaway scratch table
+            // rebuilt fresh every run regardless, so reusing a leftover one is harmless — at worst
+            // a couple of already-legitimate paths from the killed run's own partial population
+            // survive into this run's INSERT OR IGNORE below, which only makes orphan detection
+            // slightly more conservative, never wrongly aggressive.
+            spill.execSQL("CREATE TABLE IF NOT EXISTS refs (path TEXT PRIMARY KEY NOT NULL)")
+            val insert = spill.compileStatement("INSERT OR IGNORE INTO refs(path) VALUES (?)")
+            fun addReferenced(path: String) {
+                if (path.isEmpty()) return
+                insert.bindString(1, path)
+                insert.executeInsert()
+                runCatching {
+                    val abs = File(path).absolutePath
+                    if (abs != path) {
+                        insert.bindString(1, abs)
+                        insert.executeInsert()
                     }
                 }
-                var afterCoverId = 0
-                while (true) {
-                    val page = locationDao.getCoverImagePathRowsPage(afterCoverId, 2_000)
-                    if (page.isEmpty()) break
-                    page.forEach { addReferenced(it.imagePath) }
-                    afterCoverId = page.last().id
+            }
+            // Each page's own transaction wraps ONLY the synchronous insert loop below — the
+            // suspend DAO call that fetches the page happens before beginTransaction(), not inside
+            // it. beginTransaction()/endTransaction() are pinned to whichever thread calls them,
+            // and a suspend call that's free to resume on a different Dispatchers.IO worker thread
+            // is exactly what could previously leave endTransaction() running on a thread that
+            // never began a transaction (crashed with "Cannot perform this operation because there
+            // is no current transaction"). A prior fix tried pinning this to
+            // Dispatchers.IO.limitedParallelism(1), which turned out not to actually guarantee
+            // that — limitedParallelism only caps concurrent tasks to one at a time, it doesn't pin
+            // a coroutine to one physical thread across a suspension point, so the same crash could
+            // still happen. Splitting the transaction per page instead means nothing ever suspends
+            // between a begin and its own end, so thread identity is guaranteed by construction —
+            // slightly more transactions for a very large vault, which is irrelevant for a
+            // once-a-day background sweep with no latency requirement.
+            fun insertPage(paths: List<String>) {
+                spill.beginTransaction()
+                try {
+                    paths.forEach { addReferenced(it) }
+                    spill.setTransactionSuccessful()
+                } finally {
+                    spill.endTransaction()
                 }
-                var afterPhotoId = 0
-                while (true) {
-                    val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
-                    if (page.isEmpty()) break
-                    page.forEach { addReferenced(it.path) }
-                    afterPhotoId = page.last().id
-                }
-                spill.setTransactionSuccessful()
-            } finally {
-                spill.endTransaction()
+            }
+            var afterCoverId = 0
+            while (true) {
+                val page = locationDao.getCoverImagePathRowsPage(afterCoverId, 2_000)
+                if (page.isEmpty()) break
+                insertPage(page.map { it.imagePath })
+                afterCoverId = page.last().id
+            }
+            var afterPhotoId = 0
+            while (true) {
+                val page = spotPhotoDao.getPhotoRowsPage(afterPhotoId, 2_000)
+                if (page.isEmpty()) break
+                insertPage(page.map { it.path })
+                afterPhotoId = page.last().id
             }
 
             fun isReferenced(path: String, abs: String): Boolean {
@@ -2483,6 +2608,54 @@ private fun FullScreenScrollIndicator(
     }
 }
 
+/** Deletes one photo from a spot — [photoPath] can be either the cover ([LocationSpot.imagePath])
+ * or one of its extra photos ([SpotPhoto]). Deleting the cover promotes the oldest remaining extra
+ * photo to take its place, if any exist, so the spot doesn't lose its "has a photo" status just
+ * because the specific photo that happened to be the cover was the one removed — falls back to a
+ * blank imagePath (the existing "No photo attached" placeholder) only once every photo is gone.
+ * The DB write (and, in the promote case, both the cover-path update and the promoted row's
+ * deletion) is one transaction, so a failure partway through can't leave the same photo path
+ * referenced in two places at once or the cover blank while a promotable extra still exists. The
+ * physical file is only ever deleted after that transaction commits successfully — same ordering
+ * fix as VaultBackupManager's import-with-replace: never delete a file before the DB is certain
+ * nothing still points at it. */
+suspend fun deleteSpotPhoto(context: Context, spotId: Int, photoPath: String) {
+    // A blank photoPath means "no cover set" (see the "" fallback below) — without this guard it
+    // would match spot.imagePath == "" on a spot with no cover and wrongly promote/delete an
+    // unrelated extra photo. Not reachable from either current call site today (both only ever
+    // pass a real, non-empty photo path), but this function has no other defense of its own.
+    if (photoPath.isBlank()) return
+    val db = AppDatabase.getDatabase(context)
+    // Only actually unlinked (spot found AND photoPath matched something on it) reaches the file
+    // delete below — a concurrent hard-delete/"Delete All Forever" racing this same call, or a
+    // photoPath that doesn't match either the cover or any extra, used to fall through to
+    // deleting the file unconditionally regardless of whether this transaction changed anything.
+    var unlinked = false
+    db.withTransaction {
+        val dao = db.locationDao()
+        val spotPhotoDao = db.spotPhotoDao()
+        val spot = dao.getSpotById(spotId) ?: return@withTransaction
+        if (spot.imagePath == photoPath) {
+            val promoted = spotPhotoDao.getForSpot(spotId).firstOrNull()
+            if (promoted != null) {
+                dao.setImagePath(spotId, promoted.path)
+                spotPhotoDao.deleteById(promoted.id)
+            } else {
+                dao.setImagePath(spotId, "")
+            }
+            unlinked = true
+        } else {
+            spotPhotoDao.getForSpot(spotId).firstOrNull { it.path == photoPath }?.let { match ->
+                spotPhotoDao.deleteById(match.id)
+                unlinked = true
+            }
+        }
+    }
+    if (unlinked) {
+        runCatching { File(photoPath).delete() }
+    }
+}
+
 @Composable
 fun FullScreenImageViewer(
     imagePath: String, 
@@ -2505,11 +2678,16 @@ fun FullScreenImageViewer(
     onEditRequest: (() -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     BackHandler(onBack = onDismiss)
 
     var showAddPhotoDialog by remember { mutableStateOf(false) }
     var showPhotoExpanded by remember { mutableStateOf(false) }
+    // Non-null while the "Delete this photo?" confirmation is showing — set from either the
+    // thumbnail row's per-photo badge or the fullscreen lightbox's trash button, both funnel into
+    // this one shared AlertDialog so there's exactly one confirmation flow, not two.
+    var pendingPhotoDeletePath by remember { mutableStateOf<String?>(null) }
 
     var displayNote by remember(note) { mutableStateOf(note) }
     LaunchedEffect(note) { displayNote = note }
@@ -2634,6 +2812,27 @@ fun FullScreenImageViewer(
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Crop
                                     )
+                                    // Only on a real, saved spot — a share-preview/OCR-review
+                                    // caller (spotId defaults to -1) has no row to delete from yet.
+                                    if (spotId >= 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(2.dp)
+                                                .size(18.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.Black.copy(alpha = 0.55f))
+                                                .clickable { pendingPhotoDeletePath = path },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Delete this photo",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             // Lets more photos be added even when one (or several) already
@@ -3042,13 +3241,41 @@ fun FullScreenImageViewer(
             )
         ) {
             EnsureDialogEdgeToEdge()
-            Box(
+            // BoxWithConstraints, not a plain Box relying on fillMaxSize()+ContentScale.Fit to
+            // negotiate the fit on its own — this Dialog's window is resized to MATCH_PARENT
+            // imperatively inside EnsureDialogEdgeToEdge()'s SideEffect (a raw window.setLayout()
+            // call, not something routed through Compose state), which for a tall portrait
+            // screenshot could measure against a stale pre-resize height before that settles.
+            // Reading constraints.maxWidth/maxHeight here and computing the exact display size
+            // ourselves — the same min(availW/imgW, availH/imgH) math ContentScale.Fit does
+            // internally — makes the fit fully explicit and re-derived from whatever the real,
+            // current bounds are, instead of trusting an implicit negotiation to have settled.
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black)
                     .clickable { showPhotoExpanded = false },
                 contentAlignment = Alignment.Center
             ) {
+                var intrinsicSize by remember(selectedImagePath) {
+                    mutableStateOf<androidx.compose.ui.geometry.Size?>(null)
+                }
+                val density = LocalDensity.current
+                val availW = constraints.maxWidth.toFloat()
+                val availH = constraints.maxHeight.toFloat()
+                val fittedModifier = intrinsicSize?.let { size ->
+                    if (size.width <= 0f || size.height <= 0f) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        val scale = minOf(availW / size.width, availH / size.height)
+                        with(density) {
+                            Modifier.size(
+                                (size.width * scale).toInt().toDp(),
+                                (size.height * scale).toInt().toDp()
+                            )
+                        }
+                    }
+                } ?: Modifier.fillMaxSize()
                 AsyncImage(
                     model = coil.request.ImageRequest.Builder(context)
                         .data(java.io.File(selectedImagePath))
@@ -3056,9 +3283,30 @@ fun FullScreenImageViewer(
                         .crossfade(true)
                         .build(),
                     contentDescription = "Enlarged spot photo",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
+                    modifier = fittedModifier,
+                    contentScale = ContentScale.Fit,
+                    onState = { state ->
+                        if (state is coil.compose.AsyncImagePainter.State.Success) {
+                            val drawable = state.result.drawable
+                            intrinsicSize = androidx.compose.ui.geometry.Size(
+                                drawable.intrinsicWidth.toFloat(),
+                                drawable.intrinsicHeight.toFloat()
+                            )
+                        }
+                    }
                 )
+                if (spotId >= 0) {
+                    IconButton(
+                        onClick = { pendingPhotoDeletePath = selectedImagePath },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .statusBarsPadding()
+                            .padding(12.dp)
+                            .background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete this photo", tint = Color.White)
+                    }
+                }
                 IconButton(
                     onClick = { showPhotoExpanded = false },
                     modifier = Modifier
@@ -3071,6 +3319,33 @@ fun FullScreenImageViewer(
                 }
             }
         }
+    }
+
+    pendingPhotoDeletePath?.let { pathToDelete ->
+        AlertDialog(
+            onDismissRequest = { pendingPhotoDeletePath = null },
+            containerColor = SpotVaultColors.Surface,
+            titleContentColor = SpotVaultColors.OnSurface,
+            textContentColor = SpotVaultColors.Muted,
+            title = { Text("Delete Photo?") },
+            text = { Text("This photo will be permanently removed from this spot. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingPhotoDeletePath = null
+                    showPhotoExpanded = false
+                    coroutineScope.launch(Dispatchers.IO) {
+                        deleteSpotPhoto(context, spotId, pathToDelete)
+                    }
+                }) {
+                    Text("Delete", color = SpotVaultColors.Danger, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPhotoDeletePath = null }) {
+                    Text("Cancel", color = SpotVaultColors.Muted)
+                }
+            }
+        )
     }
 }
 @OptIn(ExperimentalFoundationApi::class)
@@ -3201,7 +3476,17 @@ fun HistoryDialogContent(
             dao = dao,
             prefs = prefs,
             onDismiss = { showLocationBrowser = false },
-            onViewSpot = onViewSpot,
+            // Closes this overlay first, not just forwarding straight to the outer onViewSpot —
+            // on a phone this is a harmless no-op (navigating to SPOT_DETAIL already disposes this
+            // whole composable, overlay included, per the comment on showCalendarDialog above).
+            // This callback is now only ever reached at the States/Cities drill-down levels or on
+            // a narrow window — VaultLocationBrowserDialog's own two-pane branch (at the Entries
+            // level, on a wide window) routes tapping a spot to its own local pane state instead
+            // of calling this at all, so it never closes the browser or reaches the two-pane
+            // Vault layout's detail pane behind it in the first place. See that branch's own
+            // comment for why showing the result inline, without closing this dialog, was worth
+            // building instead of just leaving this early-close workaround for two-pane too.
+            onViewSpot = { spot -> showLocationBrowser = false; onViewSpot(spot) },
             onShareRequest = onShareRequest,
             coroutineScope = coroutineScope
         )
@@ -3214,7 +3499,10 @@ fun HistoryDialogContent(
             dao = dao,
             prefs = prefs,
             onDismiss = { showFavoritesHub = false },
-            onViewSpot = onViewSpot,
+            // Same reasoning as VaultLocationBrowserDialog's onViewSpot above — closes this
+            // overlay before handing off to the outer callback so the two-pane Vault layout's
+            // detail pane isn't left hidden behind a Favorites Hub that stayed open.
+            onViewSpot = { spot -> showFavoritesHub = false; onViewSpot(spot) },
             onShareRequest = onShareRequest,
             coroutineScope = coroutineScope,
             pendingSharedSpot = pendingSharedSpot,
@@ -3241,7 +3529,16 @@ fun HistoryDialogContent(
             prefs = prefs,
             dao = dao,
             onDismiss = { selectedCalendarDay = null },
-            onViewSpot = onViewSpot,
+            // Same reasoning as VaultLocationBrowserDialog's onViewSpot above — only reached on a
+            // narrow window now. VaultCalendarDayResultsDialog's own two-pane branch shows a
+            // tapped spot in its own local detail pane instead of calling this, so this dialog
+            // (and the day it's showing) stays open in two-pane mode exactly like Favorites Hub
+            // and Location Browser now do. showCalendarDialog = false here is defensive rather
+            // than load-bearing in practice — onDaySelected above already clears it the moment a
+            // day is picked, and the only path that sets it back to true (the "Steps back to the
+            // month grid" BackHandler) clears selectedCalendarDay in the same step, so the two are
+            // never both true at once — but costs nothing to keep clearing explicitly here too.
+            onViewSpot = { spot -> selectedCalendarDay = null; showCalendarDialog = false; onViewSpot(spot) },
             onShareRequest = onShareRequest,
             onSwipeDelete = { spot ->
                 pendingSwipeDeleteSpot = spot
@@ -3719,6 +4016,10 @@ fun SaveScreenTagPickerSheet(
         containerColor = SpotVaultColors.Elevated,
         contentColor = SpotVaultColors.OnSurface
     ) {
+        // ModalBottomSheet opens its own Popup window — it doesn't inherit TimerSelectionDialog's
+        // own AdaptiveTabletContainer, and Material3's sheet Surface spans the full window width
+        // on its own, so this stretched edge-to-edge on a tablet without its own wrap here.
+        AdaptiveTabletContainer {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -3866,6 +4167,7 @@ fun SaveScreenTagPickerSheet(
             ) {
                 Text("Done", fontWeight = FontWeight.Bold)
             }
+        }
         }
     }
 }
@@ -4145,6 +4447,162 @@ private fun SaveScreenCompactDropdown(
     }
 }
 
+/** Garage Flow: above this last-known accuracy (meters), the floor/landmark section auto-expands —
+ * sits above the app's own ACCEPTABLE_ACCURACY_METERS (10f) "good fix" bar in TacticalQuickPins.kt,
+ * since this is meant to catch genuinely degraded fixes (parking garages, dense woods, urban
+ * canyons — anywhere GPS struggles), not just anything short of ideal. */
+private const val FLOOR_PROMPT_ACCURACY_THRESHOLD_METERS = 20f
+private const val FLOOR_LEVEL_MAX_CHARS = 24
+
+/** Garage Flow — weak GPS isn't just a parking-garage problem (dense woods, urban canyons, and
+ * plenty of other places degrade a fix just as badly), so lat/lng alone can't always relocate the
+ * spot afterward. Lets the user optionally record a free-text floor level or landmark note (e.g.
+ * "P3", "B-2", "Roof", or "near the trailhead sign") alongside the pin, typed directly or detected
+ * by photographing a sign. The scan reuses the app's existing ML Kit OCR pipeline via [onRunOcr]
+ * (MainActivity's runTextRecognition) rather than a separate implementation. Collapsed behind a
+ * plain "+ Add Floor / Landmark Note" affordance by default; [autoExpanded] (driven by the
+ * accuracy peek) opens it automatically when the caller's last-known fix looked degraded. */
+@Composable
+private fun SaveScreenFloorLevelSection(
+    expanded: Boolean,
+    autoExpanded: Boolean,
+    onExpand: () -> Unit,
+    floorLevel: TextFieldValue,
+    onFloorLevelChange: (TextFieldValue) -> Unit,
+    onRunOcr: suspend (filePath: String) -> Pair<String, String>,
+    prefs: android.content.SharedPreferences,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // Set the instant requestScan() is tapped (not just once OCR starts) — mirrors
+    // HistoryVaultDialog's isCapturingPhoto, so a rapid double-tap while the permission dialog or
+    // camera app is still up can't fire a second overlapping camera launch.
+    var isScanning by remember { mutableStateOf(false) }
+    // rememberSaveable so process death mid-capture (permission dialog, camera app itself) still
+    // recovers the pending file path — same reasoning as HistoryVaultDialog's pendingPhotoPath.
+    var pendingScanPath by rememberSaveable { mutableStateOf<String?>(null) }
+
+    val takeScanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        AppLockGate.end()
+        val path = pendingScanPath
+        pendingScanPath = null
+        val file = path?.let { File(it) }
+        if (success && file != null && file.exists()) {
+            scope.launch {
+                val (extractedText, prominentText) = onRunOcr(file.absolutePath)
+                runCatching { file.delete() }
+                isScanning = false
+                val detected = prominentText.ifBlank { extractedText }.take(FLOOR_LEVEL_MAX_CHARS)
+                if (detected.isNotBlank()) {
+                    onFloorLevelChange(TextFieldValue(detected, selection = TextRange(detected.length)))
+                } else {
+                    Toast.makeText(context, "No text detected — enter a floor level or landmark manually.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } else {
+            isScanning = false
+            runCatching { file?.delete() }
+        }
+    }
+
+    fun startScan() {
+        val imagesDir = File(context.filesDir, "images").apply { mkdirs() }
+        // Scan-only capture, deleted right after OCR runs above — never becomes the spot's cover
+        // photo or an attached extra photo, so it doesn't need the compressCapturedPhoto() pass
+        // the main Snap flow's photo gets for long-term storage.
+        val newFile = File(imagesDir, "floor_scan_${System.currentTimeMillis()}.jpg")
+        pendingScanPath = newFile.absolutePath
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", newFile)
+        try {
+            takeScanLauncher.launch(uri)
+        } catch (e: android.content.ActivityNotFoundException) {
+            pendingScanPath = null
+            isScanning = false
+            AppLockGate.end()
+            Toast.makeText(context, "No camera app found on this device.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            startScan()
+        } else {
+            AppLockGate.end()
+            isScanning = false
+            val activity = context as? Activity
+            if (activity != null && isPermissionPermanentlyDenied(activity, prefs, Manifest.permission.CAMERA)) {
+                showPermissionSettingsDialog(activity, "Camera access is needed to scan a sign. Enable it for DropPin Vault in Settings.")
+            } else {
+                Toast.makeText(context, "Camera permission is required to scan a sign.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun requestScan() {
+        if (isScanning) return
+        isScanning = true
+        // Covers both the permission dialog and the camera capture that can follow it — same
+        // reasoning as HistoryVaultDialog's requestCameraCapture(): either one taking the
+        // foreground while App Lock is on must not let AppLockScreen swap in and tear down this
+        // composable's pendingScanPath state mid-flight.
+        AppLockGate.begin()
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            startScan()
+        } else {
+            markPermissionRequested(prefs, Manifest.permission.CAMERA)
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        if (!expanded) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .border(1.dp, SpotVaultColors.Outline.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                    .clickable { onExpand() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, tint = SpotVaultColors.Teal, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    "Add Floor / Landmark Note",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SpotVaultColors.OnSurface,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                VaultCompactNotesFieldWithExpand(
+                    value = floorLevel,
+                    onValueChange = { next ->
+                        onFloorLevelChange(if (next.text.length <= FLOOR_LEVEL_MAX_CHARS) next else next.copy(text = next.text.take(FLOOR_LEVEL_MAX_CHARS)))
+                    },
+                    label = if (autoExpanded) "Weak GPS signal — add a floor or landmark note?" else "Floor / Landmark",
+                    placeholder = "P3, Level 3, or a landmark…",
+                    minLines = 1,
+                    maxLines = 1,
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = { requestScan() }) {
+                    if (isScanning) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = SpotVaultColors.Teal, strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.CameraAlt, contentDescription = "Snap a sign", tint = SpotVaultColors.Teal)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TimerSelectionDialog(
@@ -4153,9 +4611,25 @@ fun TimerSelectionDialog(
     photoPath: String = "",
     ocrText: String,
     prominentOcrText: String = "",
+    // Best-effort last-known-location accuracy (see peekAccuracyHintMeters) — null when not yet
+    // resolved or unavailable. Only decides whether the floor-level section below auto-expands;
+    // never affects the coordinate actually saved.
+    accuracyHintMeters: Float? = null,
+    // Runs ML Kit OCR on a freshly captured floor-sign photo — supplied by the Activity (which
+    // owns runTextRecognition/getUprightBitmap) rather than duplicated here, so the "Snap sign"
+    // button in SaveScreenFloorLevelSection shares the exact same OCR pipeline as the main Snap flow.
+    onRunOcr: suspend (filePath: String) -> Pair<String, String>,
     onDismiss: () -> Unit,
     onRetake: () -> Unit,
-    onPin: (Int, String, String, Boolean, Int?, List<String>) -> Unit
+    onPin: (Int, String, String, Boolean, Int?, List<String>, String) -> Unit,
+    // The Scaffold's own bottomBar slot height — whatever SpotVaultMainScaffold's bottomBar is
+    // currently rendering there (empty on a genuine tablet/foldable now that the legal disclaimer
+    // that used to live in that slot is gone; SpotVaultBottomBar itself on a phone). This screen
+    // renders through contentOverlays, on top of the Scaffold's content slot rather than inside
+    // SpotVaultNavHost, so it never got SpotVaultNavHost's own Modifier.padding(innerPadding)
+    // clearance either — see navPad's own doc below for why this is only trusted on a genuine
+    // tablet, not treated as a floor on every phone regardless of what's actually in that slot.
+    scaffoldBottomInset: Dp = 0.dp
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val vehicleDao = remember { AppDatabase.getDatabase(context).vehicleDao() }
@@ -4171,6 +4645,14 @@ fun TimerSelectionDialog(
     // Snap/Pin form with no warning.
     var selectedVehicleId by rememberSaveable { mutableStateOf<Int?>(null) }
     var showAddVehicle by rememberSaveable { mutableStateOf(false) }
+    // Users reported tapping Share, sending the location off, then backing out of this screen
+    // assuming that shared spot was now saved — Share never wrote anything to the Vault, only
+    // Pin does. Tracks whether a share actually went out (set true only once shareLocation()
+    // itself fires below, not on every tap of the button — a failed share due to no GPS fix
+    // never created this false impression in the first place) so leaving afterward without
+    // tapping Pin can get one confirming prompt instead of silently discarding the spot.
+    var hasSharedWithoutSaving by rememberSaveable { mutableStateOf(false) }
+    var showDiscardAfterShareWarning by remember { mutableStateOf(false) }
 
     // Always pre-selects the Primary Default vehicle from Vehicles settings (or no vehicle, if
     // none is set as default) — never whichever vehicle was picked on a previous save. Manual
@@ -4210,13 +4692,23 @@ fun TimerSelectionDialog(
     var vehicleExpanded by rememberSaveable { mutableStateOf(false) }
     var showPhotoExpanded by rememberSaveable { mutableStateOf(false) }
 
+    // Garage Flow: floor/level, free text (real garages use "P3", "B-2", "Roof", not just
+    // numbers). Starts collapsed unless the accuracy peek already came back bad by the time this
+    // composes — a `remember` (not rememberSaveable) keyed on the hint itself, so it can still
+    // auto-open on a later recomposition if the peek resolves after this dialog is already up,
+    // but won't fight the user by re-collapsing/re-expanding once they've touched it themselves.
+    var floorLevelExpandedByUser by rememberSaveable { mutableStateOf(false) }
+    val floorLevelAutoExpand = accuracyHintMeters != null && accuracyHintMeters > FLOOR_PROMPT_ACCURACY_THRESHOLD_METERS
+    val floorLevelExpanded = floorLevelExpandedByUser || floorLevelAutoExpand
+    var floorLevelText by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+
     // Category is gone from this screen — organizing a spot now happens with tags, picked right
     // here instead of a single fixed label chosen up front. "Drop Pinned" is the same generic
     // fallback title category already fell back to whenever it was left blank, so spots saved
     // from here keep exactly the same default they always did.
     fun confirmPin() {
         val mins = timerMins.toIntOrNull() ?: 0
-        onPin(mins, title.text, note.text, isActiveTracking, selectedVehicleId, selectedTags)
+        onPin(mins, title.text, note.text, isActiveTracking, selectedVehicleId, selectedTags, floorLevelText.text.trim())
     }
 
     // Same share this screen replaced "Quick Share"/"Share Photo" for — text-only for the Pin
@@ -4242,14 +4734,25 @@ fun TimerSelectionDialog(
                     imagePath = if (isCamera) photoPath else "",
                     includePhoto = isCamera
                 )
+                hasSharedWithoutSaving = true
             }
         }
     }
 
-    BackHandler(onBack = onDismiss)
+    // Routes every dismissal path (X button, back gesture, tapping outside the Dialog) through
+    // one check instead of straight to onDismiss — see hasSharedWithoutSaving's own doc.
+    fun attemptDismiss() {
+        if (hasSharedWithoutSaving) {
+            showDiscardAfterShareWarning = true
+        } else {
+            onDismiss()
+        }
+    }
+
+    BackHandler(onBack = ::attemptDismiss)
 
     androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = ::attemptDismiss,
         properties = androidx.compose.ui.window.DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false
@@ -4274,9 +4777,21 @@ fun TimerSelectionDialog(
         val density = LocalDensity.current
         val localNavBarPx = WindowInsets.navigationBars.getBottom(density)
         val statusPad = with(density) { SystemBarInsets.statusBarPx.toDp() }.coerceAtLeast(24.dp)
-        val navPad = with(density) {
-            maxOf(SystemBarInsets.navigationBarPx, localNavBarPx).toDp()
-        }.coerceAtLeast(24.dp) + 24.dp
+        val navPad = maxOf(
+            with(density) {
+                maxOf(SystemBarInsets.navigationBarPx, localNavBarPx).toDp()
+            }.coerceAtLeast(16.dp) + 12.dp,
+            // Gated on isGenuineTablet() (matches useRail's own gate in SpotVaultMainScaffold) —
+            // scaffoldBottomInset is innerPadding.calculateBottomPadding() from *whatever* route
+            // was showing when this dialog opened, and on every phone (useRail false) that's the
+            // full SpotVaultBottomBar — a ~150-200dp value this fullscreen overlay has no reason
+            // to sit above, since it already covers that bar entirely while it's open. Applying it
+            // unconditionally pushed this screen's own Share/Pin bar down by that same amount,
+            // leaving a dead gap below it on every phone. Kept as a floor for genuine tablets/
+            // foldables (useRail true) in case that slot ever holds real content again — it's
+            // effectively 0 there today since the disclaimer that used to live in it is gone.
+            if (isGenuineTablet()) scaffoldBottomInset else 0.dp
+        )
         // Left/right — this screen never accounted for either edge before, so the header's Pin
         // button and the photo/Retake column both rendered flush against the raw physical screen
         // edge with zero clearance: exactly what showed up as the Pin button crammed into the
@@ -4292,17 +4807,25 @@ fun TimerSelectionDialog(
         // auto-pans on its own. Scoped to only the compact branch rather than the shared root, so
         // it can't double up with the bottom bar's own imePadding() in the already-working case.
         val needsImeFixHere = needsCompactHeightLayout()
+        // Wide enough for a genuine two-pane split (photo/pin preview beside the form), same
+        // Expanded-width threshold Vault/Favorites Hub/Location Browser/Calendar Day Results
+        // already use for their own two-pane branches — see isWideEnoughForTwoPane's own doc for
+        // why that's a materially higher bar than isGenuineTablet, not the same one.
+        val isWide = isWideEnoughForTwoPane()
         // Every other full-screen Dialog in this app (photo viewer, Notepad, Settings, the home
         // screen) wraps its content in AdaptiveTabletContainer so it caps/centers on a tablet
         // instead of stretching edge-to-edge — this is the highest-frequency screen in the whole
         // app (shown after every single Snap/Pin capture) and was missing it, which is what made
         // the Title field and the Tags/Vehicle row balloon into a "comically wide" tablet layout.
+        // wide = isWide: on a window wide enough for the two-pane branch further down, this skips
+        // AdaptiveTabletContainer's usual 600dp cap — that split needs the extra width to be
+        // worth building in the first place.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(SpotVaultColors.Void)
         ) {
-        AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
+        AdaptiveTabletContainer(modifier = Modifier.fillMaxSize(), wide = isWide) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -4328,7 +4851,7 @@ fun TimerSelectionDialog(
                             .padding(horizontal = 8.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                        IconButton(onClick = ::attemptDismiss, modifier = Modifier.size(36.dp)) {
                             Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.Muted)
                         }
                         Row(
@@ -4403,6 +4926,16 @@ fun TimerSelectionDialog(
             // leaving the notes/tags/vehicle card only a sliver to work with — this is what made
             // "the card" effectively disappear there.
             val isCompact = needsCompactHeightLayout()
+            // photoBlock's own media element uses this, not isCompact directly — the "photo fills
+            // its own pane's full height" treatment belongs to any side-by-side layout, and now
+            // there are two of those (the original compact/landscape one below, and the new wide/
+            // two-pane one further down), not just isCompact's narrower "short window" case. Kept
+            // as its own flag rather than broadening isCompact's own meaning — isCompact still
+            // needs to independently drive the header's compact-only icons, the bottom action
+            // bar's visibility, and the IME fix above, none of which should also fire just because
+            // the window happens to be wide (isWideEnoughForTwoPane's own doc establishes that a
+            // window passing that check is never also compact-height, so these two never conflict).
+            val sideBySideMedia = isCompact || isWide
             // Unified media header shape for the Pin flow's gradient placeholder and the Snap
             // flow's photo — they used to size completely differently in the portrait/stacked
             // layout (photo: weight(0.4f) of whatever vertical space was left, often 250-350dp;
@@ -4424,9 +4957,9 @@ fun TimerSelectionDialog(
             var mediaHeaderHeight = 200.dp
             val photoBlock: @Composable () -> Unit = {
                 Column(
-                    modifier = if (isCompact) Modifier.fillMaxSize() else Modifier.fillMaxWidth()
+                    modifier = if (sideBySideMedia) Modifier.fillMaxSize() else Modifier.fillMaxWidth()
                 ) {
-                    val mediaModifier = if (isCompact) {
+                    val mediaModifier = if (sideBySideMedia) {
                         Modifier.fillMaxWidth().weight(1f)
                     } else {
                         Modifier.fillMaxWidth().height(mediaHeaderHeight)
@@ -4521,25 +5054,39 @@ fun TimerSelectionDialog(
 
             val cardBlock: @Composable () -> Unit = {
                 var saveScreenViewportPx by remember { mutableStateOf(0) }
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    // BottomCenter only in the stacked/portrait layout (not compact/wide, where
+                    // the photo sits beside the form rather than above it — "push space up next
+                    // to the photo" doesn't apply spatially there, same scoping the old
+                    // Arrangement.Bottom-on-the-scrollable-Column approach used). The scrollable
+                    // child below already measures itself to min(natural content height,
+                    // available height) and enables its own scroll only past that point — this
+                    // Box's contentAlignment just decides where to place that already-correctly-
+                    // sized child, so it has no effect at all once content is tall enough to fill
+                    // the space, and no interaction with verticalScroll's own internals the way
+                    // putting Bottom directly on the scrolling Column's own arrangement did.
+                    contentAlignment = if (!isCompact && !isWide) Alignment.BottomCenter else Alignment.TopStart
+                ) {
                         Column(
+                            // fillMaxWidth(), not fillMaxSize() — a previous pass here force-filled
+                            // the whole weighted region and then used verticalArrangement to decide
+                            // *where* the resulting dead space went (Bottom-anchored: above the
+                            // card, next to the photo; spacedBy: below it) whenever the card's
+                            // content was shorter than the space it was given, which is routine —
+                            // this form is often shorter than a tall phone's remaining height. That
+                            // only ever relocated the empty gap, never removed it. Sizing the
+                            // Column to its own content instead means there's no leftover space to
+                            // place anywhere: short content just sits at its natural height with
+                            // nothing stretched to fill the rest, and verticalScroll below still
+                            // constrains it to the real available max and enables scrolling exactly
+                            // when content is genuinely taller than that, same safety net as before.
                             modifier = Modifier
-                                .fillMaxSize()
+                                .fillMaxWidth()
                                 .onSizeChanged { saveScreenViewportPx = it.height }
                                 .verticalScroll(scrollState)
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .padding(end = 10.dp),
-                            // Pin flow (no real photo) in the non-compact/portrait layout: the
-                            // card's content is naturally shorter than the weight(1f) height it's
-                            // given here, and top-alignment (the default) left the leftover space
-                            // as a bare gap between the Tracking toggle and the fixed Share/Pin bar
-                            // below it. Bottom-anchoring puts that same leftover space above the
-                            // card instead — next to the placeholder graphic, where it reads as
-                            // normal breathing room instead of a stray gap right before the action
-                            // buttons. Only one child (GlassSurface) sits in this Column, so this
-                            // is purely about where slack space goes, not about spacing between
-                            // siblings.
-                            verticalArrangement = if (!isCompact && !hasRealPhoto) Arrangement.Bottom else Arrangement.spacedBy(6.dp)
+                                .padding(end = 10.dp)
                         ) {
                             GlassSurface(
                             modifier = Modifier.fillMaxWidth(),
@@ -4713,6 +5260,16 @@ fun TimerSelectionDialog(
                                     onSelectedTagsChange = { selectedTags = it }
                                 )
 
+                                SaveScreenFloorLevelSection(
+                                    expanded = floorLevelExpanded,
+                                    autoExpanded = floorLevelAutoExpand,
+                                    onExpand = { floorLevelExpandedByUser = true },
+                                    floorLevel = floorLevelText,
+                                    onFloorLevelChange = { floorLevelText = it },
+                                    onRunOcr = onRunOcr,
+                                    prefs = prefs
+                                )
+
                                 // Centered across the full card width, not tucked inside the
                                 // Vehicles column — left-aligned within that column put it flush
                                 // against the card's right half, reading as oddly shoved to one
@@ -4783,7 +5340,30 @@ fun TimerSelectionDialog(
                 }
             }
 
-            if (isCompact) {
+            if (isWide) {
+                // Genuine two-pane split for a window wide enough to actually afford one — a
+                // fixed-width photo/pin-preview pane beside the form, both filling the row's full
+                // height via photoBlock/cardBlock's own sideBySideMedia-driven sizing. Fixed
+                // width, not a percentage like the compact Row below — this pane just needs to
+                // look proportional next to the form, not scale with the window the way a spot
+                // list pane's content density would; 360dp comfortably fits the photo/placeholder
+                // at a good aspect ratio without starving the form on a merely-Expanded-width
+                // window. No navPad here — unlike the compact Row below, this isn't the actual
+                // bottom of the screen: the fixed Share/Pin bar further down still renders for
+                // isWide (it's only hidden `if (isCompact)`, and isWide/isCompact are mutually
+                // exclusive by isWideEnoughForTwoPane's own doc), and that bar already carries its
+                // own navPad. TwoPaneRow (not a plain Row) so the gap between panes actually
+                // clears a foldable's hinge instead of guessing a fixed padding — see its own doc.
+                TwoPaneRow(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    preferredListWidth = 360.dp,
+                    listPane = { photoBlock() },
+                    detailPane = { cardBlock() }
+                )
+            } else if (isCompact) {
                 // Side by side instead of stacked — see the comment above photoBlock/cardBlock.
                 // The photo/placeholder no longer competes with the card for a share of a short
                 // window's scarce height; each gets the full height of its own column instead,
@@ -4874,26 +5454,15 @@ fun TimerSelectionDialog(
                         color = SpotVaultColors.Muted.copy(alpha = 0.85f),
                         lineHeight = 16.sp
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        // Small square button on the left — does the same share (text-only for Pin,
-                        // with the photo attached for Snap) that "Quick Share"/"Share Photo" used to
-                        // do from the home screen, now reachable right from this confirmation screen
-                        // instead. Pin keeps its own height but no longer spans the full width, so
-                        // this has somewhere to sit.
+                    // Small square button on the left — does the same share (text-only for Pin,
+                    // with the photo attached for Snap) that "Quick Share"/"Share Photo" used to
+                    // do from the home screen, now reachable right from this confirmation screen
+                    // instead. Pin keeps its own height but no longer spans the full width, so
+                    // this has somewhere to sit.
+                    val shareButton: @Composable (Modifier) -> Unit = { buttonModifier ->
                         SpotVaultButton(
                             onClick = { shareCurrentPin() },
-                            modifier = Modifier
-                                // Was 0.62f — "Share" (5 letters) is the longer of the two labels
-                                // but had the smaller share of the row's width, which is exactly
-                                // backwards and is what pushed it into truncating to "Shar…" on a
-                                // narrower/differently-scaled screen. Still meaningfully smaller
-                                // than Pin's 1f (Share stays the visually secondary action), just
-                                // no longer working against its own label length.
-                                .weight(0.8f)
-                                .height(52.dp),
+                            modifier = buttonModifier.height(52.dp),
                             shape = spotVaultButtonShape(),
                             // Tighter than Material3's default 24dp/side ContentPadding — same fix
                             // as the home screen's Quick Pin/Quick Track row: two icon+text buttons
@@ -4910,16 +5479,44 @@ fun TimerSelectionDialog(
                             Icon(Icons.Default.Share, contentDescription = "Share this spot", modifier = Modifier.padding(end = 6.dp))
                             Text("Share", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
+                    }
+                    val pinButton: @Composable (Modifier) -> Unit = { buttonModifier ->
                         SpotVaultButton(
                             onClick = { confirmPin() },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp),
+                            modifier = buttonModifier.height(52.dp),
                             shape = spotVaultButtonShape(),
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp)
                         ) {
                             Icon(Icons.Default.PinDrop, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
                             Text("Pin", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    if (isWide) {
+                        // Same TwoPaneRow, same preferredListWidth, as the photoBlock/cardBlock
+                        // split above — both Rows sit at the same horizontal offset (this Column
+                        // and that TwoPaneRow use the same 16dp padding), so they resolve to the
+                        // same hinge-cleared split. Share lands under the photo, Pin under the
+                        // form, instead of a fixed 0.8f/1f weighting with no relationship to
+                        // where the hinge actually is.
+                        TwoPaneRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            preferredListWidth = 360.dp,
+                            listPane = { shareButton(Modifier.fillMaxWidth()) },
+                            detailPane = { pinButton(Modifier.fillMaxWidth()) }
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Was 0.62f — "Share" (5 letters) is the longer of the two labels
+                            // but had the smaller share of the row's width, which is exactly
+                            // backwards and is what pushed it into truncating to "Shar…" on a
+                            // narrower/differently-scaled screen. Still meaningfully smaller
+                            // than Pin's 1f (Share stays the visually secondary action), just
+                            // no longer working against its own label length.
+                            shareButton(Modifier.weight(0.8f))
+                            pinButton(Modifier.weight(1f))
                         }
                     }
                     // Retake now lives directly under the photo (photoBlock above) and Cancel is
@@ -4955,13 +5552,19 @@ fun TimerSelectionDialog(
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                VehicleEditScreen(
-                    vehicleId = null,
-                    vehicleDao = vehicleDao,
-                    locationDao = vehicleLocationDao,
-                    onBack = { showAddVehicle = false },
-                    onSaved = { newVehicleId -> selectedVehicleId = newVehicleId }
-                )
+                // Raw Dialog, not a route behind AdaptiveTabletContainer elsewhere — without its
+                // own wrap here, the name field / color+icon swatch rows / Save button stretched
+                // edge-to-edge on a tablet, same class of issue AdaptiveTabletContainer already
+                // fixes for every full-screen route.
+                AdaptiveTabletContainer {
+                    VehicleEditScreen(
+                        vehicleId = null,
+                        vehicleDao = vehicleDao,
+                        locationDao = vehicleLocationDao,
+                        onBack = { showAddVehicle = false },
+                        onSaved = { newVehicleId -> selectedVehicleId = newVehicleId }
+                    )
+                }
             }
         }
     }
@@ -4976,12 +5579,11 @@ fun TimerSelectionDialog(
             )
         ) {
             EnsureDialogEdgeToEdge()
-            Box(
+            HingeAvoidingCenterBox(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black)
-                    .clickable { showPhotoExpanded = false },
-                contentAlignment = Alignment.Center
+                    .clickable { showPhotoExpanded = false }
             ) {
                 AsyncImage(
                     model = coil.request.ImageRequest.Builder(LocalContext.current)
@@ -5005,6 +5607,35 @@ fun TimerSelectionDialog(
                 }
             }
         }
+    }
+
+    // See hasSharedWithoutSaving's own doc — this only ever shows once a share has actually gone
+    // out and the user then tries to leave without ever tapping Pin.
+    if (showDiscardAfterShareWarning) {
+        AlertDialog(
+            onDismissRequest = { showDiscardAfterShareWarning = false },
+            containerColor = SpotVaultColors.Surface,
+            titleContentColor = SpotVaultColors.OnSurface,
+            textContentColor = SpotVaultColors.Muted,
+            title = { Text("Spot not saved yet") },
+            text = { Text("Sharing a spot doesn't save it to your Vault. Save it now, or discard it?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDiscardAfterShareWarning = false
+                    confirmPin()
+                }) {
+                    Text("Save to Vault", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showDiscardAfterShareWarning = false
+                    onDismiss()
+                }) {
+                    Text("Discard", color = SpotVaultColors.Danger)
+                }
+            }
+        )
     }
 }
 
@@ -5385,9 +6016,12 @@ fun SpotVaultScreen(
     }
 
     // Short screens need every dp they can get for the CTA cards, so the brand
-    // header gives up its breathing room first.
-    val screenHeightDp = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp
-    val headerSpacing = if (screenHeightDp < 620) 8.dp else 18.dp
+    // header gives up its breathing room first. needsCompactHeightLayout(), not a raw
+    // screenHeightDp threshold — the raw check had no !isGenuineTablet() exclusion, so a
+    // smaller 7-8" tablet in portrait with screenHeightDp just under 620 got the same
+    // compacted header a genuinely cramped phone does, even though it isn't actually short on
+    // room (see needsCompactHeightLayout's own doc on exactly this class of false positive).
+    val headerSpacing = if (needsCompactHeightLayout()) 8.dp else 18.dp
 
     if (showAutoParkToggleSheet) {
         AlertDialog(
@@ -5597,7 +6231,17 @@ fun SpotVaultScreen(
                 }
             }
         }
-        AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
+        // wide, not the default false — both EmptyStateView and PinnedStateView now have their
+        // own isWideEnoughForTwoPane() two-pane branch (Snap|Pin, and card|buttons respectively),
+        // and both need the full window width for that split to be worth building at all —
+        // capping it here first would squeeze either one right back into the ~600dp box it
+        // exists to escape. Unconditional now — no longer needs excluding isPinned the way an
+        // earlier revision did, back when only EmptyStateView had a two-pane branch of its own
+        // and PinnedStateView's single status card still relied entirely on this wrap's usual cap.
+        AdaptiveTabletContainer(
+            modifier = Modifier.fillMaxSize(),
+            wide = isWideEnoughForTwoPane()
+        ) {
             homeScreenColumn()
         }
     }
@@ -5692,7 +6336,14 @@ private fun SavedConfirmationBanner(
 }
 
 @Composable
-private fun InstantActionsRow(modifier: Modifier = Modifier) {
+private fun InstantActionsRow(
+    modifier: Modifier = Modifier,
+    // True only for the isWideEnoughForTwoPane() home screen — lays Quick Pin/Quick Track out
+    // through TwoPaneRow instead of a plain weighted Row, so they land in exactly the same two
+    // hinge-cleared zones as the Snap/Pin cards above them rather than a fixed ~45/55 split
+    // that has no relationship to where the hinge actually is.
+    hingeAware: Boolean = false
+) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE) }
     val dao = remember { AppDatabase.getDatabase(context).locationDao() }
@@ -5896,11 +6547,7 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
     // instead of being clipped flush against the row's own bounds — that clipping was what made
     // the bottom of both buttons look "cut off": Quick Track's glow ran straight into the row's
     // exact-height edge with zero margin, and Quick Pin matched the row at 100% height too.
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    val quickPinButton: @Composable (Modifier) -> Unit = { buttonModifier ->
         SpotVaultButton(
             onClick = {
                 if (!isSaving) {
@@ -5914,7 +6561,7 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
                 }
             },
             enabled = !isSaving,
-            modifier = Modifier.weight(1f).fillMaxHeight(0.88f),
+            modifier = buttonModifier.fillMaxHeight(0.88f),
             shape = spotVaultButtonShape(),
             // Material3's default ButtonDefaults.ContentPadding (24dp each side) is sized for a
             // single full-width button, not two sharing a row with an icon each — on a narrower
@@ -5927,7 +6574,9 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
             Icon(Icons.Default.PinDrop, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
             Text("Quick Pin", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        // A bit wider than Quick Pin — teal glass shell reads as the recommended pick.
+    }
+    // A bit wider than Quick Pin — teal glass shell reads as the recommended pick.
+    val quickTrackButton: @Composable (Modifier) -> Unit = { buttonModifier ->
         SpotVaultButton(
             onClick = {
                 if (!isSaving) {
@@ -5941,9 +6590,7 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
                 }
             },
             enabled = !isSaving,
-            modifier = Modifier
-                .weight(1.22f)
-                .fillMaxHeight(0.88f),
+            modifier = buttonModifier.fillMaxHeight(0.88f),
             shape = spotVaultButtonShape(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp),
             colors = ButtonDefaults.buttonColors(containerColor = SpotVaultColors.Teal)
@@ -5957,6 +6604,29 @@ private fun InstantActionsRow(modifier: Modifier = Modifier) {
             Text("Quick Track", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
+
+    if (hingeAware) {
+        // Same TwoPaneRow the Snap/Pin cards above this row already use, and no explicit
+        // preferredListWidth override — falling back to the same DefaultTwoPaneListWidth those
+        // cards fall back to. Both Rows sit at the same horizontal offset (same enclosing
+        // Column, same padding), so they resolve to the same hinge-cleared split and this row
+        // lands in exactly the two zones the cards above it occupy, instead of an independent
+        // ~45/55 weighting with no relationship to where the hinge actually is.
+        TwoPaneRow(
+            modifier = modifier,
+            listPane = { quickPinButton(Modifier.fillMaxWidth()) },
+            detailPane = { quickTrackButton(Modifier.fillMaxWidth()) }
+        )
+    } else {
+        Row(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            quickPinButton(Modifier.weight(1f))
+            quickTrackButton(Modifier.weight(1.22f))
+        }
+    }
 }
 
 @Composable
@@ -5966,6 +6636,183 @@ fun EmptyStateView(
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE) }
+    if (isWideEnoughForTwoPane()) {
+        // Side by side instead of the stacked tier system further below — that system centers
+        // Snap-above-Pin in a single narrow, width-capped column, which was never designed to
+        // account for how much of an unfolded foldable's width that leaves sitting empty on
+        // either side. Snap and Pin are the two primary actions this whole screen exists for, so
+        // they're the natural pair to put on either side — the same "Snap | Pin" pairing the
+        // compact/landscape branch below already uses, just given room to be roomy (full
+        // subtitle, larger icons) instead of squeezed dense, since a window wide enough for this
+        // branch to trigger also has genuine height to spare (isWideEnoughForTwoPane's own
+        // !isCompactHeight() requirement).
+        val showInstantRow = prefs.getBoolean("show_instant_actions_row", true)
+        val isWildButtons = ThemeState.buttonStyle == "wild"
+        val snapContentColor = if (isWildButtons) Color.White else SpotVaultColors.OnPrimary
+        val pinContentColor = if (isWildButtons) Color.White else SpotVaultColors.OnTeal
+        // Was 220.dp — noticeably taller than the icon/title/subtitle content it actually holds,
+        // leaving a lot of dead vertical padding above and below and making that content read as
+        // small for the card's own size. 180dp is close to this app's own established comfortable
+        // heights for the same kind of CTA card (GradientCtaCard's own 168dp default, the portrait
+        // tier system's 176dp Snap height) rather than a number picked in isolation for this branch.
+        val cardHeight = 180.dp
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                // Vertical only — the enclosing homeScreenColumn already applies 20dp of
+                // horizontal padding, and the header Row (brand name + icon pills) lives there
+                // too. An extra 32dp here on top of that meant this content's own left/right
+                // edges sat 32dp further in than the header's, so the header visually stretched
+                // past where the cards and everything below it actually started/ended.
+                .padding(vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Extra breathing room above this — without it, the centered {heading, cards, quick
+            // row} block reads as one glued-together cluster instead of a heading with its own
+            // presence in the space between the app header and the cards below it.
+            Spacer(modifier = Modifier.height(28.dp))
+            // Split two words to a side instead of one centered line, only here — the cards
+            // right below already read as two peers either side of the hinge, so a single
+            // "DROP YOUR PIN" line spanning straight across that same hinge looked like it
+            // belonged to a different, unrelated layout instead of heading the split beneath
+            // it. Reuses TwoPaneRow with no preferredListWidth override, matching the cards'
+            // own default, so this heading's own gutter lands exactly where theirs does.
+            //
+            // Each half is End/Start-aligned toward the gutter (not centered in its own zone)
+            // and padded in toward it — "DROP YOUR" hugs the right edge of the left zone, "PIN
+            // BELOW" hugs the left edge of the right zone, so together they read as one phrase
+            // bridging the hinge instead of two independently-centered fragments stranded in
+            // the middle of two wide zones.
+            TwoPaneRow(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                listPane = {
+                    Text(
+                        text = "DROP YOUR",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                colors = listOf(SpotVaultColors.PrimaryBright, SpotVaultColors.Teal)
+                            )
+                        ),
+                        letterSpacing = 2.sp,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.fillMaxWidth().padding(end = 8.dp)
+                    )
+                },
+                detailPane = {
+                    Text(
+                        text = "PIN BELOW",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                colors = listOf(SpotVaultColors.PrimaryBright, SpotVaultColors.Teal)
+                            )
+                        ),
+                        letterSpacing = 2.sp,
+                        textAlign = TextAlign.Start,
+                        modifier = Modifier.fillMaxWidth().padding(start = 8.dp)
+                    )
+                }
+            )
+            // TwoPaneRow, not a plain Row — the same hinge-aware gutter every other two-pane
+            // screen in this app uses keeps Snap and Pin from crowding a foldable's physical
+            // hinge here too. Snap/Pin are a peer pair, not a literal list+detail relationship,
+            // but the "clear the hinge" mechanics TwoPaneRow provides apply regardless of what
+            // each pane actually holds.
+            //
+            // No .height(cardHeight) here — this Row's own height used to be fixed to exactly
+            // cardHeight, which is fine when both cards sit side by side sharing it, but the same
+            // fixed value would squeeze two STACKED cards into cardHeight combined the moment the
+            // device is rotated so its hinge runs horizontally and TwoPaneRow switches to a
+            // top/bottom split. Each GradientCtaCard already enforces its own cardHeight as a
+            // *minimum* via heightIn(min = height), not a fixed size, so leaving this wrapper
+            // unconstrained lets it size to two side-by-side cards' shared height in the normal
+            // case and two stacked cards' combined height in the rotated one, automatically.
+            TwoPaneRow(
+                modifier = Modifier.fillMaxWidth(),
+                listPane = {
+                    GradientCtaCard(
+                        title = "Snap",
+                        subtitle = "Photo + OCR",
+                        onClick = {
+                            performAppHaptic(context, prefs)
+                            AppSounds.playClickSound(context, prefs)
+                            onSnapClick()
+                        },
+                        height = cardHeight,
+                        tealDominant = false,
+                        titleColor = if (isWildButtons) null else snapContentColor,
+                        titleFontSize = 28.sp,
+                        subtitleFontSize = 16.sp,
+                        icon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(76.dp)
+                                    .background(
+                                        brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                                            colors = listOf(
+                                                SpotVaultColors.Primary.copy(alpha = 0.45f),
+                                                Color.Transparent
+                                            )
+                                        ),
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(44.dp),
+                                    tint = snapContentColor
+                                )
+                            }
+                        }
+                    )
+                },
+                detailPane = {
+                    GradientCtaCard(
+                        title = "Pin",
+                        subtitle = "Instant GPS pin",
+                        onClick = {
+                            performAppHaptic(context, prefs)
+                            AppSounds.playClickSound(context, prefs)
+                            onPinOnlyClick()
+                        },
+                        height = cardHeight,
+                        tealDominant = true,
+                        titleColor = if (isWildButtons) null else pinContentColor,
+                        titleFontSize = 28.sp,
+                        subtitleFontSize = 16.sp,
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                modifier = Modifier.size(42.dp),
+                                tint = pinContentColor
+                            )
+                        }
+                    )
+                }
+            )
+            if (showInstantRow) {
+                Spacer(modifier = Modifier.height(24.dp))
+                // hingeAware = true — matches the Snap/Pin cards' own hinge-cleared split above
+                // it (see InstantActionsRow's own doc) instead of a fixed ~45/55 weighting that
+                // has no relationship to where the hinge actually is.
+                //
+                // No fixed height when the hinge is horizontal — 76dp is sized for Quick Pin and
+                // Quick Track sitting side by side sharing it, the same way cardHeight above is;
+                // stacked top/bottom instead, they fall back to each button's own natural height,
+                // which .fillMaxHeight(0.88f) inside InstantActionsRow degrades to gracefully once
+                // there's no longer a fixed height above it to resolve a fraction of.
+                InstantActionsRow(
+                    modifier = if (isHorizontalHinge()) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().height(76.dp),
+                    hingeAware = true
+                )
+            }
+        }
+        return
+    }
     if (needsCompactHeightLayout()) {
         // Side by side instead of the portrait tier system below (which shrinks the cards purely
         // by available height and stacks them regardless) — a landscape phone, or any short
@@ -6185,8 +7032,52 @@ fun EmptyStateView(
             (if (showHeadline) 60.dp + headlineGap else 0.dp) +
             snapCardHeight + cardGap + pinCardHeight + instantRowBlock
         val totalSlack = (availableHeight - clusterHeight).coerceAtLeast(0.dp)
-        val topSlack = totalSlack / 2
-        val bottomSlack = totalSlack - topSlack
+
+        // Hinge-aware on a clamshell phone unfolded (a horizontal crease across an otherwise
+        // ordinary narrow phone screen — not the book-style vertical fold TwoPaneRow/
+        // isWideEnoughForTwoPane handle elsewhere, this tier system is specifically the branch
+        // that runs at narrow/Compact width). Plain 50/50 centering aims this whole headline+
+        // cards+row cluster straight at the hinge, the one thing HingeAvoidingCenterBox exists
+        // to avoid elsewhere — folded into this Column's own topSlack/bottomSlack math instead
+        // of wrapping it in that composable, since this Column already owns its own centering
+        // that way (verticalScroll ruled out the more idiomatic weight() spacers — see below).
+        var columnPositionInWindow by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
+        val hinge = LocalFoldingFeature.current
+        val density = LocalDensity.current
+        val (topSlack, bottomSlack) = remember(totalSlack, columnPositionInWindow, hinge, density, clusterHeight, topPad, availableHeight) {
+            val defaultTop = totalSlack / 2
+            val position = columnPositionInWindow
+            if (position == null || hinge == null ||
+                hinge.orientation != androidx.window.layout.FoldingFeature.Orientation.HORIZONTAL
+            ) {
+                defaultTop to (totalSlack - defaultTop)
+            } else {
+                val hingeTopDp = with(density) { (hinge.bounds.top - position.y).toDp() }
+                val hingeBottomDp = with(density) { (hinge.bounds.bottom - position.y).toDp() }
+                val clusterTop = topPad + defaultTop
+                val clusterBottom = clusterTop + clusterHeight
+                if (hingeBottomDp <= clusterTop || hingeTopDp >= clusterBottom) {
+                    // Hinge doesn't actually intersect where the cluster would land by default.
+                    defaultTop to (totalSlack - defaultTop)
+                } else {
+                    val spaceAbove = hingeTopDp.coerceAtLeast(0.dp)
+                    val spaceBelow = (availableHeight - hingeBottomDp).coerceAtLeast(0.dp)
+                    val fitsAbove = clusterHeight <= spaceAbove
+                    val fitsBelow = clusterHeight <= spaceBelow
+                    val adjustedTop = when {
+                        fitsAbove && (!fitsBelow || spaceAbove >= spaceBelow) ->
+                            (spaceAbove - clusterHeight) / 2 - topPad
+                        fitsBelow ->
+                            hingeBottomDp + (spaceBelow - clusterHeight) / 2 - topPad
+                        // Doesn't cleanly fit on either side of the hinge — fall back to plain
+                        // centering; the existing verticalScroll safety net already covers
+                        // "doesn't fit" cases the same way it does with no hinge at all.
+                        else -> defaultTop
+                    }.coerceIn(0.dp, totalSlack)
+                    adjustedTop to (totalSlack - adjustedTop)
+                }
+            }
+        }
 
         Column(
             // Capped on tablets/unfolded foldables — otherwise Snap/Pin stretch to fill the
@@ -6195,7 +7086,8 @@ fun EmptyStateView(
                 .fillMaxWidth()
                 .adaptiveMaxContentWidth()
                 .heightIn(min = availableHeight)
-                .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .onGloballyPositioned { columnPositionInWindow = it.positionInWindow() },
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Top
         ) {
@@ -6571,7 +7463,37 @@ fun PinnedStateView(
             }
     }
 
-    if (needsCompactHeightLayout()) {
+    if (isWideEnoughForTwoPane()) {
+        // Side-by-side instead of stacked, same reasoning as EmptyStateView's own
+        // isWideEnoughForTwoPane() branch — stacking the card above four rows of buttons in a
+        // single width-capped column left most of an unfolded foldable's width sitting empty on
+        // either side. Reuses cardContent/buttonsContent as-is (the exact same two blocks the
+        // compact-height branch below already puts side by side for a different reason — short
+        // height, not extra width) rather than duplicating either one a third time. TwoPaneRow,
+        // not a plain Row, so the gap between them still clears a foldable's physical hinge.
+        TwoPaneRow(
+            modifier = Modifier.fillMaxSize(),
+            listPane = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                ) {
+                    cardContent()
+                }
+            },
+            detailPane = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    buttonsContent()
+                }
+            }
+        )
+    } else if (needsCompactHeightLayout()) {
         // Side-by-side instead of stacked: on a phone rotated to landscape — or any short window
         // even in portrait (compact split-screen, a small device) — there's much less height
         // than this screen was designed around, and stacking the card above four rows of buttons
@@ -6821,11 +7743,10 @@ fun shareLocation(
 
 @Composable
 fun AppLockScreen(onUnlock: () -> Unit) {
-    Box(
+    HingeAvoidingCenterBox(
         modifier = Modifier
             .fillMaxSize()
-            .background(SpotVaultColors.Void),
-        contentAlignment = Alignment.Center
+            .background(SpotVaultColors.Void)
     ) {
         SpotVaultAmbientBackground()
         Column(
@@ -6970,8 +7891,7 @@ fun SplashScreen(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onDismiss
-            ),
-        contentAlignment = Alignment.Center
+            )
     ) {
         // Scale every splash element off the shortest edge so 320dp phones and
         // tablets both get a balanced lockup.
@@ -6989,6 +7909,10 @@ fun SplashScreen(
         if (style != SplashStyle.DEFAULT) {
             SplashStyleEffect(style = style, progress = effectProgress.value, modifier = Modifier.fillMaxSize())
         }
+        // HingeAvoidingCenterBox, not BoxWithConstraints' own contentAlignment — this mark+title
+        // lockup is the one thing on this screen someone actually looks at, and a clamshell phone
+        // unfolded has a real hinge that plain centering would put it directly on top of.
+        HingeAvoidingCenterBox(modifier = Modifier.fillMaxSize()) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
@@ -7089,6 +8013,7 @@ fun SplashScreen(
                 modifier = Modifier.padding(top = 12.dp)
             )
         }
+        } // close HingeAvoidingCenterBox
     }
 }
 
@@ -7617,9 +8542,24 @@ fun SettingsDialog(
     var settingsSearchQuery by remember { mutableStateOf("") }
     var pendingHelpHighlight by remember { mutableStateOf<HelpHighlightTarget?>(null) }
     val selectedSettingsCategory = settingsCategoryStack.lastOrNull()
+    // Same Expanded-width threshold as every other two-pane branch in the app (Vault, Favorites
+    // Hub, Location Browser, Calendar Day Results, the Snap/Pin save screen) — see
+    // isWideEnoughForTwoPane's own doc for why that's a materially higher bar than isGenuineTablet.
+    val isWide = isWideEnoughForTwoPane()
+    // floorStack's whole reason to exist — skip surfacing the root category list on the way back
+    // out, since a direct-shortcut open never showed it in the first place — doesn't hold in
+    // two-pane mode, where the list pane is always on screen regardless of how this dialog was
+    // opened. Using it there anyway meant one back-press from a shortcut-opened category (Home's
+    // Appearance/Help icons) dismissed the whole dialog while that same list sat visibly on
+    // screen, looking tappable, the entire time — a real, visible category list an app-wide
+    // back-press just skipped past. isWide instead floors at an empty stack unconditionally, so
+    // back first clears the selection (revealing the empty-state right pane, list pane
+    // untouched) and only dismisses on a second press once nothing is selected — the same
+    // graduated behavior Favorites Hub, Location Browser, and Calendar Day Results already have.
+    val backFloor = if (isWide) 0 else floorStack.size
 
     BackHandler {
-        if (settingsCategoryStack.size > floorStack.size) {
+        if (settingsCategoryStack.size > backFloor) {
             settingsCategoryStack = settingsCategoryStack.dropLast(1)
         } else {
             onDismiss()
@@ -7628,36 +8568,80 @@ fun SettingsDialog(
 
     @Composable
     fun SettingsNavShell() {
-        androidx.compose.animation.Crossfade(targetState = selectedSettingsCategory, label = "SettingsNav") { category ->
-            if (category == null) {
-                SettingsCategoryListScreen(
-                    searchQuery = settingsSearchQuery,
-                    onSearchQueryChange = { settingsSearchQuery = prefsSafeSearchQuery(it) },
-                    onCategoryClick = { settingsCategoryStack = settingsCategoryStack + it },
-                    onSearchResultClick = { result ->
-                        pendingHelpHighlight = result.highlight
-                        settingsCategoryStack = settingsCategoryStack + result.categoryId
+        if (isWide) {
+            // Unlike Favorites Hub/Location Browser/Calendar Day Results, this doesn't need any
+            // new local pane state or different click wiring for the two-pane case — the existing
+            // settingsCategoryStack this dialog already owns is exactly the "which category is
+            // selected" state a detail pane needs, and none of onCategoryClick/onSearchResultClick
+            // has a "close the overlay" side effect the way those other screens' outer onViewSpot
+            // callbacks did, so the very same callbacks that drive the single-pane Crossfade below
+            // work unchanged here — tapping a category just updates the stack, which now also
+            // drives the right pane instead of crossfading the whole screen away.
+            // TwoPaneRow (not a plain Row) so the gap between panes actually clears a foldable's
+            // hinge instead of guessing a fixed padding — see its own doc.
+            TwoPaneRow(
+                modifier = Modifier.fillMaxSize(),
+                listPane = {
+                    SettingsCategoryListScreen(
+                        searchQuery = settingsSearchQuery,
+                        onSearchQueryChange = { settingsSearchQuery = prefsSafeSearchQuery(it) },
+                        onCategoryClick = { settingsCategoryStack = settingsCategoryStack + it },
+                        onSearchResultClick = { result ->
+                            pendingHelpHighlight = result.highlight
+                            settingsCategoryStack = settingsCategoryStack + result.categoryId
+                        }
+                    )
+                },
+                detailPane = {
+                    if (selectedSettingsCategory != null) {
+                        SettingsCategoryDetailScreen(
+                            categoryId = selectedSettingsCategory,
+                            prefs = prefs,
+                            dao = dao,
+                            onBack = { settingsCategoryStack = settingsCategoryStack.dropLast(1) },
+                            onPickRingtone = onPickRingtone,
+                            onAppLockChanged = onAppLockChanged,
+                            onNavigateToCategory = { settingsCategoryStack = settingsCategoryStack + it },
+                            helpHighlight = pendingHelpHighlight,
+                            onHelpHighlightConsumed = { pendingHelpHighlight = null }
+                        )
+                    } else {
+                        VaultDetailEmptyState(message = "Select a category to view its settings")
                     }
-                )
-            } else {
-                SettingsCategoryDetailScreen(
-                    categoryId = category,
-                    prefs = prefs,
-                    dao = dao,
-                    onBack = { settingsCategoryStack = settingsCategoryStack.dropLast(1) },
-                    onPickRingtone = onPickRingtone,
-                    onAppLockChanged = onAppLockChanged,
-                    onNavigateToCategory = { settingsCategoryStack = settingsCategoryStack + it },
-                    helpHighlight = pendingHelpHighlight,
-                    onHelpHighlightConsumed = { pendingHelpHighlight = null }
-                )
+                }
+            )
+        } else {
+            androidx.compose.animation.Crossfade(targetState = selectedSettingsCategory, label = "SettingsNav") { category ->
+                if (category == null) {
+                    SettingsCategoryListScreen(
+                        searchQuery = settingsSearchQuery,
+                        onSearchQueryChange = { settingsSearchQuery = prefsSafeSearchQuery(it) },
+                        onCategoryClick = { settingsCategoryStack = settingsCategoryStack + it },
+                        onSearchResultClick = { result ->
+                            pendingHelpHighlight = result.highlight
+                            settingsCategoryStack = settingsCategoryStack + result.categoryId
+                        }
+                    )
+                } else {
+                    SettingsCategoryDetailScreen(
+                        categoryId = category,
+                        prefs = prefs,
+                        dao = dao,
+                        onBack = { settingsCategoryStack = settingsCategoryStack.dropLast(1) },
+                        onPickRingtone = onPickRingtone,
+                        onAppLockChanged = onAppLockChanged,
+                        onNavigateToCategory = { settingsCategoryStack = settingsCategoryStack + it },
+                        helpHighlight = pendingHelpHighlight,
+                        onHelpHighlightConsumed = { pendingHelpHighlight = null }
+                    )
+                }
             }
         }
     }
 
 
     if (embeddedInMainNav) {
-        AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
+        AdaptiveTabletContainer(modifier = Modifier.fillMaxSize(), wide = isWide) {
             SettingsNavShell()
         }
     } else {
@@ -7669,7 +8653,7 @@ fun SettingsDialog(
             )
         ) {
             if (!embeddedInMainNav) EnsureDialogEdgeToEdge()
-            AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
+            AdaptiveTabletContainer(modifier = Modifier.fillMaxSize(), wide = isWide) {
                 SettingsNavShell()
             }
         }

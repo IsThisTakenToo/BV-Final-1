@@ -26,3 +26,4 @@ dependencyResolutionManagement {
 rootProject.name = "BeaconVault"
 
 include(":app")
+include(":wear")

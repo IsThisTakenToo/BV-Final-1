@@ -183,7 +183,7 @@ fun AutomaticParkingSettingsContent(
     ) { granted ->
         activityRecognitionGranted = granted
         if (!granted) {
-            prefs.edit().putBoolean(MOTION_AUTOPARK_ENABLED_PREF, false).commit()
+            prefs.edit().putBoolean(MOTION_AUTOPARK_ENABLED_PREF, false).apply()
             stopMotionWatch(context, prefs)
         } else if (armed) {
             // The Motion toggle's own onCheckedChange below already tries this "arm right away"
@@ -315,7 +315,7 @@ fun AutomaticParkingSettingsContent(
                 subtitle = "Off by default. Requires permissions below.",
                 checked = enabled,
                 onCheckedChange = { on ->
-                    prefs.edit().putBoolean(AUTO_PARK_ENABLED_PREF, on).commit()
+                    prefs.edit().putBoolean(AUTO_PARK_ENABLED_PREF, on).apply()
                     WidgetThemeHelper.bumpWidgetRevision(prefs)
                     WidgetThemeHelper.refreshAllWidgets(context.applicationContext)
                     if (!on) {
@@ -671,7 +671,7 @@ fun AutomaticParkingSettingsContent(
                             activityRecognitionGranted = true
                         }
                     }
-                    prefs.edit().putBoolean(MOTION_AUTOPARK_ENABLED_PREF, on).commit()
+                    prefs.edit().putBoolean(MOTION_AUTOPARK_ENABLED_PREF, on).apply()
                     WidgetThemeHelper.bumpWidgetRevision(prefs)
                     WidgetThemeHelper.refreshAllWidgets(context.applicationContext)
                     if (!on) {

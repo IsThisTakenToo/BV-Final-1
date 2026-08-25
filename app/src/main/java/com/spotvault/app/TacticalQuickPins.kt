@@ -244,6 +244,22 @@ private suspend fun recentAccurateCachedLocation(
     null
 }
 
+/** One-shot best-effort peek at the last cached location's accuracy — used only to decide
+ * whether the save dialog's floor-level prompt (Garage Flow) should auto-expand, never as an
+ * actual saved coordinate (resolveCurrentLocation below still owns that, resolved fresh at
+ * Pin-confirm time). Returns null on any failure, missing accuracy, or a fix too stale to say
+ * anything meaningful about the *current* moment — callers already degrade gracefully to "don't
+ * auto-expand" when this is null. */
+private const val ACCURACY_PEEK_MAX_AGE_MS = 30_000L
+
+suspend fun peekAccuracyHintMeters(context: Context): Float? = try {
+    val cached = LocationServices.getFusedLocationProviderClient(context).lastLocation.await() ?: return null
+    val ageMs = System.currentTimeMillis() - cached.time
+    if (ageMs !in 0..ACCURACY_PEEK_MAX_AGE_MS || !cached.hasAccuracy()) null else cached.accuracy
+} catch (_: Exception) {
+    null
+}
+
 /** A fix looser than this isn't trusted outright — e.g. a "high accuracy" request can still
  * hand back a degraded fix quickly (no internet for AGPS assistance data, GPS multipath near a
  * building), and its accuracy field is the only way to tell that happened. 10m — tight enough to
@@ -293,10 +309,15 @@ suspend fun resolveCurrentLocation(context: Context, prefs: SharedPreferences): 
         // permission problem — the user has simply turned GPS/location off device-wide). Every
         // fetch below would just run out its full timeout waiting for a fix that can never
         // arrive — up to ~7s combined — when the answer is already knowable instantly via one
-        // synchronous check. Still falls through to fetchLastKnownLocation: a previously-cached
-        // fix, if Play Services happens to still have one, costs nothing to check regardless.
+        // synchronous check. Still falls through to a cached fix, if Play Services happens to
+        // still have one — bounded to 10 minutes old (same freshness bar used elsewhere, see
+        // fetchLastKnownLocationIfFresh's other call site) rather than accepted at any age: with
+        // GPS off there's no live fix coming to correct a stale one later in this same call, so an
+        // hours- or days-old cache (e.g. wherever the phone last had a fix before GPS was turned
+        // off) would otherwise get saved as if it were the current position with nothing marking
+        // it as stale.
         if (!isLocationServicesEnabled(context)) {
-            return fetchLastKnownLocation(context)
+            return fetchLastKnownLocationIfFresh(context, 10L * 60 * 1000)
         }
 
         var bestFix: android.location.Location? = null
@@ -681,6 +702,9 @@ suspend fun quietSaveTacticalPin(
                 action = TimerService.ACTION_STOP
             }
         )
+        // A quiet save while a track was active ends that track — a paired watch's tile needs to
+        // know, same as every other path that flips is_pinned back to false.
+        TrackingWearSync.pushTrackingState(context)
     }
 
     val resolvedVehicleId = vehicleId ?: run {
@@ -876,6 +900,10 @@ suspend fun quickActiveTrackPin(
     // In-app Quick Track needs an immediate refresh. Widget relay paths pass refreshWidgetsAfter
     // after the overlay dismisses and will refresh again — a duplicate update is harmless.
     WidgetThemeHelper.refreshAllWidgets(context)
+    // Lets a paired watch's tile flip from Quick Pin/Track to Navigate/Found — covers both the
+    // phone's own Quick Track button/tile and a watch-triggered Quick Track (see
+    // WearActionListenerService, which calls this exact function directly).
+    TrackingWearSync.pushTrackingState(context)
 
     QuietSaveResult.Saved(savedId)
 }

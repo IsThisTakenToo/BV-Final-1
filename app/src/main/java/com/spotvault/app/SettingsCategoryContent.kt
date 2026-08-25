@@ -80,6 +80,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -1150,11 +1151,18 @@ fun AppearanceSettingsContent(prefs: SharedPreferences, onNavigateToCategory: (S
                             android.os.Process.killProcess(android.os.Process.myPid())
                         }
                     } else {
-                        android.widget.Toast.makeText(
-                            settingsContext,
-                            "This device blocked the icon switch. If DropPin Vault was sideloaded, check Settings > Apps > DropPin Vault > (⋮) menu for \"Allow restricted settings,\" then try again.",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
+                        // "Allow restricted settings" is an Android 13+ menu item — it doesn't
+                        // exist on older phones/tablets at all, so telling a pre-13 device to go
+                        // look for it points the user at a setting they'll never find. A failed
+                        // switch on those older versions is virtually always the OEM
+                        // PackageManager silently no-op'ing the change instead (already logged by
+                        // applyIcon's own readback), not a restricted-settings block.
+                        val message = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                            "This device blocked the icon switch. If DropPin Vault was sideloaded, check Settings > Apps > DropPin Vault > (⋮) menu for \"Allow restricted settings,\" then try again."
+                        } else {
+                            "This device blocked the icon switch. Try again, or restart your phone/tablet if it keeps happening."
+                        }
+                        android.widget.Toast.makeText(settingsContext, message, android.widget.Toast.LENGTH_LONG).show()
                     }
                 }) {
                     Text("Change Icon", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
@@ -1742,7 +1750,14 @@ fun VaultSettingsContent(prefs: SharedPreferences, dao: LocationDao) {
                     // the timer dialog's rememberSaveable/binder path.
                     val sanitized = it.filter { ch -> ch.isDigit() }.take(4)
                     defaultTimerMins = sanitized
-                    prefs.edit().putString("default_timer_mins", sanitized).apply()
+                    // Persisted as "0" (or "00", etc.) would silently make every new Pin/Track
+                    // default to a 0-minute timer — MainActivity reads this pref straight into the
+                    // timer dialog's initial value with no minimum check of its own. Treat a
+                    // typed zero the same as blank (falls back to no default) rather than storing
+                    // a value nobody could sensibly want; the field itself still shows exactly
+                    // what was typed.
+                    val toStore = if (sanitized.toIntOrNull() == 0) "" else sanitized
+                    prefs.edit().putString("default_timer_mins", toStore).apply()
                 },
                 label = { Text("Default Timer (minutes)") },
                 modifier = Modifier.fillMaxWidth(),
@@ -2326,6 +2341,11 @@ fun GoogleDriveBackupSection(prefs: SharedPreferences) {
     var accountEmail by remember { mutableStateOf(prefs.getString("drive_account_email", null)) }
     var lastBackupMillis by remember { mutableStateOf(prefs.getLong("drive_last_backup_success", 0L)) }
     val lastBackupError = prefs.getString("drive_last_backup_error", null)
+    // Set by DriveAutoBackupWorker when a background sync finds the account's Drive backup was
+    // changed by a different device/session since this one last synced with it — read fresh each
+    // recomposition (not `remember`-cached) so opening Settings after that happened shows the
+    // banner without needing an app restart in between.
+    val syncConflictPending = prefs.getBoolean("drive_sync_conflict_pending", false)
     var driveState by remember { mutableStateOf<DriveOnboardingState>(DriveOnboardingState.Idle) }
     var consentContinuation by remember { mutableStateOf<((Intent?) -> Unit)?>(null) }
     var showDisconnectConfirm by remember { mutableStateOf(false) }
@@ -2431,8 +2451,47 @@ fun GoogleDriveBackupSection(prefs: SharedPreferences) {
                         // restored-count to show here).
                         driveState = DriveOnboardingState.Idle
                     },
-                    onFailure = { driveState = DriveOnboardingState.Failed(it.message ?: "Couldn't back up to Google Drive") }
+                    onFailure = { e ->
+                        driveState = if (e is DriveSyncConflictException) {
+                            // Same choice as the connect-time conflict, just reached from a
+                            // manual "Back Up Now" tap instead — reuses the identical dialog below
+                            // rather than showing this as a plain error.
+                            DriveOnboardingState.NeedsConflictResolution(accountEmail ?: "your Google account", e.accessToken)
+                        } else {
+                            DriveOnboardingState.Failed(e.message ?: "Couldn't back up to Google Drive")
+                        }
+                    }
                 )
+            } finally {
+                AppLockGate.end()
+            }
+        }
+    }
+
+    /** Reached from the conflict banner below, for a conflict [DriveAutoBackupWorker] detected
+     * while Settings wasn't open — that background token could easily be stale by the time the
+     * user actually taps in, so this gets a fresh one (silently, in the common case where consent
+     * is already granted) rather than trying to reuse whatever the worker last had. */
+    fun resolveBackgroundConflict() {
+        val act = activity ?: return
+        driveState = DriveOnboardingState.Working
+        AppLockGate.begin()
+        coroutineScope.launch {
+            try {
+                val authOutcome = DriveSyncManager.authorizeDriveAccess(act)
+                val token = when (authOutcome) {
+                    is DriveSyncManager.AuthOutcome.Authorized -> authOutcome.accessToken
+                    is DriveSyncManager.AuthOutcome.NeedsConsent -> {
+                        val data = suspendCancellableCoroutine<Intent?> { cont ->
+                            consentContinuation = { d -> cont.resume(d) }
+                            consentLauncher.launch(IntentSenderRequest.Builder(authOutcome.intentSender).build())
+                        }
+                        DriveSyncManager.accessTokenFromConsentResult(act, data).getOrThrow()
+                    }
+                }
+                driveState = DriveOnboardingState.NeedsConflictResolution(accountEmail ?: "your Google account", token)
+            } catch (e: Exception) {
+                driveState = DriveOnboardingState.Failed(e.message ?: "Couldn't check Google Drive")
             } finally {
                 AppLockGate.end()
             }
@@ -2470,6 +2529,41 @@ fun GoogleDriveBackupSection(prefs: SharedPreferences) {
             }
             if (driveState is DriveOnboardingState.Failed) {
                 Text((driveState as DriveOnboardingState.Failed).message, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+            }
+            // A background sync (DriveAutoBackupWorker) found this account's Drive backup had
+            // diverged from what this device last knew about — same underlying conflict as the
+            // connect-time one, just discovered later. Shown here rather than as a silent overwrite
+            // or a scary generic error, since neither side is actually broken — it's a decision
+            // pending, not a failure.
+            if (syncConflictPending && driveState !is DriveOnboardingState.NeedsConflictResolution) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 10.dp)
+                ) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = SpotVaultColors.Danger, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Another device backed up different data to this Drive account. Resolve to choose which one to keep.",
+                        color = SpotVaultColors.OnSurface,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                SpotVaultButton(
+                    onClick = { resolveBackgroundConflict() },
+                    enabled = driveState !is DriveOnboardingState.Working,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotVaultColors.Danger.copy(alpha = 0.18f),
+                        contentColor = SpotVaultColors.Danger
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                ) {
+                    if (driveState is DriveOnboardingState.Working) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = SpotVaultColors.Danger)
+                    } else {
+                        Text("Resolve Conflict", fontWeight = FontWeight.Bold)
+                    }
+                }
             }
             Row(modifier = Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SpotVaultButton(
@@ -2643,10 +2737,17 @@ fun DataSettingsContent(
         if (result != null) {
             backupMessage = result.fold(
                 onSuccess = { result ->
-                    if (result.truncated) {
-                        "Imported ${result.imported} waypoints (capped at ${GpxParser.MAX_IMPORT_WAYPOINTS})."
-                    } else {
-                        "Imported ${result.imported} waypoints from GPX."
+                    when {
+                        // File structure broke down partway through — still say how many actually
+                        // made it in, rather than reporting this the same as a clean success.
+                        result.parseError && result.imported > 0 ->
+                            "Imported ${result.imported} waypoints — the file appears corrupted or incomplete after that point."
+                        result.parseError ->
+                            "GPX import failed: the file appears corrupted or incomplete."
+                        result.truncated ->
+                            "Imported ${result.imported} waypoints (capped at ${GpxParser.MAX_IMPORT_WAYPOINTS})."
+                        else ->
+                            "Imported ${result.imported} waypoints from GPX."
                     }
                 },
                 onFailure = { "GPX import failed: ${it.message ?: "Unknown error"}" }
@@ -2848,6 +2949,25 @@ fun DataSettingsContent(
             subtitle = "Permanently erases your saved data"
         ) {
             ClearAllVaultDataButton(dao = dao, spotPhotoDao = spotPhotoDao, coroutineScope = coroutineScope)
+        }
+
+        // BuildConfig.DEBUG-gated, never compiled into a release build — this is only here to
+        // let a real crash be triggered on a real device, since installCrashHandler's behavior
+        // (does CrashRecoveryActivity actually appear instead of the OS's own "keeps stopping"
+        // dialog?) depends on Android version/OEM behavior no compile check can verify.
+        if (BuildConfig.DEBUG) {
+            SettingsSectionCard(
+                title = "Developer",
+                subtitle = "Debug builds only — never present in a release build"
+            ) {
+                SettingsActionRow(
+                    title = "Force Crash",
+                    subtitle = "Throws an uncaught exception to test CrashRecoveryActivity",
+                    onClick = {
+                        throw RuntimeException("Force Crash: debug-only test of installCrashHandler")
+                    }
+                )
+            }
         }
 
         Column(

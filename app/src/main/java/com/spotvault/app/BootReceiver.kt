@@ -16,7 +16,7 @@ class BootReceiver : BroadcastReceiver() {
                 try {
                     ContextCompat.startForegroundService(context, serviceIntent)
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    android.util.Log.e("BootReceiver", "Failed to resume pinned timer service after boot", e)
                 }
                 NotificationGuard.schedule(context)
             }

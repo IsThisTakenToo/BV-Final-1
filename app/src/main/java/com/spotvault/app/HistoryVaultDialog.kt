@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -785,6 +786,18 @@ fun SpotEditDialog(
     val dateLabel = remember(timestamp) { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(timestamp)) }
     val timeLabel = remember(timestamp) { SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp)) }
 
+    // EnsureDialogEdgeToEdge applies FLAG_SECURE to every Compose Dialog window when App Lock is
+    // on, but these two are legacy platform Dialog subclasses that open their own Window entirely
+    // outside Compose, so they never inherited it — closing that gap for completeness even though
+    // a calendar grid / clock face leaks far less than actual vault content would.
+    fun applySecureFlagIfAppLocked(dialog: android.app.Dialog) {
+        val appLockEnabled = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+            .getBoolean(APP_LOCK_ENABLED_PREF, false)
+        if (appLockEnabled) {
+            dialog.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
     fun pickDate() {
         val cal = Calendar.getInstance().apply { timeInMillis = timestamp }
         android.app.DatePickerDialog(
@@ -796,7 +809,7 @@ fun SpotEditDialog(
             cal.get(Calendar.YEAR),
             cal.get(Calendar.MONTH),
             cal.get(Calendar.DAY_OF_MONTH)
-        ).show()
+        ).apply { applySecureFlagIfAppLocked(this) }.show()
     }
 
     fun pickTime() {
@@ -811,7 +824,7 @@ fun SpotEditDialog(
             cal.get(Calendar.HOUR_OF_DAY),
             cal.get(Calendar.MINUTE),
             false
-        ).show()
+        ).apply { applySecureFlagIfAppLocked(this) }.show()
     }
 
     PremiumDialog(
@@ -1129,11 +1142,20 @@ private fun SpotEditVehiclePickerSheet(
         containerColor = SpotVaultColors.Elevated,
         contentColor = SpotVaultColors.OnSurface
     ) {
+        // ModalBottomSheet opens its own Popup window — it doesn't inherit whatever
+        // AdaptiveTabletContainer the caller is already wrapped in, and Material3's sheet Surface
+        // spans the full window width on its own, so this stretched edge-to-edge on a tablet.
+        AdaptiveTabletContainer {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp)
+                // ModalBottomSheet doesn't auto-scroll oversized content on its own — a long
+                // vehicle list plus this header could exceed the sheet's available height on a
+                // short/landscape window and become permanently unreachable without this. Every
+                // sibling picker sheet (tag filter, tag picker) already has this; this one didn't.
+                .verticalScroll(rememberScrollState())
         ) {
             Text(
                 "Assign Vehicle",
@@ -1168,6 +1190,7 @@ private fun SpotEditVehiclePickerSheet(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -1221,6 +1244,10 @@ private fun SpotEditTagPickerSheet(
         containerColor = SpotVaultColors.Elevated,
         contentColor = SpotVaultColors.OnSurface
     ) {
+        // ModalBottomSheet opens its own Popup window — it doesn't inherit whatever
+        // AdaptiveTabletContainer the caller is already wrapped in, and Material3's sheet Surface
+        // spans the full window width on its own, so this stretched edge-to-edge on a tablet.
+        AdaptiveTabletContainer {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1358,6 +1385,7 @@ private fun SpotEditTagPickerSheet(
             ) {
                 Text("Done", fontWeight = FontWeight.Bold)
             }
+        }
         }
     }
 }
@@ -1700,6 +1728,12 @@ private fun VaultTagFilterSheet(
         containerColor = SpotVaultColors.Elevated,
         contentColor = SpotVaultColors.OnSurface
     ) {
+        // ModalBottomSheet opens its own Popup window — it doesn't inherit whatever
+        // AdaptiveTabletContainer the caller (Vault list) is already wrapped in, and Material3's
+        // sheet Surface spans the full window width on its own. Without this, the search field,
+        // tag cloud, and vehicle rows stretched edge-to-edge on a tablet the same way a raw
+        // Dialog would without AdaptiveTabletContainer.
+        AdaptiveTabletContainer {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1929,6 +1963,7 @@ private fun VaultTagFilterSheet(
                 }
             }
         }
+        }
     }
 
     if (showTagManager) {
@@ -1960,12 +1995,17 @@ private fun VaultTagFilterSheet(
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                VehicleEditScreen(
-                    vehicleId = null,
-                    vehicleDao = vehicleDao,
-                    locationDao = locationDao,
-                    onBack = { showAddVehicleFromSheet = false }
-                )
+                // Same fix as the identical Add Vehicle dialog on the Snap/Pin save screen
+                // (MainActivity.kt) — raw Dialog, no AdaptiveTabletContainer of its own, so the
+                // form stretched edge-to-edge on a tablet.
+                AdaptiveTabletContainer {
+                    VehicleEditScreen(
+                        vehicleId = null,
+                        vehicleDao = vehicleDao,
+                        locationDao = locationDao,
+                        onBack = { showAddVehicleFromSheet = false }
+                    )
+                }
             }
         }
     }
@@ -3876,6 +3916,14 @@ private fun buildVaultMonthGridCells(year: Int, month: Int): List<VaultCalendarD
 private fun VaultOverlayDialog(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
+    // False for every existing dialog built on this wrapper (Location Browser, Archived Spots,
+    // Tag Editor, Calendar Day Results, and Favorites Hub's own single-pane content) — all of
+    // those are a single centered column, exactly what adaptiveMaxContentWidth()'s 600dp cap
+    // below was tuned for. Favorites Hub's two-pane branch is the one caller that opts in: a
+    // fixed 380dp list pane plus a detail pane both fit *inside* that Row, so capping the Row
+    // itself to 600dp would squeeze the detail pane back down to ~220dp — the same starvation
+    // isGenuineTablet()'s own doc warns about, just reintroduced one layer up.
+    wide: Boolean = false,
     content: @Composable () -> Unit
 ) {
     BackHandler(onBack = onDismissRequest)
@@ -3934,10 +3982,34 @@ private fun VaultOverlayDialog(
             contentAlignment = Alignment.Center
         ) {
             Box(
+                // fillMaxWidth(), not fillMaxWidth(0.92f) — the outer BoxWithConstraints above
+                // already carves out real margin via its own padding (leftPad/rightPad, each
+                // floored at 8dp + a further 16dp, so ~24dp/side on a phone with no cutout —
+                // already a clear, deliberate gap from the true screen edge to this card). Taking
+                // only 92% of what was ALREADY narrowed stacked a second squeeze on top of the
+                // first, compounding into ~36dp of margin per side on a typical 360dp phone —
+                // roughly a fifth of the screen width spent on margin alone. This is the shared
+                // wrapper every Vault dialog built on it (Favorites Hub, Location Browser,
+                // Archived Spots, Tag Editor, Calendar Day Results) sits on, so the "too skinny"
+                // look wasn't isolated to any one of them. adaptiveMaxContentWidth() right after
+                // still caps this on tablets exactly as before, for every caller except the one
+                // that now opts out via wide = true — see wide's own doc above.
                 modifier = modifier
-                    .fillMaxWidth(0.92f)
-                    .adaptiveMaxContentWidth()
+                    .fillMaxWidth()
+                    .let { if (wide) it else it.adaptiveMaxContentWidth() }
                     .heightIn(max = maxHeight)
+                    // Smooths every resize this card can go through — most visibly wide flipping
+                    // live while a dialog stays open (Location Browser drilling from a single-
+                    // column Cities list into a two-pane Entries view on a wide/unfolded screen;
+                    // the same live flip is also reachable for Favorites Hub and Calendar Day
+                    // Results by unfolding a foldable while either is already open), but also
+                    // ordinary content-driven height changes (a list growing after "Show more",
+                    // an empty-state message appearing/disappearing) that used to snap instantly
+                    // on every dialog built on this wrapper. Deliberately the default spring, not
+                    // a custom spec — Compose already tunes it for exactly this kind of layout
+                    // transition, and this card's own resize isn't a special case that needs a
+                    // different feel from any other animateContentSize() use in the app.
+                    .animateContentSize()
                     .clip(dialogShape)
                     .background(
                         Brush.verticalGradient(
@@ -4728,6 +4800,14 @@ fun VaultCalendarDayResultsDialog(
     val dayLabel = remember(dayStartMillis) {
         SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.getDefault()).format(Date(dayStartMillis))
     }
+    // Keyed by dayStartMillis, not a bare rememberSaveable — this composable stays mounted (and
+    // this state would otherwise persist) across different days if the caller ever reused it
+    // for a new day without a full dispose, which is exactly what its own onDismiss no longer
+    // guarantees now that view-spot doesn't call it in two-pane mode (see the twoPane branch
+    // below) — picking a new day should always start from the empty state, not still be showing
+    // whatever was selected on the previous day.
+    var selectedDaySpotId by rememberSaveable(dayStartMillis) { mutableStateOf(-1) }
+    val twoPane = isWideEnoughForTwoPane()
 
     // Height comes from VaultOverlayDialog itself (heightIn(max = maxHeight), already measured
     // from the real available space inside the dialog's own status/nav-bar-aware insets) rather
@@ -4735,58 +4815,141 @@ fun VaultCalendarDayResultsDialog(
     // meant this dialog's actual max height depended on which one happened to be tighter for a
     // given device/orientation instead of always matching the same budget every other
     // VaultOverlayDialog-based sheet already gets.
-    VaultOverlayDialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Saved Spots",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 18.sp,
-                        color = SpotVaultColors.Teal,
-                        letterSpacing = 1.sp
-                    )
-                    Text(
-                        text = dayLabel,
-                        fontSize = 12.sp,
-                        color = SpotVaultColors.Muted,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
+    VaultOverlayDialog(onDismissRequest = onDismiss, wide = twoPane) {
+        if (twoPane) {
+            // TwoPaneRow (not a plain Row) so the gap between panes actually clears a foldable's
+            // hinge instead of guessing a fixed padding — see its own doc.
+            TwoPaneRow(
+                modifier = Modifier.fillMaxSize(),
+                listPane = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Saved Spots",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 18.sp,
+                                    color = SpotVaultColors.Teal,
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = dayLabel,
+                                    fontSize = 12.sp,
+                                    color = SpotVaultColors.Muted,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(SpotVaultColors.Surface.copy(alpha = 0.75f), CircleShape)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.OnSurface)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        VaultFilterableSpotList(
+                            baseSpots = daySpots,
+                            prefs = prefs,
+                            dao = dao,
+                            selectedItems = selectedItems,
+                            onSelectedItemsChange = onSelectionChange,
+                            onShowDeleteConfirm = onShowDeleteConfirm,
+                            onSwipeDeleteSpot = onSwipeDelete,
+                            onShareRequest = onShareRequest,
+                            // Local pane state instead of forwarding to the outer onViewSpot —
+                            // same reasoning as Favorites Hub's two-pane branch: the outer
+                            // callback (HistoryDialogContent) closes this whole dialog and the
+                            // month-grid view behind it, which used to be needed so tapping a spot
+                            // in the old two-pane Vault layout wasn't hidden behind a still-open
+                            // Dialog. Now that this dialog hosts its own detail pane, that outer
+                            // callback is simply never reached from here, and this dialog (and the
+                            // day it's showing) stays open exactly as the single-pane branch below
+                            // already does.
+                            onViewSpot = { spot -> selectedDaySpotId = spot.id },
+                            coroutineScope = coroutineScope,
+                            modifier = Modifier.weight(1f),
+                            emptyTitle = "No spots saved on this day",
+                            emptySubtitle = "Snap a photo or drop a pin to save one."
+                        )
+                    }
+                },
+                detailPane = {
+                    if (selectedDaySpotId >= 0) {
+                        // onNavigateToCompass = null — no NavController here either; see the
+                        // identical reasoning on Favorites Hub's own two-pane detail pane.
+                        SavedSpotDetailRoute(
+                            spotId = selectedDaySpotId,
+                            dao = dao,
+                            prefs = prefs,
+                            onNavigateToCompass = null,
+                            onDismiss = { selectedDaySpotId = -1 },
+                            onShareRequest = onShareRequest
+                        )
+                    } else {
+                        VaultDetailEmptyState(message = "Select a spot to view its details")
+                    }
                 }
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .background(SpotVaultColors.Surface.copy(alpha = 0.75f), CircleShape)
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.OnSurface)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            VaultFilterableSpotList(
-                baseSpots = daySpots,
-                prefs = prefs,
-                dao = dao,
-                selectedItems = selectedItems,
-                onSelectedItemsChange = onSelectionChange,
-                onShowDeleteConfirm = onShowDeleteConfirm,
-                onSwipeDeleteSpot = onSwipeDelete,
-                onShareRequest = onShareRequest,
-                onViewSpot = onViewSpot,
-                coroutineScope = coroutineScope,
-                modifier = Modifier.weight(1f, fill = false),
-                emptyTitle = "No spots saved on this day",
-                emptySubtitle = "Snap a photo or drop a pin to save one."
             )
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Saved Spots",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 18.sp,
+                            color = SpotVaultColors.Teal,
+                            letterSpacing = 1.sp
+                        )
+                        Text(
+                            text = dayLabel,
+                            fontSize = 12.sp,
+                            color = SpotVaultColors.Muted,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(SpotVaultColors.Surface.copy(alpha = 0.75f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.OnSurface)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                VaultFilterableSpotList(
+                    baseSpots = daySpots,
+                    prefs = prefs,
+                    dao = dao,
+                    selectedItems = selectedItems,
+                    onSelectedItemsChange = onSelectionChange,
+                    onShowDeleteConfirm = onShowDeleteConfirm,
+                    onSwipeDeleteSpot = onSwipeDelete,
+                    onShareRequest = onShareRequest,
+                    onViewSpot = onViewSpot,
+                    coroutineScope = coroutineScope,
+                    modifier = Modifier.weight(1f, fill = false),
+                    emptyTitle = "No spots saved on this day",
+                    emptySubtitle = "Snap a photo or drop a pin to save one."
+                )
+            }
         }
     }
 }
@@ -5269,77 +5432,156 @@ fun FavoritesHubDialog(
         if (pendingSharedSpot != null) showAddFavorite = true
     }
 
-    VaultOverlayDialog(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "⭐ Favorites",
-                        fontWeight = FontWeight.Black,
-                        fontSize = 18.sp,
-                        color = SpotVaultColors.Teal,
-                        letterSpacing = 0.5.sp
+    // rememberSaveable, not remember — same reasoning as HistoryDialogContent's own
+    // showCalendarDialog/selectedCalendarDay: this dialog's content never navigates away in
+    // two-pane mode (selecting a favorite just updates this local state instead), but the host
+    // Activity can still be recreated out from under it (rotation, multi-window resize), which
+    // would otherwise silently drop back to the empty-state pane.
+    var selectedFavoriteSpotId by rememberSaveable { mutableStateOf(-1) }
+    val twoPane = isWideEnoughForTwoPane()
+
+    // wide = twoPane: only the two-pane branch below needs VaultOverlayDialog to skip its usual
+    // 600dp content cap (see VaultOverlayDialog's own doc) — the single-pane Column further down
+    // is exactly the same centered-column content every other Vault overlay dialog uses that cap
+    // for, so it keeps the default (wide = false) untouched.
+    VaultOverlayDialog(onDismissRequest = onDismiss, wide = twoPane) {
+        if (twoPane) {
+            // TwoPaneRow (not a plain Row) so the gap between panes actually clears a foldable's
+            // hinge instead of guessing a fixed padding — see its own doc.
+            TwoPaneRow(
+                modifier = Modifier.fillMaxSize(),
+                listPane = {
+                    FavoritesHubListPane(
+                        favoriteSpots = favoriteSpots,
+                        favoriteTotalCount = favoriteTotalCount,
+                        prefs = prefs,
+                        dao = dao,
+                        onDismiss = onDismiss,
+                        // Tapping a favorite updates this pane's own local state instead of
+                        // forwarding to the outer onViewSpot — the same reasoning as the main
+                        // Vault's two-pane branch (SpotVaultNavigation.kt): the outer callback
+                        // navigates away, which would tear down and rebuild this whole dialog
+                        // instead of just swapping the detail pane beside it.
+                        onViewSpot = { spot -> selectedFavoriteSpotId = spot.id },
+                        onShareRequest = onShareRequest,
+                        coroutineScope = coroutineScope,
+                        selectedItems = selectedItems,
+                        onSelectedItemsChange = { selectedItems = it },
+                        onDeleteSpots = ::deleteSpots,
+                        onSwipeDeleteRequest = { spot ->
+                            if (prefs.getBoolean("confirm_delete", true)) {
+                                selectedItems = setOf(spot.id)
+                                showDeleteConfirm = true
+                            } else {
+                                deleteSpots(setOf(spot.id))
+                            }
+                        },
+                        onAddFavoriteClick = { showAddFavorite = true }
                     )
-                    if (favoriteTotalCount > favoriteSpots.size) {
-                        Text(
-                            text = "Showing ${favoriteSpots.size} of $favoriteTotalCount",
-                            fontSize = 12.sp,
-                            color = SpotVaultColors.Muted,
-                            modifier = Modifier.padding(top = 2.dp)
+                },
+                detailPane = {
+                    if (selectedFavoriteSpotId >= 0) {
+                        // Reused as-is from the main Vault's own two-pane detail pane — see its
+                        // own comment on why no changes were needed to host it here too.
+                        // onNavigateToCompass = null hides the Compass button entirely (rather
+                        // than wiring a no-op) — this embedded pane is reached through
+                        // HistoryDialogContent's plain-callback chain, not a NavHost destination,
+                        // so there's no NavController here to navigate with. Compass navigation
+                        // for a favorite is still reachable via the main Vault's own detail pane.
+                        SavedSpotDetailRoute(
+                            spotId = selectedFavoriteSpotId,
+                            dao = dao,
+                            prefs = prefs,
+                            onNavigateToCompass = null,
+                            onDismiss = { selectedFavoriteSpotId = -1 },
+                            onShareRequest = onShareRequest
                         )
+                    } else {
+                        VaultDetailEmptyState(message = "Select a favorite to view its details")
                     }
                 }
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.Muted)
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Box(modifier = Modifier.weight(1f, fill = false)) {
-                VaultFilterableSpotList(
-                    baseSpots = favoriteSpots,
-                    prefs = prefs,
-                    dao = dao,
-                    selectedItems = selectedItems,
-                    onSelectedItemsChange = { selectedItems = it },
-                    // Bulk delete from the top action bar always skips the confirmation modal —
-                    // same reasoning as the main Vault: soft-delete is already reversible via
-                    // Recently Deleted, and now Undo, so a blocking dialog for it is redundant.
-                    onShowDeleteConfirm = { deleteSpots(selectedItems) },
-                    onSwipeDeleteSpot = { spot ->
-                        // Single-spot swipe delete still respects the user's own "Confirm before
-                        // deleting" setting — only the bulk action above skips it unconditionally.
-                        if (prefs.getBoolean("confirm_delete", true)) {
-                            selectedItems = setOf(spot.id)
-                            showDeleteConfirm = true
-                        } else {
-                            deleteSpots(setOf(spot.id))
-                        }
-                    },
-                    onShareRequest = onShareRequest,
-                    onViewSpot = onViewSpot,
-                    coroutineScope = coroutineScope,
+            )
+        } else {
+            // Kept as its own inline copy rather than routed through FavoritesHubListPane above —
+            // that composable bundles the header together with the list+FAB behind a single
+            // weight(1f) Box, which would insert an extra Column layer here and change how this
+            // branch's weight(1f, fill = false) interacts with Column's weighted-child sizing
+            // (the header would end up inside the fill=false budget instead of being a fixed-
+            // height sibling above it, same as this exact, already-shipped structure has always
+            // done). Not worth risking a sizing regression in existing behavior to save a few
+            // lines of duplication — see FavoritesHubListPane's own doc for the two-pane case
+            // this WAS worth factoring out for, where there's no prior behavior to preserve.
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    emptyTitle = "No favorites yet",
-                    emptySubtitle = "Tap + below to save a place you want to visit, or star any saved spot from its own menu.",
-                    hideFavoritesFilter = true,
-                    // Clears the FAB below (56dp button + 16dp margin) — without this the empty
-                    // state's own centered text ended up right underneath it, its last line
-                    // covered outright.
-                    contentBottomPadding = 72.dp
-                )
-                FloatingActionButton(
-                    onClick = { showAddFavorite = true },
-                    containerColor = SpotVaultColors.Teal,
-                    contentColor = SpotVaultColors.OnTeal,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add Spot")
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "⭐ Favorites",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 18.sp,
+                            color = SpotVaultColors.Teal,
+                            letterSpacing = 0.5.sp
+                        )
+                        if (favoriteTotalCount > favoriteSpots.size) {
+                            Text(
+                                text = "Showing ${favoriteSpots.size} of $favoriteTotalCount",
+                                fontSize = 12.sp,
+                                color = SpotVaultColors.Muted,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.Muted)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(modifier = Modifier.weight(1f, fill = false)) {
+                    VaultFilterableSpotList(
+                        baseSpots = favoriteSpots,
+                        prefs = prefs,
+                        dao = dao,
+                        selectedItems = selectedItems,
+                        onSelectedItemsChange = { selectedItems = it },
+                        // Bulk delete from the top action bar always skips the confirmation modal —
+                        // same reasoning as the main Vault: soft-delete is already reversible via
+                        // Recently Deleted, and now Undo, so a blocking dialog for it is redundant.
+                        onShowDeleteConfirm = { deleteSpots(selectedItems) },
+                        onSwipeDeleteSpot = { spot ->
+                            // Single-spot swipe delete still respects the user's own "Confirm before
+                            // deleting" setting — only the bulk action above skips it unconditionally.
+                            if (prefs.getBoolean("confirm_delete", true)) {
+                                selectedItems = setOf(spot.id)
+                                showDeleteConfirm = true
+                            } else {
+                                deleteSpots(setOf(spot.id))
+                            }
+                        },
+                        onShareRequest = onShareRequest,
+                        onViewSpot = onViewSpot,
+                        coroutineScope = coroutineScope,
+                        modifier = Modifier.fillMaxWidth(),
+                        emptyTitle = "No favorites yet",
+                        emptySubtitle = "Tap + below to save a place you want to visit, or star any saved spot from its own menu.",
+                        hideFavoritesFilter = true,
+                        // Clears the FAB below (56dp button + 16dp margin) — without this the empty
+                        // state's own centered text ended up right underneath it, its last line
+                        // covered outright.
+                        contentBottomPadding = 72.dp
+                    )
+                    FloatingActionButton(
+                        onClick = { showAddFavorite = true },
+                        containerColor = SpotVaultColors.Teal,
+                        contentColor = SpotVaultColors.OnTeal,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(16.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Spot")
+                    }
                 }
             }
         }
@@ -5380,6 +5622,91 @@ fun FavoritesHubDialog(
                 TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = SpotVaultColors.Teal) }
             }
         )
+    }
+}
+
+/** The header + filterable list + "+ Add Spot" FAB for [FavoritesHubDialog]'s two-pane 380dp
+ * list pane. Not reused by the single-pane branch — that one keeps its own, structurally
+ * identical inline copy so its weight(1f, fill = false) sizing (auto-shrinking the dialog card
+ * to a short favorites list) isn't disturbed by an extra Column layer; see its own comment. */
+@Composable
+private fun FavoritesHubListPane(
+    favoriteSpots: List<LocationSpot>,
+    favoriteTotalCount: Int,
+    prefs: SharedPreferences,
+    dao: LocationDao,
+    onDismiss: () -> Unit,
+    onViewSpot: (LocationSpot) -> Unit,
+    onShareRequest: (ShareSpotPayload) -> Unit,
+    coroutineScope: CoroutineScope,
+    selectedItems: Set<Int>,
+    onSelectedItemsChange: (Set<Int>) -> Unit,
+    onDeleteSpots: (Set<Int>) -> Unit,
+    onSwipeDeleteRequest: (LocationSpot) -> Unit,
+    onAddFavoriteClick: () -> Unit
+) {
+    // Deliberately no fillMaxHeight() here — whether this Column ends up shrink-to-content
+    // (single-pane branch, wrapped in a weight(1f, fill = false) Box so the dialog card keeps
+    // auto-sizing to a short favorites list) or forced to fill its container (two-pane branch,
+    // wrapped in a fillMaxHeight() Box) is decided entirely by how each caller wraps this
+    // composable, via ordinary tight-vs-loose Compose constraint propagation.
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "⭐ Favorites",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 18.sp,
+                    color = SpotVaultColors.Teal,
+                    letterSpacing = 0.5.sp
+                )
+                if (favoriteTotalCount > favoriteSpots.size) {
+                    Text(
+                        text = "Showing ${favoriteSpots.size} of $favoriteTotalCount",
+                        fontSize = 12.sp,
+                        color = SpotVaultColors.Muted,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Close, contentDescription = "Close", tint = SpotVaultColors.Muted)
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Box(modifier = Modifier.weight(1f)) {
+            VaultFilterableSpotList(
+                baseSpots = favoriteSpots,
+                prefs = prefs,
+                dao = dao,
+                selectedItems = selectedItems,
+                onSelectedItemsChange = onSelectedItemsChange,
+                onShowDeleteConfirm = { onDeleteSpots(selectedItems) },
+                onSwipeDeleteSpot = onSwipeDeleteRequest,
+                onShareRequest = onShareRequest,
+                onViewSpot = onViewSpot,
+                coroutineScope = coroutineScope,
+                modifier = Modifier.fillMaxWidth(),
+                emptyTitle = "No favorites yet",
+                emptySubtitle = "Tap + below to save a place you want to visit, or star any saved spot from its own menu.",
+                hideFavoritesFilter = true,
+                contentBottomPadding = 72.dp
+            )
+            FloatingActionButton(
+                onClick = onAddFavoriteClick,
+                containerColor = SpotVaultColors.Teal,
+                contentColor = SpotVaultColors.OnTeal,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Spot")
+            }
+        }
     }
 }
 
@@ -6584,10 +6911,18 @@ fun VaultLocationBrowserDialog(
         is LocationBrowserLevel.Entries -> "${l.city}, ${l.state}"
     }
 
+    // Keyed by level, not a bare rememberSaveable — drilling into a different city (or all the
+    // way back out and into a different one) should always start from the empty state, not still
+    // show whatever spot was selected for the previous city. Two-pane only makes sense at the
+    // Entries level in the first place (States/Cities are pure drill-down navigation, nothing to
+    // preview beside them), so this is only ever read/set from inside the twoPane branch below.
+    var selectedBrowserSpotId by rememberSaveable(level) { mutableStateOf(-1) }
+    val twoPane = isWideEnoughForTwoPane() && level is LocationBrowserLevel.Entries
+
     // Height comes from VaultOverlayDialog itself — see the matching comment on
     // VaultCalendarDayResultsDialog for why a second, independent screenHeightDp-based cap here
     // was redundant and could disagree with it.
-    VaultOverlayDialog(onDismissRequest = { stepBack() }) {
+    VaultOverlayDialog(onDismissRequest = { stepBack() }, wide = twoPane) {
         Column(
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -6618,76 +6953,159 @@ fun VaultLocationBrowserDialog(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            when (val l = level) {
-                is LocationBrowserLevel.States -> {
-                    LocationBrowserRowList(
-                        rows = stateRows,
-                        emptyMessage = "No saved spots yet.",
-                        onRowClick = { state, _ -> level = LocationBrowserLevel.Cities(state) }
-                    )
-                }
-                is LocationBrowserLevel.Cities -> {
-                    LocationBrowserRowList(
-                        rows = cityRows,
-                        emptyMessage = "No cities found.",
-                        onRowClick = { city, _ -> level = LocationBrowserLevel.Entries(l.state, city) }
-                    )
-                }
-                is LocationBrowserLevel.Entries -> {
-                    Column(modifier = Modifier.weight(1f, fill = false)) {
-                        if (entryTotalCount > entrySpots.size) {
-                            Text(
-                                text = "Showing ${entrySpots.size} of $entryTotalCount",
-                                fontSize = 12.sp,
-                                color = SpotVaultColors.Muted,
-                                modifier = Modifier.padding(bottom = 6.dp)
-                            )
-                        }
-                        VaultFilterableSpotList(
-                        baseSpots = entrySpots,
-                        prefs = prefs,
-                        dao = dao,
-                        selectedItems = selectedItems,
-                        onSelectedItemsChange = { selectedItems = it },
-                        // Bulk delete from the top action bar always skips the confirmation modal
-                        // — same reasoning as the main Vault: soft-delete is already reversible via
-                        // Recently Deleted, and now Undo, so a blocking dialog for it is redundant.
-                        onShowDeleteConfirm = { deleteSpots(selectedItems) },
-                        onSwipeDeleteSpot = { spot ->
-                            // Single-spot swipe delete still respects the user's own "Confirm
-                            // before deleting" setting — only bulk delete above skips it always.
-                            if (prefs.getBoolean("confirm_delete", true)) {
-                                selectedItems = setOf(spot.id)
-                                showDeleteConfirm = true
-                            } else {
-                                deleteSpots(setOf(spot.id))
+            if (twoPane) {
+                // level is guaranteed Entries here — twoPane's own condition above requires it —
+                // so this cast is safe. Same local-pane-state pattern as Favorites Hub and
+                // Calendar Day Results: selecting a spot updates selectedBrowserSpotId instead of
+                // calling the outer onViewSpot, so this dialog (and its State/City drill-down
+                // position) stays open exactly like the single-pane branch below already does —
+                // see this dialog's own call site in MainActivity.kt for the fuller history.
+                val l = level as LocationBrowserLevel.Entries
+                // TwoPaneRow (not a plain Row) so the gap between panes actually clears a
+                // foldable's hinge instead of guessing a fixed padding — see its own doc.
+                TwoPaneRow(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    listPane = {
+                        Column(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
+                            if (entryTotalCount > entrySpots.size) {
+                                Text(
+                                    text = "Showing ${entrySpots.size} of $entryTotalCount",
+                                    fontSize = 12.sp,
+                                    color = SpotVaultColors.Muted,
+                                    modifier = Modifier.padding(bottom = 6.dp)
+                                )
                             }
-                        },
-                        onShareRequest = onShareRequest,
-                        // Deliberately doesn't call onDismiss() here — unlike the explicit Close
-                        // button and stepBack() above, opening a spot isn't the user leaving the
-                        // browser. showLocationBrowser and this composable's own `level` drill-down
-                        // are both rememberSaveable (see MainActivity.kt's HistoryDialogContent),
-                        // so leaving this dialog open just means it's still there, at the same
-                        // State/City drill-down, once the user backs out of spot detail — matching
-                        // how the Calendar day-results dialog already behaves.
-                        onViewSpot = onViewSpot,
-                        coroutineScope = coroutineScope,
-                        modifier = Modifier.weight(1f, fill = false),
-                        emptyTitle = "No spots here yet",
-                        emptySubtitle = "Spots saved in ${l.city} will show up here."
-                        )
-                        if (entrySpots.size < entryTotalCount &&
-                            entrySpots.size < SECONDARY_BROWSE_FULL_CAP
-                        ) {
-                            TextButton(
-                                onClick = {
-                                    entryLimit = (entryLimit + SECONDARY_BROWSE_PAGE_SIZE)
-                                        .coerceAtMost(SECONDARY_BROWSE_FULL_CAP)
+                            VaultFilterableSpotList(
+                                baseSpots = entrySpots,
+                                prefs = prefs,
+                                dao = dao,
+                                selectedItems = selectedItems,
+                                onSelectedItemsChange = { selectedItems = it },
+                                onShowDeleteConfirm = { deleteSpots(selectedItems) },
+                                onSwipeDeleteSpot = { spot ->
+                                    if (prefs.getBoolean("confirm_delete", true)) {
+                                        selectedItems = setOf(spot.id)
+                                        showDeleteConfirm = true
+                                    } else {
+                                        deleteSpots(setOf(spot.id))
+                                    }
                                 },
-                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                                onShareRequest = onShareRequest,
+                                onViewSpot = { spot -> selectedBrowserSpotId = spot.id },
+                                coroutineScope = coroutineScope,
+                                modifier = Modifier.fillMaxWidth().weight(1f),
+                                emptyTitle = "No spots here yet",
+                                emptySubtitle = "Spots saved in ${l.city} will show up here."
+                            )
+                            if (entrySpots.size < entryTotalCount &&
+                                entrySpots.size < SECONDARY_BROWSE_FULL_CAP
                             ) {
-                                Text("Show more", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                                TextButton(
+                                    onClick = {
+                                        entryLimit = (entryLimit + SECONDARY_BROWSE_PAGE_SIZE)
+                                            .coerceAtMost(SECONDARY_BROWSE_FULL_CAP)
+                                    },
+                                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                                ) {
+                                    Text("Show more", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    },
+                    detailPane = {
+                        if (selectedBrowserSpotId >= 0) {
+                            // onNavigateToCompass = null — no NavController here either; see the
+                            // identical reasoning on Favorites Hub's own two-pane detail pane.
+                            SavedSpotDetailRoute(
+                                spotId = selectedBrowserSpotId,
+                                dao = dao,
+                                prefs = prefs,
+                                onNavigateToCompass = null,
+                                onDismiss = { selectedBrowserSpotId = -1 },
+                                onShareRequest = onShareRequest
+                            )
+                        } else {
+                            VaultDetailEmptyState(message = "Select a spot to view its details")
+                        }
+                    }
+                )
+            } else {
+                when (val l = level) {
+                    is LocationBrowserLevel.States -> {
+                        LocationBrowserRowList(
+                            rows = stateRows,
+                            emptyMessage = "No saved spots yet.",
+                            onRowClick = { state, _ -> level = LocationBrowserLevel.Cities(state) }
+                        )
+                    }
+                    is LocationBrowserLevel.Cities -> {
+                        LocationBrowserRowList(
+                            rows = cityRows,
+                            emptyMessage = "No cities found.",
+                            onRowClick = { city, _ -> level = LocationBrowserLevel.Entries(l.state, city) }
+                        )
+                    }
+                    is LocationBrowserLevel.Entries -> {
+                        Column(modifier = Modifier.weight(1f, fill = false)) {
+                            if (entryTotalCount > entrySpots.size) {
+                                Text(
+                                    text = "Showing ${entrySpots.size} of $entryTotalCount",
+                                    fontSize = 12.sp,
+                                    color = SpotVaultColors.Muted,
+                                    modifier = Modifier.padding(bottom = 6.dp)
+                                )
+                            }
+                            VaultFilterableSpotList(
+                                baseSpots = entrySpots,
+                                prefs = prefs,
+                                dao = dao,
+                                selectedItems = selectedItems,
+                                onSelectedItemsChange = { selectedItems = it },
+                                // Bulk delete from the top action bar always skips the confirmation
+                                // modal — same reasoning as the main Vault: soft-delete is already
+                                // reversible via Recently Deleted, and now Undo, so a blocking
+                                // dialog for it is redundant.
+                                onShowDeleteConfirm = { deleteSpots(selectedItems) },
+                                onSwipeDeleteSpot = { spot ->
+                                    // Single-spot swipe delete still respects the user's own
+                                    // "Confirm before deleting" setting — only bulk delete above
+                                    // skips it always.
+                                    if (prefs.getBoolean("confirm_delete", true)) {
+                                        selectedItems = setOf(spot.id)
+                                        showDeleteConfirm = true
+                                    } else {
+                                        deleteSpots(setOf(spot.id))
+                                    }
+                                },
+                                onShareRequest = onShareRequest,
+                                // Deliberately doesn't call onDismiss() here — unlike the explicit
+                                // Close button and stepBack() above, opening a spot isn't the user
+                                // leaving the browser. showLocationBrowser and this composable's
+                                // own `level` drill-down are both rememberSaveable (see
+                                // MainActivity.kt's HistoryDialogContent), so leaving this dialog
+                                // open just means it's still there, at the same State/City
+                                // drill-down, once the user backs out of spot detail — matching how
+                                // the Calendar day-results dialog already behaves. This is only
+                                // ever reached on a narrow window now — see the twoPane branch
+                                // above for the wide-window equivalent.
+                                onViewSpot = onViewSpot,
+                                coroutineScope = coroutineScope,
+                                modifier = Modifier.weight(1f, fill = false),
+                                emptyTitle = "No spots here yet",
+                                emptySubtitle = "Spots saved in ${l.city} will show up here."
+                            )
+                            if (entrySpots.size < entryTotalCount &&
+                                entrySpots.size < SECONDARY_BROWSE_FULL_CAP
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        entryLimit = (entryLimit + SECONDARY_BROWSE_PAGE_SIZE)
+                                            .coerceAtMost(SECONDARY_BROWSE_FULL_CAP)
+                                    },
+                                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                                ) {
+                                    Text("Show more", color = SpotVaultColors.Teal, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }

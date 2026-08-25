@@ -45,6 +45,18 @@ private const val UNIQUE_WORK_NAME_PREFIX = "auto_park_bluetooth_disconnect"
  * about a minute of each other, so this fails fast rather than lingering. */
 private const val MAX_LOCATION_RETRY_ATTEMPTS = 3
 
+/** How fresh a cached fix has to be to count as "recent enough to sanity-check the motion
+ * bookmark against" — see the cachedLat/cachedLng branch in [AutoParkWorker.doWork]. */
+private const val BOOKMARK_SANITY_MAX_AGE_MILLIS = 3L * 60 * 1000
+
+/** How far a fresh live fix is allowed to disagree with the motion bookmark before it's treated
+ * as suspect rather than trusted outright. Generous on purpose — a large parking structure or mall
+ * lot is a legitimate few-hundred-meter gap between "where Activity Recognition caught the
+ * vehicle-exit/walking transition" and "where the disconnect actually happened" — this is meant to
+ * catch a bookmark from a genuinely different stop (a different parking lot, a different trip
+ * within the same TTL), not to second-guess a normal walk across one lot. */
+private const val BOOKMARK_SANITY_RADIUS_METERS = 1_500.0
+
 /** Marks [spotId] as the most recent auto-park save for [mac] — read back by
  * [AutoParkReconnectCleanupWorker] the moment that same vehicle reconnects. No-op without a MAC
  * (the manual "Test Auto-Park Now" trigger has no disconnect/reconnect cycle to correlate
@@ -103,7 +115,24 @@ class AutoParkWorker(
         val cachedLat = inputData.getDouble(AUTO_PARK_CACHED_LAT_KEY, Double.NaN)
         val cachedLng = inputData.getDouble(AUTO_PARK_CACHED_LNG_KEY, Double.NaN)
         val location = if (!cachedLat.isNaN() && !cachedLng.isNaN()) {
-            cachedLat to cachedLng
+            // The bookmark is trusted for up to BOOKMARK_TTL_MILLIS purely on MAC-match + TTL,
+            // with nothing checking it's actually near where the car is now — Activity Recognition
+            // is known to occasionally misclassify a brief stop (a long red light, a drive-thru) as
+            // a full vehicle-exit-then-walking transition, which can plant a bookmark from an
+            // earlier, different stop that's still within TTL when the real disconnect happens
+            // later. A fresh already-cached fix (no new GPS request — whatever Play Services
+            // already has) costs nothing to check; if it disagrees with the bookmark by more than
+            // a plausible walk across one parking lot, prefer a live fetch instead of trusting the
+            // bookmark blind. No live fix available to check against just means proceeding as
+            // before — this only ever adds a correction, never a new way to fail.
+            val liveCheck = fetchLastKnownLocationIfFresh(context, BOOKMARK_SANITY_MAX_AGE_MILLIS)
+            val bookmarkDisputed = liveCheck != null &&
+                haversineDistanceMeters(cachedLat, cachedLng, liveCheck.first, liveCheck.second) > BOOKMARK_SANITY_RADIUS_METERS
+            if (bookmarkDisputed) {
+                resolveCurrentLocation(context, prefs) ?: (cachedLat to cachedLng)
+            } else {
+                cachedLat to cachedLng
+            }
         } else {
             resolveCurrentLocation(context, prefs) ?: run {
                 // Never fall through to (0,0) — that used to write a real Vault pin in the Gulf

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">DropPin Vault</string>
+    <string name="tile_label">Quick Pin</string>
+</resources>

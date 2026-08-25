@@ -68,7 +68,18 @@ fun rememberVoiceInputLauncher(prompt: String = "Speak now…", onResult: (Strin
         if (intent.resolveActivity(context.packageManager) != null) {
             AppLockGate.begin()
             gatePending.set(true)
-            launcher.launch(intent)
+            try {
+                launcher.launch(intent)
+            } catch (e: android.content.ActivityNotFoundException) {
+                // resolveActivity() above can't fully guarantee launch succeeds — the resolved
+                // recognizer could still be uninstalled/disabled in the moment between that check
+                // and this call. Without this, an uncaught exception here would propagate past
+                // AppLockGate.begin() with no matching end(), leaving App Lock suppressed for the
+                // rest of the process.
+                gatePending.set(false)
+                AppLockGate.end()
+                Toast.makeText(context, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show()
+            }
         } else {
             Toast.makeText(context, "Voice input isn't available on this device", Toast.LENGTH_SHORT).show()
         }

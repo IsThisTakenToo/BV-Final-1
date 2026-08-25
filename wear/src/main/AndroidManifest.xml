@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature
+        android:name="android.hardware.type.watch"
+        android:required="true" />
+
+    <uses-permission android:name="com.google.android.permission.PROVIDE_BACKGROUND" />
+    <!-- CompassActivity only — the watch's own live position while walking, independent of the
+         phone, is what makes the arrow track correctly as the user moves. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.DeviceDefault">
+
+        <!-- false is the honest value here — this tile's core function (premium gate, Quick
+             Pin/Track save) genuinely requires the paired phone to do anything useful, so it
+             should not claim standalone capability it doesn't have. -->
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="false" />
+
+        <!-- A tile tap launching this is itself a foreground user gesture on the watch, unlike
+             anything WearActionListenerService does on the phone side — see CompassActivity's own
+             doc for why that distinction means no background-activity-launch restriction applies
+             here. exported=true is required (not just permissive) — a Tile's LaunchAction is
+             actually fired by the Wear OS system's tile-hosting process, not by this app's own
+             process, the same cross-process relationship that already made
+             WearDataListenerService/WearActionListenerService need exported=true. A non-exported
+             target here means that launch is silently dropped: nothing happens on tap, no crash,
+             no log the user would ever see. -->
+        <activity
+            android:name=".CompassActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault" />
+
+        <service
+            android:name=".QuickActionTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher"
+            android:label="@string/tile_label"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.wear.tiles.PREVIEW"
+                android:resource="@drawable/ic_pin" />
+        </service>
+
+        <!-- Receives the active-tracking-state and theme-state DATA_CHANGED pushes from the phone
+             (see TrackingWearSync.kt/ThemeWearSync.kt on the phone side) and updates the local
+             caches the tile reads. No MESSAGE_RECEIVED filter here — this module only ever sends
+             messages to the phone for Quick Pin/Track/Share/Navigate/Found, it never needs to
+             receive one back. -->
+        <service
+            android:name=".WearDataListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/droppinvault/" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>

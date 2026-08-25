@@ -27,7 +27,10 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,6 +55,7 @@ import kotlinx.coroutines.launch
  * language as the Vault's own tag chips (VaultTagFilterSheet's Tags tab): same colors, same chip
  * shape.
  */
+@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 class TagFilterWidgetConfigActivity : ComponentActivity() {
 
     private var appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
@@ -97,12 +101,21 @@ class TagFilterWidgetConfigActivity : ComponentActivity() {
         }
 
         setContent {
-            SpotVaultTheme(darkTheme = true) {
-                TagFilterWidgetConfigScreen(
-                    appWidgetId = appWidgetId,
-                    onSave = { tagIds -> saveAndFinish(tagIds) },
-                    onCancel = { finish() }
-                )
+            // Without this, LocalWindowSizeClass silently falls back to its hardcoded 360x640dp
+            // default (AdaptiveLayout.kt) in this Activity specifically — MainActivity is the only
+            // Activity that already provides a real one — so isGenuineTablet() always reported
+            // false here regardless of actual screen size, and AdaptiveTabletContainer below would
+            // have been a no-op even on a tablet. No LocalFoldingFeature wiring to match — this
+            // screen is a small config form, not a browsing screen a hinge split would help.
+            val windowSizeClass = calculateWindowSizeClass(this@TagFilterWidgetConfigActivity)
+            CompositionLocalProvider(LocalWindowSizeClass provides windowSizeClass) {
+                SpotVaultTheme(darkTheme = true) {
+                    TagFilterWidgetConfigScreen(
+                        appWidgetId = appWidgetId,
+                        onSave = { tagIds -> saveAndFinish(tagIds) },
+                        onCancel = { finish() }
+                    )
+                }
             }
         }
     }
@@ -168,6 +181,7 @@ private fun TagFilterWidgetConfigScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
+        AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -243,6 +257,7 @@ private fun TagFilterWidgetConfigScreen(
                     Text("Cancel", color = SpotVaultColors.Muted)
                 }
             }
+        }
         }
     }
 }

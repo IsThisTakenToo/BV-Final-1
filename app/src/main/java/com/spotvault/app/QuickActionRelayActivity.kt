@@ -37,11 +37,13 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -116,6 +118,19 @@ class QuickActionRelayActivity : ComponentActivity() {
         ownsActionInFlight = true
 
         setContent {
+            // Same WindowInfoTracker wiring MainActivity's own setContent does — without it,
+            // LocalFoldingFeature.current is always null in this separate Activity (it's a
+            // staticCompositionLocalOf defaulting to null, not something that magically crosses
+            // Activity boundaries), silently disabling HingeAvoidingCenterBox's own hinge check
+            // inside QuickActionRelayScreen below rather than actually avoiding anything.
+            val windowLayoutInfo by remember(this@QuickActionRelayActivity) {
+                androidx.window.layout.WindowInfoTracker.getOrCreate(this@QuickActionRelayActivity)
+                    .windowLayoutInfo(this@QuickActionRelayActivity)
+            }.collectAsStateWithLifecycle(initialValue = null)
+            val foldingFeature = windowLayoutInfo?.displayFeatures
+                ?.filterIsInstance<androidx.window.layout.FoldingFeature>()
+                ?.firstOrNull()
+            CompositionLocalProvider(LocalFoldingFeature provides foldingFeature) {
             SpotVaultTheme {
                 val foundStyle = remember { loadFoundSplashStyleFromPrefs(relayPrefs) }
                 QuickActionRelayScreen(
@@ -125,6 +140,7 @@ class QuickActionRelayActivity : ComponentActivity() {
                     onFoundSplashFinished = { finish() },
                     onDismissRequest = { finish() }
                 )
+            }
             }
         }
 
@@ -206,8 +222,17 @@ class QuickActionRelayActivity : ComponentActivity() {
     }
 
     private fun performTrack() {
+        // QuickTrackTileService flips its tile to Active optimistically the instant it's tapped,
+        // before this relay activity has done anything, and relies on a widget/tile refresh to
+        // correct it if the action actually fails. Every failure branch below now asks for that
+        // same refreshWidgetsAfter = true the success branch already used — without it, none of
+        // these failures ever reached requestTileUpdate(), so the QS panel kept showing "Active"
+        // for a track that never actually started.
         if (!hasLocationPermission()) {
-            finishWith(RelayOutcome(false, "Location needed", "Open DropPin Vault once and grant location access."))
+            finishWith(
+                RelayOutcome(false, "Location needed", "Open DropPin Vault once and grant location access."),
+                refreshWidgetsAfter = true
+            )
             return
         }
         lifecycleScope.launch {
@@ -228,10 +253,16 @@ class QuickActionRelayActivity : ComponentActivity() {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
-                        finishWith(RelayOutcome(false, "Notifications blocked", "Enable alerts to keep tracking visible."))
+                        finishWith(
+                            RelayOutcome(false, "Notifications blocked", "Enable alerts to keep tracking visible."),
+                            refreshWidgetsAfter = true
+                        )
                     }
                 }
-                QuietSaveResult.Failed -> finishWith(RelayOutcome(false, "Couldn't start tracking", "Please try again in a moment."))
+                QuietSaveResult.Failed -> finishWith(
+                    RelayOutcome(false, "Couldn't start tracking", "Please try again in a moment."),
+                    refreshWidgetsAfter = true
+                )
             }
         }
     }
@@ -401,7 +432,7 @@ private fun QuickActionRelayScreen(
         label = "cardAlpha"
     )
 
-    Box(
+    HingeAvoidingCenterBox(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.68f))
@@ -421,8 +452,7 @@ private fun QuickActionRelayScreen(
                 } else {
                     Modifier
                 }
-            ),
-        contentAlignment = Alignment.Center
+            )
     ) {
         Box(
             modifier = Modifier

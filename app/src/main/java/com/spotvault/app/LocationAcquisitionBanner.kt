@@ -91,9 +91,8 @@ fun LocationAcquisitionBanner(modifier: Modifier = Modifier) {
         }
     }
 
-    Box(
-        modifier = modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+    HingeAvoidingCenterBox(
+        modifier = modifier.fillMaxSize()
     ) {
         AnimatedVisibility(
             visible = showBanner,

@@ -33,6 +33,8 @@ object FoundCelebration {
 
     private fun celebrateHaptic(context: Context) {
         runCatching {
+            val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+            if (!prefs.getBoolean("haptic_feedback", false)) return
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val manager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
                 manager.defaultVibrator
@@ -60,12 +62,21 @@ object FoundCelebration {
             // what the user actually picked in Settings, so "Found" sounded different from every
             // other alert the app makes.
             val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+            // contains(), not just getString(...) == null — the system ringtone picker (this pref
+            // also backs the Timer Alert sound picker) reports "Silent" back as a null picked URI,
+            // which MainActivity's picker result handler stores as "" here. That's distinguishable
+            // from "never configured" (the key is simply absent) via contains(): only the latter
+            // should fall back to a default tone — an explicit Silent choice deserves to actually
+            // stay silent for a discretionary "Found it!" chime rather than playing a sound anyway.
+            val hasConfiguredSound = prefs.contains("alarm_sound_uri")
             val soundUriStr = prefs.getString("alarm_sound_uri", null)?.let { prefsSafeAlarmSoundUri(it) }
             val uri = if (!soundUriStr.isNullOrEmpty()) {
                 val parsed = android.net.Uri.parse(soundUriStr)
                 val scheme = parsed.scheme?.lowercase()
                 if (scheme == "content" || scheme == "android.resource") parsed
                 else RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            } else if (hasConfiguredSound) {
+                return
             } else {
                 RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             } ?: return

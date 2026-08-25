@@ -203,7 +203,14 @@ fun NotepadEditorDialog(
     contextAddress: String = "",
     conditionsSnapshot: String? = null
 ) {
-    var draft by remember(initialNotes) {
+    // Keyed on nothing, not on initialNotes — the debounced autosave below (and the manual Save
+    // button) writes straight back into the same state this dialog's caller passes in as
+    // initialNotes, so keying remember() to it re-ran this initializer on every autosave and
+    // silently snapped the cursor to the end of the text mid-edit. The one call site only ever
+    // composes this dialog while it's actually open (`if (showNotepad) { NotepadEditorDialog(...) }`
+    // in HistoryVaultDialog.kt), so a genuinely fresh initialNotes value only ever arrives via a
+    // brand-new composition anyway — this still initializes correctly every time the dialog opens.
+    var draft by remember {
         mutableStateOf(TextFieldValue(initialNotes, TextRange(initialNotes.length)))
     }
     var savedPulse by remember { mutableStateOf(false) }

@@ -138,7 +138,27 @@ class CarBluetoothReceiver : BroadcastReceiver() {
         // itself powering down looks like this. Checked before touching connectedAtKey at all
         // (rather than just returning after clearing it) so a false trigger doesn't disturb the
         // bookkeeping a genuine disconnect around the same time would still need.
-        val adapterState = android.bluetooth.BluetoothAdapter.getDefaultAdapter()?.state
+        // getState() requires runtime BLUETOOTH_CONNECT on API 31+ and throws SecurityException
+        // if it's missing — reachable in practice via Android's own "remove permissions from
+        // unused apps" auto-reset, which can revoke it during exactly the long stretches this
+        // feature is meant to run silently in the background. A permission check right before the
+        // call (rather than a broad try/catch around it) keeps the crash-avoidance explicit and
+        // still lets a genuinely unexpected SecurityException from elsewhere surface normally. On
+        // a missing permission this treats the adapter as "not off" — the state genuinely can't be
+        // read, and continuing to the real-disconnect path below is safer than silently going dark.
+        val canReadAdapterState = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                appContext, android.Manifest.permission.BLUETOOTH_CONNECT
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val adapterState = if (canReadAdapterState) {
+            try {
+                android.bluetooth.BluetoothAdapter.getDefaultAdapter()?.state
+            } catch (e: SecurityException) {
+                null
+            }
+        } else {
+            null
+        }
         if (adapterState == android.bluetooth.BluetoothAdapter.STATE_OFF ||
             adapterState == android.bluetooth.BluetoothAdapter.STATE_TURNING_OFF
         ) {

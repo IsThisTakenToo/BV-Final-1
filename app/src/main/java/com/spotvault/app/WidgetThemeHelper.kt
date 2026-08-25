@@ -1358,5 +1358,9 @@ object WidgetThemeHelper {
         // on the main thread, so it must never block (refreshAllWidgetsNow's runBlocking would
         // freeze the settings screen for the duration of the two-pass refresh).
         refreshAllWidgets(context.applicationContext)
+        // Every color theme / button style change in the app funnels through this one function —
+        // the single chokepoint for keeping a paired watch's tile colors in sync too, with no
+        // per-settings-screen call needed.
+        ThemeWearSync.pushThemeState(context.applicationContext, prefs)
     }
 }

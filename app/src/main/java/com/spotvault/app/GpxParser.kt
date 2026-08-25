@@ -23,7 +23,12 @@ object GpxParser {
 
     data class ImportResult(
         val imported: Int,
-        val truncated: Boolean
+        val truncated: Boolean,
+        /** True if the file's XML structure broke down partway through (truncated download,
+         * corrupted file, invalid encoding) — [imported] still reflects every waypoint that
+         * parsed successfully *before* that point, not zero. Distinct from [truncated], which
+         * means the well-formed file simply had more waypoints than [MAX_IMPORT_WAYPOINTS]. */
+        val parseError: Boolean = false
     )
 
     private val ISO8601_PATTERNS = listOf(
@@ -48,7 +53,7 @@ object GpxParser {
     fun parseGpx(inputStream: InputStream, maxWaypoints: Int = MAX_IMPORT_WAYPOINTS): List<LocationSpot> =
         parseGpxResult(inputStream, maxWaypoints).spots
 
-    private data class ParseResult(val spots: List<LocationSpot>, val truncated: Boolean)
+    private data class ParseResult(val spots: List<LocationSpot>, val truncated: Boolean, val parseError: Boolean = false)
 
     private fun parseGpxResult(inputStream: InputStream, maxWaypoints: Int): ParseResult {
         val limited = CountingInputStream(inputStream, MAX_GPX_FILE_BYTES)
@@ -76,6 +81,11 @@ object GpxParser {
             }
             val wLat = lat ?: return
             val wLng = lng ?: return
+            // toDoubleOrNull() only screens out non-numeric text — "1e400"-style overflow still
+            // parses to a real (non-finite) Double, and nothing here previously stopped an
+            // out-of-range lat/lon (a typo, or a deliberately crafted file) from being saved as a
+            // real Vault spot. Same bar SharedMapsLink already applies to shared map links.
+            if (!wLat.isFinite() || !wLng.isFinite() || wLat !in -90.0..90.0 || wLng !in -180.0..180.0) return
             waypoints.add(
                 LocationSpot(
                     id = 0,
@@ -106,41 +116,58 @@ object GpxParser {
             time = null
         }
 
-        parseLoop@ while (eventType != XmlPullParser.END_DOCUMENT) {
-            when (eventType) {
-                // Deliberately excludes trkpt — a recorded GPS track log can contain thousands of
-                // points logged automatically every few seconds (a single hike or drive), and
-                // importing each as its own Vault spot would flood the vault with junk with no
-                // way to undo it. wpt/rtept are actual placed waypoints, not a raw track log.
-                XmlPullParser.START_TAG -> when (localName(parser)) {
-                    "wpt", "rtept" -> {
-                        if (waypoints.size >= maxWaypoints) {
-                            truncated = true
-                            break@parseLoop
+        // A structurally broken document (truncated download, corrupted file, bad encoding) makes
+        // XmlPullParser throw partway through rather than just handing back an odd value — that
+        // used to propagate straight out of parseGpxResult and abort the entire import, discarding
+        // every waypoint already parsed before the break, even from an otherwise-fine 900-waypoint
+        // file with one corrupted byte near the end. Catching it here keeps whatever was already
+        // successfully parsed instead of throwing all of it away; parseError tells the caller this
+        // was a partial result, not a fully successful one, so it can say so rather than reporting
+        // false success.
+        var parseError = false
+        try {
+            parseLoop@ while (eventType != XmlPullParser.END_DOCUMENT) {
+                when (eventType) {
+                    // Deliberately excludes trkpt — a recorded GPS track log can contain thousands
+                    // of points logged automatically every few seconds (a single hike or drive),
+                    // and importing each as its own Vault spot would flood the vault with junk
+                    // with no way to undo it. wpt/rtept are actual placed waypoints, not a raw
+                    // track log.
+                    XmlPullParser.START_TAG -> when (localName(parser)) {
+                        "wpt", "rtept" -> {
+                            if (waypoints.size >= maxWaypoints) {
+                                truncated = true
+                                break@parseLoop
+                            }
+                            inWaypoint = true
+                            lat = parser.getAttributeValue(null, "lat")?.toDoubleOrNull()
+                            lng = parser.getAttributeValue(null, "lon")?.toDoubleOrNull()
                         }
-                        inWaypoint = true
-                        lat = parser.getAttributeValue(null, "lat")?.toDoubleOrNull()
-                        lng = parser.getAttributeValue(null, "lon")?.toDoubleOrNull()
+                        "name" -> if (inWaypoint) name = readText(parser)
+                        "desc" -> if (inWaypoint) desc = readText(parser)
+                        "cmt" -> if (inWaypoint) cmt = readText(parser)
+                        "type" -> if (inWaypoint) type = readText(parser)
+                        "time" -> if (inWaypoint) time = readText(parser)
                     }
-                    "name" -> if (inWaypoint) name = readText(parser)
-                    "desc" -> if (inWaypoint) desc = readText(parser)
-                    "cmt" -> if (inWaypoint) cmt = readText(parser)
-                    "type" -> if (inWaypoint) type = readText(parser)
-                    "time" -> if (inWaypoint) time = readText(parser)
-                }
-                XmlPullParser.END_TAG -> when (localName(parser)) {
-                    "wpt", "rtept" -> {
-                        flushWaypoint()
-                        resetWaypointFields()
-                        inWaypoint = false
-                        if (truncated) break@parseLoop
+                    XmlPullParser.END_TAG -> when (localName(parser)) {
+                        "wpt", "rtept" -> {
+                            flushWaypoint()
+                            resetWaypointFields()
+                            inWaypoint = false
+                            if (truncated) break@parseLoop
+                        }
                     }
                 }
+                eventType = parser.next()
             }
-            eventType = parser.next()
+        } catch (e: Exception) {
+            // Purely synchronous parsing loop (no suspend calls reachable inside it), so there is
+            // no coroutine cancellation to special-case here — anything caught is a genuine parse
+            // failure (malformed/truncated XML), not the coroutine being torn down.
+            parseError = true
         }
 
-        return ParseResult(waypoints, truncated)
+        return ParseResult(waypoints, truncated, parseError)
     }
 
     /** Parse GPX from a SAF [Uri] and insert waypoints. Caps at [MAX_IMPORT_WAYPOINTS]. */
@@ -154,7 +181,7 @@ object GpxParser {
             dao.insertSpot(spot)
             imported++
         }
-        return ImportResult(imported = imported, truncated = parsed.truncated)
+        return ImportResult(imported = imported, truncated = parsed.truncated, parseError = parsed.parseError)
     }
 
     private fun parseGpxTime(raw: String?): Long {
@@ -179,22 +206,42 @@ object GpxParser {
         return parser.name?.substringAfter(':').orEmpty()
     }
 
+    /** Reads the plain-text body of a &lt;name&gt;/&lt;desc&gt;/&lt;cmt&gt;/&lt;type&gt;/&lt;time&gt;
+     * element and leaves the parser positioned at that same element's own END_TAG. GPX defines
+     * these as plain text, but nothing stops a malformed or adversarial file from nesting another
+     * element inside one instead (e.g. `&lt;desc&gt;x&lt;name&gt;evil&lt;/name&gt;&lt;/desc&gt;`) —
+     * the old implementation assumed exactly one TEXT event followed immediately by its own
+     * END_TAG, and calling `nextTag()` on anything else landed on the nested element's START_TAG,
+     * desyncing the caller's flat `inWaypoint` state machine from the parser's real position.
+     * Tracking [elementDepth] and only stopping at an END_TAG that matches it (the nested tag's
+     * own END_TAG is one level deeper) correctly skips over any such subtree instead. */
     private fun readText(parser: XmlPullParser): String {
-        if (parser.next() != XmlPullParser.TEXT) return ""
-        // Copy at most NOTEPAD_MAX_CHARS from the parser's char buffer — avoids a second
-        // full-size String via parser.text. The file-level [CountingInputStream] is what
-        // prevents a multi-hundred-MB text node from being buffered in the first place.
-        val holder = IntArray(2)
-        val buf = parser.getTextCharacters(holder)
-        val result = if (buf != null && holder[1] > 0) {
-            val start = holder[0]
-            val len = minOf(holder[1], NOTEPAD_MAX_CHARS)
-            String(buf, start, len)
-        } else {
-            parser.text.orEmpty().take(NOTEPAD_MAX_CHARS)
+        val elementDepth = parser.depth
+        var result = ""
+        var captured = false
+        var event = parser.next()
+        while (true) {
+            when (event) {
+                XmlPullParser.TEXT -> if (!captured) {
+                    // Copy at most NOTEPAD_MAX_CHARS from the parser's char buffer — avoids a
+                    // second full-size String via parser.text. The file-level [CountingInputStream]
+                    // is what prevents a multi-hundred-MB text node from being buffered at all.
+                    val holder = IntArray(2)
+                    val buf = parser.getTextCharacters(holder)
+                    result = if (buf != null && holder[1] > 0) {
+                        val start = holder[0]
+                        val len = minOf(holder[1], NOTEPAD_MAX_CHARS)
+                        String(buf, start, len)
+                    } else {
+                        parser.text.orEmpty().take(NOTEPAD_MAX_CHARS)
+                    }
+                    captured = true
+                }
+                XmlPullParser.END_TAG -> if (parser.depth == elementDepth) return result.trim()
+                XmlPullParser.END_DOCUMENT -> return result.trim()
+            }
+            event = parser.next()
         }
-        parser.nextTag()
-        return result.trim()
     }
 
     /** Rejects GPX payloads larger than [maxBytes] as they are read — XmlPullParser has no

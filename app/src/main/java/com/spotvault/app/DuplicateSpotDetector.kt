@@ -103,7 +103,8 @@ suspend fun mergeDeduplicatedSpot(
     newImagePath: String = "",
     newLocationDetails: String = "",
     newTitle: String = "",
-    newVehicleId: Int? = null
+    newVehicleId: Int? = null,
+    newFloorLevel: String? = null
 ): LocationSpot {
     val newPhotoBecomesPrimary = target.imagePath.isBlank() && newImagePath.isNotBlank()
     val merged = target.copy(
@@ -111,7 +112,8 @@ suspend fun mergeDeduplicatedSpot(
         imagePath = if (newPhotoBecomesPrimary) newImagePath else target.imagePath,
         locationDetails = if (target.locationDetails.isBlank() && newLocationDetails.isNotBlank()) newLocationDetails else target.locationDetails,
         title = if (target.title.isBlank() && newTitle.isNotBlank()) newTitle else target.title,
-        vehicleId = target.vehicleId ?: newVehicleId
+        vehicleId = target.vehicleId ?: newVehicleId,
+        floorLevel = target.floorLevel ?: newFloorLevel
     )
     dao.updateSpot(merged)
     if (!newPhotoBecomesPrimary && newImagePath.isNotBlank()) {

@@ -83,7 +83,15 @@ object AppIconManager {
         fun component(candidate: AppIcon) =
             ComponentName(context.packageName, "$classNamespace.${candidate.aliasSuffix}")
 
-        val expected = AppIcon.fromId(prefs.getString(PREF_KEY, AppIcon.DEFAULT.id))
+        // Gated, not the raw stored id: a premium icon id can land back in prefs with no real
+        // entitlement behind it (a restored backup — entitlement itself is deliberately excluded
+        // from backup restore, but this pref isn't — or the pref simply edited directly), and this
+        // runs unconditionally on every launch. Falling back to the free id here is what actually
+        // stops that icon from being (re-)applied; currentIconId() already reports the same gated
+        // id for display, so this just makes the component Android actually enables agree with it.
+        val expected = AppIcon.fromId(
+            premiumGatedId(prefs, prefs.getString(PREF_KEY, AppIcon.DEFAULT.id) ?: AppIcon.DEFAULT.id, PremiumFreeTier.freeAppIconId)
+        )
 
         fun isEnabled(candidate: AppIcon): Boolean {
             val state = pm.getComponentEnabledSetting(component(candidate))
@@ -158,8 +166,6 @@ object AppIconManager {
                 android.util.Log.e("AppIconManager", "Failed to disable alias for ${candidate.id}", it)
             }
         }
-        prefs.edit().putString(PREF_KEY, icon.id).apply()
-
         // Not throwing doesn't guarantee the change actually took effect — some OEM PackageManager
         // implementations are known to silently no-op a component-state change under certain
         // restrictions instead of throwing. Reading every alias's actual resulting state right
@@ -176,6 +182,16 @@ object AppIconManager {
                     "Mismatch for ${candidate.id}: expected enabled=$expectedEnabled, actual state=$state (effectivelyEnabled=$effectivelyEnabled)"
                 )
             }
+        }
+
+        // Only persisted on confirmed success, and only after the readback above — on an OEM that
+        // silently no-ops the component switch (succeeded = false), writing this first used to
+        // leave the icon picker showing the new selection as active while the real home-screen
+        // icon never changed, a mismatch that then only self-healed whenever reconcileIconState()
+        // next happened to succeed. Leaving the pref alone here keeps the picker agreeing with
+        // whatever icon is actually showing.
+        if (succeeded) {
+            prefs.edit().putString(PREF_KEY, icon.id).apply()
         }
         return succeeded
     }

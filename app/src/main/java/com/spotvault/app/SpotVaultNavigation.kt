@@ -13,11 +13,14 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -43,6 +47,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.compose.ui.Alignment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -153,8 +158,13 @@ fun SpotVaultMainScaffold(
     val currentRoute = navBackStackEntry?.destination?.route
     val showBottomBar = SpotVaultRoutes.shouldShowBottomBar(currentRoute)
     val activeDestination = bottomNavDestinationForRoute(currentRoute)
-    val screenHeightDp = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp
-    val disclaimerVerticalPad = if (screenHeightDp >= 700) 12.dp else 8.dp
+    // Same isGenuineTablet() check that already decides content-width capping everywhere else —
+    // see its own doc for why reusing exactly this one, rather than a separately-tuned width
+    // threshold, matters. useRail only changes anything on the same routes the bottom bar would
+    // otherwise show on (showBottomBar) — Vault/Settings/etc. still take over the full window on
+    // every screen size for now, same as today; this section only swaps which navigation chrome
+    // appears on top of the tab-root screen, not the two-pane list/detail work that comes after it.
+    val useRail = showBottomBar && isGenuineTablet()
 
     LaunchedEffect(initialNavRoute) {
         initialNavRoute?.let { route ->
@@ -205,83 +215,111 @@ fun SpotVaultMainScaffold(
         }
     }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        containerColor = Color.Transparent,
-        bottomBar = {
-            AnimatedVisibility(
-                visible = showBottomBar,
-                enter = slideInVertically(
-                    initialOffsetY = { fullHeight -> fullHeight },
-                    animationSpec = tween(320, easing = FastOutSlowInEasing)
-                ) + fadeIn(tween(280)),
-                exit = slideOutVertically(
-                    targetOffsetY = { fullHeight -> fullHeight },
-                    animationSpec = tween(260, easing = FastOutSlowInEasing)
-                ) + fadeOut(tween(220))
-            ) {
-                AdaptiveTabletContainer(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                    ) {
-                        SpotVaultBottomBar(
-                            onVaultClick = { navController.navigateMainTab(SpotVaultRoutes.VAULT) },
-                            onSettingsClick = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS) },
-                            onAppearanceClick = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS_APPEARANCE) },
-                            activeDestination = activeDestination,
-                            showSettings = true
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(
-                                    Brush.horizontalGradient(
-                                        colors = listOf(
-                                            Color.Transparent,
-                                            SpotVaultColors.Primary.copy(alpha = 0.45f),
-                                            SpotVaultColors.Teal.copy(alpha = 0.45f),
-                                            Color.Transparent
-                                        )
-                                    )
+    Row(modifier = modifier.fillMaxSize()) {
+        // Collapses to zero size (not just invisible) whenever useRail is false — which is every
+        // phone, always — so this AnimatedVisibility contributes nothing to the Row's layout on
+        // the entire non-tablet install base. The Scaffold below is completely unaffected by this
+        // wrapping Row on phones: it still receives the full available width via weight(1f).
+        AnimatedVisibility(
+            visible = useRail,
+            enter = slideInHorizontally(
+                initialOffsetX = { fullWidth -> -fullWidth },
+                animationSpec = tween(320, easing = FastOutSlowInEasing)
+            ) + fadeIn(tween(280)),
+            exit = slideOutHorizontally(
+                targetOffsetX = { fullWidth -> -fullWidth },
+                animationSpec = tween(260, easing = FastOutSlowInEasing)
+            ) + fadeOut(tween(220))
+        ) {
+            SpotVaultNavigationRail(
+                onVaultClick = { navController.navigateMainTab(SpotVaultRoutes.VAULT) },
+                onSettingsClick = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS) },
+                onAppearanceClick = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS_APPEARANCE) },
+                activeDestination = activeDestination,
+                showSettings = true
+            )
+        }
+
+        Scaffold(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            containerColor = Color.Transparent,
+            bottomBar = {
+                // Same showBottomBar-driven visibility/animation regardless of useRail — only the
+                // *content* of this slot changes: the rail already covers navigation once it's
+                // showing, so this becomes a disclaimer-only footer instead of duplicating
+                // SpotVaultBottomBar's buttons a second time next to the rail.
+                AnimatedVisibility(
+                    visible = showBottomBar,
+                    enter = slideInVertically(
+                        initialOffsetY = { fullHeight -> fullHeight },
+                        animationSpec = tween(320, easing = FastOutSlowInEasing)
+                    ) + fadeIn(tween(280)),
+                    exit = slideOutVertically(
+                        targetOffsetY = { fullHeight -> fullHeight },
+                        animationSpec = tween(260, easing = FastOutSlowInEasing)
+                    ) + fadeOut(tween(220))
+                ) {
+                    // Rail mode's bottomBar slot used to hold only VaultDisclaimerStrip (the rail
+                    // itself already covers navigation) — now that the disclaimer's gone, there's
+                    // nothing left for this slot to show at all.
+                    if (!useRail) {
+                        AdaptiveTabletContainer(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .navigationBarsPadding()
+                            ) {
+                                SpotVaultBottomBar(
+                                    onVaultClick = { navController.navigateMainTab(SpotVaultRoutes.VAULT) },
+                                    onSettingsClick = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS) },
+                                    onAppearanceClick = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS_APPEARANCE) },
+                                    activeDestination = activeDestination,
+                                    showSettings = true
                                 )
-                        )
-                        Text(
-                            text = "USE AT YOUR OWN RISK. DropPin Vault IS NOT RESPONSIBLE FOR LOST LOCATIONS OR INACCURATE DATA.",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            lineHeight = 11.sp,
-                            color = SpotVaultColors.Muted.copy(alpha = 0.65f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = disclaimerVerticalPad),
-                            textAlign = TextAlign.Center,
-                            maxLines = 4
-                        )
+                            }
+                        }
                     }
                 }
             }
+        ) { innerPadding ->
+            SpotVaultNavHost(
+                navController = navController,
+                modifier = Modifier.padding(innerPadding),
+                isPinned = isPinned,
+                prefs = prefs,
+                dao = dao,
+                onSnapClick = onSnapClick,
+                onPinOnlyClick = onPinOnlyClick,
+                onFoundClick = onFoundClick,
+                onShareRequest = onShareRequest,
+                onPickRingtone = onPickRingtone,
+                onAppLockChanged = onAppLockChanged,
+                onRequestLocationPermission = onRequestLocationPermission,
+                onClearPinnedSpot = onClearPinnedSpot
+            )
+            contentOverlays(innerPadding.calculateBottomPadding())
         }
-    ) { innerPadding ->
-        SpotVaultNavHost(
-            navController = navController,
-            modifier = Modifier.padding(innerPadding),
-            isPinned = isPinned,
-            prefs = prefs,
-            dao = dao,
-            onSnapClick = onSnapClick,
-            onPinOnlyClick = onPinOnlyClick,
-            onFoundClick = onFoundClick,
-            onShareRequest = onShareRequest,
-            onPickRingtone = onPickRingtone,
-            onAppLockChanged = onAppLockChanged,
-            onRequestLocationPermission = onRequestLocationPermission,
-            onClearPinnedSpot = onClearPinnedSpot
+    }
+}
+
+/** Detail pane placeholder for a two-pane list+detail layout (genuine tablets/unfolded foldables)
+ * before any spot has been tapped in the list pane yet, or right after the shown spot's
+ * onDismiss clears the selection. Deliberately minimal — this is a resting state, not a screen
+ * with its own actions. Not private — also reused by Favorites Hub's own two-pane branch
+ * (HistoryVaultDialog.kt), with its own [message] override. */
+@Composable
+internal fun VaultDetailEmptyState(message: String = "Select a spot to view its details") {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = message,
+            color = SpotVaultColors.Muted,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 32.dp)
         )
-        contentOverlays(innerPadding.calculateBottomPadding())
     }
 }
 
@@ -329,16 +367,86 @@ fun SpotVaultNavHost(
 
         composable(SpotVaultRoutes.VAULT) {
             BackHandler { navController.popBackStack() }
-            AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
-                HistoryDialogContent(
-                        onDismiss = { navController.popBackStack() },
-                        dao = dao,
-                        prefs = prefs,
-                        isPinned = isPinned,
-                        onViewSpot = { spot -> navController.navigateToSpotDetail(spot.id) },
-                        onShareRequest = onShareRequest,
-                        onOpenSettings = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS_VAULT) }
+            if (isWideEnoughForTwoPane()) {
+                // Two-pane only for the main Vault list itself, and only once the window is
+                // actually wide enough for it (see isWideEnoughForTwoPane's own doc — this is
+                // deliberately a materially higher bar than isGenuineTablet/AdaptiveTabletContainer
+                // use, not the same threshold). Deliberately NOT wrapped in AdaptiveTabletContainer
+                // either way, since that caps content to a single centered 600dp column, exactly
+                // the opposite of what a side-by-side layout needs on a wide window. Location
+                // Browser, Archived Spots, Calendar, and Tag Editor are all overlay Dialogs
+                // rendered *inside* HistoryDialogContent itself, not separate routes — none of
+                // that changes here, so opening any of them still shows its own existing
+                // full-screen-or-capped treatment untouched, on top of whichever pane it was
+                // opened from. That's an intentional, separate scope for later, not an oversight.
+                // Favorites Hub is the one exception: it now has its own independent two-pane
+                // branch (HistoryVaultDialog.kt's FavoritesHubDialog), gated on this same
+                // isWideEnoughForTwoPane() check, so it no longer inherits the single-pane
+                // treatment described above when opened from in here.
+                var selectedSpotId by rememberSaveable { mutableStateOf(-1) }
+                // Fixed list-pane width, not a percentage of the Row — a percentage split scales
+                // the list pane down right alongside the window, which is exactly backwards at
+                // the *low* end of the Expanded range (a plain weight(0.42f) at exactly 840dp,
+                // isWideEnoughForTwoPane's own floor, would still only be ~353dp) and wastes
+                // space at the high end (a 2000dp desktop-class window would hand the list pane
+                // an absurd 840dp while the detail pane goes relatively starved). 380dp is
+                // comfortably wider than this component already renders correctly at on a
+                // phone (360-430dp is the normal single-pane range), so nothing about
+                // HistoryDialogContent's own internal layout needs to change to host it here.
+                // TwoPaneRow (not a plain Row) so the gap between panes actually clears a
+                // foldable's hinge instead of guessing a fixed padding — see its own doc.
+                TwoPaneRow(
+                    modifier = Modifier.fillMaxSize(),
+                    listPane = {
+                        HistoryDialogContent(
+                            onDismiss = { navController.popBackStack() },
+                            dao = dao,
+                            prefs = prefs,
+                            isPinned = isPinned,
+                            // Selecting a spot updates local pane state instead of navigating —
+                            // this composable (and all 18+ pieces of state it owns: search,
+                            // sort, multi-select, the calendar/location-browser overlays, etc.)
+                            // simply never gets disposed while browsing in two-pane mode, unlike
+                            // the phone path below where every spot tap tears the whole screen
+                            // down and rebuilds it on the way back.
+                            onViewSpot = { spot -> selectedSpotId = spot.id },
+                            onShareRequest = onShareRequest,
+                            onOpenSettings = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS_VAULT) }
+                        )
+                    },
+                    detailPane = {
+                        if (selectedSpotId >= 0) {
+                            // Reused as-is from the phone nav route below — it already takes a
+                            // plain spotId + onDismiss callback rather than reading them from
+                            // backstack args, so no changes were needed to support this. Its own
+                            // existing "spot no longer found → onDismiss" handling (a live delete
+                            // from the list pane, or Auto Delete, while this pane has it open)
+                            // already exists for the single-pane case and applies here unchanged.
+                            SavedSpotDetailRoute(
+                                spotId = selectedSpotId,
+                                dao = dao,
+                                prefs = prefs,
+                                onNavigateToCompass = { id -> navController.navigateToCompass(spotId = id) },
+                                onDismiss = { selectedSpotId = -1 },
+                                onShareRequest = onShareRequest
+                            )
+                        } else {
+                            VaultDetailEmptyState()
+                        }
+                    }
                 )
+            } else {
+                AdaptiveTabletContainer(modifier = Modifier.fillMaxSize()) {
+                    HistoryDialogContent(
+                            onDismiss = { navController.popBackStack() },
+                            dao = dao,
+                            prefs = prefs,
+                            isPinned = isPinned,
+                            onViewSpot = { spot -> navController.navigateToSpotDetail(spot.id) },
+                            onShareRequest = onShareRequest,
+                            onOpenSettings = { navController.navigateMainTab(SpotVaultRoutes.SETTINGS_VAULT) }
+                    )
+                }
             }
         }
 
@@ -429,7 +537,7 @@ fun SpotVaultNavHost(
                 spotId = spotId,
                 dao = dao,
                 prefs = prefs,
-                navController = navController,
+                onNavigateToCompass = { id -> navController.navigateToCompass(spotId = id) },
                 onDismiss = { navController.popBackStack() },
                 onShareRequest = onShareRequest
             )
@@ -510,6 +618,7 @@ private fun CompassSpotRoute(
     var lng by remember { mutableStateOf<Double?>(null) }
     var title by remember { mutableStateOf("") }
     var subtitle by remember { mutableStateOf("") }
+    var floorLevel by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(spotId, fallbackLat, fallbackLng) {
@@ -520,12 +629,14 @@ private fun CompassSpotRoute(
                     lng = spot.lng
                     title = spot.title.ifBlank { "Saved Spot" }
                     subtitle = spot.address
+                    floorLevel = spot.floorLevel
                 }
             } else if (fallbackLat != 0.0 || fallbackLng != 0.0) {
                 lat = fallbackLat
                 lng = fallbackLng
                 title = "Active Spot"
                 subtitle = prefs.getString("current_address", "") ?: ""
+                floorLevel = prefs.getString("floor_level", null)
             }
         }
         isLoading = false
@@ -547,6 +658,7 @@ private fun CompassSpotRoute(
         targetLng = targetLng,
         targetTitle = title,
         targetSubtitle = subtitle,
+        floorLevel = floorLevel,
         prefs = prefs,
         onBack = onBack,
         modifier = Modifier.fillMaxSize()
@@ -554,11 +666,17 @@ private fun CompassSpotRoute(
 }
 
 @Composable
-private fun SavedSpotDetailRoute(
+internal fun SavedSpotDetailRoute(
     spotId: Int,
     dao: LocationDao,
     prefs: android.content.SharedPreferences,
-    navController: NavHostController,
+    // A plain callback rather than a NavHostController directly — Favorites Hub's own two-pane
+    // detail pane (HistoryVaultDialog.kt) reuses this composable but is reached through a chain
+    // of plain callbacks (HistoryDialogContent -> FavoritesHubDialog), not a NavHost destination,
+    // so it has no NavController of its own to pass. Null hides the Compass button entirely
+    // (see FullScreenImageViewer's own onNavigateToCompass != null gate) rather than wiring it to
+    // a no-op — that's the deliberate, lower-risk choice for Favorites Hub's embedded pane specifically.
+    onNavigateToCompass: ((Int) -> Unit)?,
     onDismiss: () -> Unit,
     onShareRequest: (ShareSpotPayload) -> Unit
 ) {
@@ -608,8 +726,8 @@ private fun SavedSpotDetailRoute(
             }
             spot = loaded.copy(locationDetails = updatedNotes.take(160))
         },
-        onNavigateToCompass = {
-            navController.navigateToCompass(spotId = loaded.id)
+        onNavigateToCompass = onNavigateToCompass?.let { callback ->
+            { callback(loaded.id) }
         },
         spotItem = loaded,
         onEditRequest = { showEditDialog = true }

@@ -58,13 +58,47 @@ fun resolveAlarmSoundUri(prefs: android.content.SharedPreferences): android.net.
     return uri
 }
 
-/** Looping expiry alarm — falls back to the default alarm tone if create() fails on a bad URI. */
+/** USAGE_ALARM (not the MediaPlayer default of USAGE_MEDIA/STREAM_MUSIC) — this is the "your
+ * parking meter is about to run out" alarm, so it needs to follow the device's alarm volume and
+ * be audible with media muted/at zero, same as any other alarm clock. */
+private val timerAlarmAudioAttributes: android.media.AudioAttributes = android.media.AudioAttributes.Builder()
+    .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+    .build()
+
+/** Built manually (setAudioAttributes + setDataSource + prepare) rather than via the
+ * MediaPlayer.create(...) static factory — its overload set is ambiguous between the (Context,
+ * Uri, AudioAttributes, int) and (Context, int resId, AudioAttributes, int) forms, and this is the
+ * unambiguous way to get USAGE_ALARM wired in before playback starts. Returns null (caller falls
+ * back to [fallback]) on any failure, same as the old create()-based version did on a bad URI. */
+private fun createAlarmPlayer(context: android.content.Context, uri: android.net.Uri): MediaPlayer? =
+    run {
+        val player = MediaPlayer()
+        try {
+            player.apply {
+                setAudioAttributes(timerAlarmAudioAttributes)
+                setDataSource(context, uri)
+                prepare()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Unlike the MediaPlayer.create() factory this replaced (which releases internally
+            // on failure), building it manually means a failed setDataSource()/prepare() left
+            // this half-initialized instance with no caller ever able to reach it to release —
+            // a real native-resource leak on every bad/inaccessible alarm URI, not just a
+            // hypothetical one, since this runs again every time a timer expires.
+            runCatching { player.release() }
+            null
+        }
+    }
+
+/** Looping expiry alarm — falls back to the default alarm tone if the preferred URI fails. */
 fun startLoopingAlarmPlayer(context: android.content.Context, prefs: android.content.SharedPreferences): MediaPlayer? {
     val preferred = resolveAlarmSoundUri(prefs)
     val fallback = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
     return try {
-        val player = MediaPlayer.create(context, preferred)
-            ?: if (preferred != fallback) MediaPlayer.create(context, fallback) else null
+        val player = createAlarmPlayer(context, preferred)
+            ?: if (preferred != fallback) createAlarmPlayer(context, fallback) else null
         player?.also {
             it.isLooping = true
             it.start()
@@ -72,6 +106,33 @@ fun startLoopingAlarmPlayer(context: android.content.Context, prefs: android.con
     } catch (e: Exception) {
         e.printStackTrace()
         null
+    }
+}
+
+/** Fires the "Vibrate when timer alerts fire" setting at the moment the expiry alarm actually
+ * (re)starts sounding. Deliberately NOT wired through the pinned notification's own channel: that
+ * notification is a single ongoing id reused across every countdown tick with setOnlyAlertOnce(true),
+ * so a channel-level vibration would only ever fire on its very first post (while still "Saved") and
+ * stay silent forever after — including at the actual expiry transition this setting is about. A
+ * direct, explicit vibrate call tied to the real alarm-start moment is what actually matches "when
+ * timer alerts fire" rather than "when the pin notification first appears." */
+private fun vibrateForExpiry(context: android.content.Context, prefs: android.content.SharedPreferences) {
+    if (!prefs.getBoolean("vibration_enabled", true)) return
+    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION")
+        context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+    } ?: return
+    if (!vibrator.hasVibrator()) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val effect = android.os.VibrationEffect.createWaveform(
+            longArrayOf(0, 400, 200, 400, 200, 400), intArrayOf(0, 255, 0, 255, 0, 255), -1
+        )
+        runCatching { vibrator.vibrate(effect) }
+    } else {
+        @Suppress("DEPRECATION")
+        runCatching { vibrator.vibrate(longArrayOf(0, 400, 200, 400, 200, 400), -1) }
     }
 }
 
@@ -111,6 +172,29 @@ fun ensureTimerAlertChannel(
         runCatching { manager.deleteNotificationChannel(previousAlertChannelId) }
     }
     prefs.edit().putString("timer_alert_channel_id", channelId).apply()
+}
+
+/** A wall-clock jump (NTP time correction, manual clock change, a DST edge case) between when
+ * `timer_end_time` was written and one of these resume points recomputing "remaining = endTime -
+ * now" can make that value balloon to something no real timer duration would ever be — silently
+ * leaving an alert armed for days or months longer than the user actually set, defeating the one
+ * thing this feature exists to warn about. 30 days safely exceeds any real parking-timer duration
+ * (Default Timer's own field caps at a 4-digit minute count, ~6.9 days) without ever clipping a
+ * legitimate long timer. Returns null for both "already past" and "implausibly far in the
+ * future" — both mean "not a valid ongoing countdown" to every caller of this. */
+private const val MAX_PLAUSIBLE_TIMER_MILLIS = 30L * 24 * 60 * 60 * 1000
+
+private fun plausibleRemainingMillis(endTime: Long, now: Long): Long? {
+    if (endTime <= now) return null
+    val remaining = endTime - now
+    if (remaining > MAX_PLAUSIBLE_TIMER_MILLIS) {
+        android.util.Log.w(
+            "TimerService",
+            "timer_end_time implies an implausible ${remaining}ms remaining (wall-clock jump?) — treating as expired"
+        )
+        return null
+    }
+    return remaining
 }
 
 class TimerService : Service() {
@@ -203,8 +287,9 @@ class TimerService : Service() {
             if (timeMs > 0) {
                 prefs.edit().putLong("timer_end_time", System.currentTimeMillis() + timeMs).apply()
             } else if (intent == null || timeMs == 0L) {
-                if (endTime > System.currentTimeMillis()) {
-                    timeMs = endTime - System.currentTimeMillis()
+                val remaining = plausibleRemainingMillis(endTime, System.currentTimeMillis())
+                if (remaining != null) {
+                    timeMs = remaining
                 } else if (endTime > 0) {
                     isExpired = true
                 }
@@ -277,7 +362,13 @@ class TimerService : Service() {
                     // Notification only — do NOT refresh Glance widgets on every tick.
                     // In-flight provideGlance() calls that still saw is_pinned=true were
                     // racing Found/clear and painting the tracking UI back over the idle UI.
-                    manager.notify(NOTIFICATION_ID, buildNotification(photoPath, text))
+                    // canPostNotifications(): unlike postPinnedNotification's initial post, this
+                    // update path had no permission check of its own — a mid-session revoke (the
+                    // service itself keeps running once started) used to still decode/rebuild a
+                    // full BigPicture notification every tick only for the OS to silently drop it.
+                    if (canPostNotifications()) {
+                        manager.notify(NOTIFICATION_ID, buildNotification(photoPath, text))
+                    }
                 }
 
                 if (!hasFiredTenMinAlert && millisUntilFinished <= 10 * 60_000L) {
@@ -301,6 +392,7 @@ class TimerService : Service() {
             // Only claim the alarm is ringing when audio actually started — otherwise the
             // UI/resume path shows "Silence Alarm" / re-ring logic for a silent failure.
             prefs.edit().putBoolean("is_alarm_ringing", mediaPlayer?.isPlaying == true).apply()
+            vibrateForExpiry(this, prefs)
         } catch (e: Exception) {
             e.printStackTrace()
             prefs.edit().putBoolean("is_alarm_ringing", false).apply()
@@ -316,8 +408,9 @@ class TimerService : Service() {
         NotificationGuard.schedule(this)
         val photoPath = prefs.getString("photo_path", "") ?: ""
         val endTime = prefs.getLong("timer_end_time", 0L)
-        val isExpired = endTime in 1 until System.currentTimeMillis()
-        val timeMs = if (endTime > System.currentTimeMillis()) endTime - System.currentTimeMillis() else 0L
+        val remaining = plausibleRemainingMillis(endTime, System.currentTimeMillis())
+        val isExpired = endTime > 0 && remaining == null
+        val timeMs = remaining ?: 0L
         val alarmShouldBeRinging = prefs.getBoolean("is_alarm_ringing", false)
         val statusText = when {
             alarmShouldBeRinging -> "Vault timer expired!"
@@ -352,6 +445,7 @@ class TimerService : Service() {
             mediaPlayer?.stop()
             mediaPlayer?.release()
             mediaPlayer = startLoopingAlarmPlayer(this, prefs)
+            vibrateForExpiry(this, prefs)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -707,7 +801,9 @@ class TimerService : Service() {
                 cachedPinnedVehicleId = id
                 cachedPinnedVehicle = vehicle
                 vehicleFetchInFlight = false
-                manager.notify(NOTIFICATION_ID, buildNotification(lastNotificationPhotoPath, lastNotificationText))
+                if (canPostNotifications()) {
+                    manager.notify(NOTIFICATION_ID, buildNotification(lastNotificationPhotoPath, lastNotificationText))
+                }
             }
         }
         return null

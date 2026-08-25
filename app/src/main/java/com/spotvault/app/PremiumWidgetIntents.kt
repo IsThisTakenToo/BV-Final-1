@@ -11,6 +11,24 @@ object PremiumWidgetIntents {
     const val EXTRA_WIDGET_ACTION = "widget_action"
     const val EXTRA_COMPASS_LAT = "compass_lat"
     const val EXTRA_COMPASS_LNG = "compass_lng"
+    /** Not a public-looking constant on purpose — see [internalToken]. */
+    const val EXTRA_INTERNAL_TOKEN = "wit"
+
+    // MainActivity is exported=true (needed for the Maps share-sheet intent-filter), which means
+    // any other app on the device can start it directly with an explicit intent carrying whatever
+    // extras it wants — the widget/action extras above aren't gated by the SEND intent-filter at
+    // all. A guessable marker (even the "spotvault://widget/..." data URI these intents already
+    // carry) doesn't stop that, since anything hardcoded in this APK is just as readable by
+    // whoever built the attacking app. A random value generated at first run and never exposed
+    // outside this process is: every PendingIntent built here embeds it, MainActivity.
+    // ingestWidgetIntent() checks it, and an intent from anywhere else has no way to know it.
+    private fun internalToken(context: Context): String {
+        val prefs = context.getSharedPreferences("SpotVaultPrefs", Context.MODE_PRIVATE)
+        prefs.getString("widget_intent_token", null)?.let { return it }
+        val fresh = java.util.UUID.randomUUID().toString()
+        prefs.edit().putString("widget_intent_token", fresh).apply()
+        return fresh
+    }
 
     const val ACTION_SNAP = "snap"
     const val ACTION_PIN_ONLY = "pin_only"
@@ -41,6 +59,7 @@ object PremiumWidgetIntents {
             this.action = "com.spotvault.app.widget.OPEN_SPOT_$spotId"
             data = Uri.parse("spotvault://widget/spot/$spotId")
             putExtra(EXTRA_SPOT_ID, spotId)
+            putExtra(EXTRA_INTERNAL_TOKEN, internalToken(context))
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
 
@@ -49,6 +68,7 @@ object PremiumWidgetIntents {
             this.action = "com.spotvault.app.widget.ACTION_$action"
             data = Uri.parse("spotvault://widget/action/$action")
             putExtra(EXTRA_WIDGET_ACTION, action)
+            putExtra(EXTRA_INTERNAL_TOKEN, internalToken(context))
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
 
@@ -59,6 +79,7 @@ object PremiumWidgetIntents {
             putExtra(EXTRA_WIDGET_ACTION, ACTION_COMPASS)
             putExtra(EXTRA_COMPASS_LAT, lat)
             putExtra(EXTRA_COMPASS_LNG, lng)
+            putExtra(EXTRA_INTERNAL_TOKEN, internalToken(context))
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
 
@@ -73,6 +94,7 @@ object PremiumWidgetIntents {
             putExtra(EXTRA_WIDGET_ACTION, ACTION_NAVIGATE_MAPS)
             putExtra(EXTRA_COMPASS_LAT, lat)
             putExtra(EXTRA_COMPASS_LNG, lng)
+            putExtra(EXTRA_INTERNAL_TOKEN, internalToken(context))
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
 
@@ -87,6 +109,7 @@ object PremiumWidgetIntents {
             putExtra(EXTRA_WIDGET_ACTION, ACTION_SHOW_MAP)
             putExtra(EXTRA_COMPASS_LAT, lat)
             putExtra(EXTRA_COMPASS_LNG, lng)
+            putExtra(EXTRA_INTERNAL_TOKEN, internalToken(context))
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
 

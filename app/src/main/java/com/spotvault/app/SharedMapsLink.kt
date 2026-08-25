@@ -110,6 +110,13 @@ private val shareLinkHttpClient by lazy {
     OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
+        // Redirects resolved manually in resolveRedirect (one hop, Location header re-checked
+        // against isSafePublicHost) rather than followed automatically — auto-follow would let a
+        // request that passed the host check on its own public entry URL still transparently
+        // connect wherever a 3xx response's Location header points, bypassing that check entirely
+        // for the address that actually matters (see resolveRedirect's own SSRF-prevention doc).
+        .followRedirects(false)
+        .followSslRedirects(false)
         .build()
 }
 
@@ -214,16 +221,49 @@ private fun extractLatLngFromMapsUrl(url: String): Pair<Double, Double>? {
  * client is exactly what this kind of endpoint's request-inspection logic exists to treat
  * differently. The response body is never read (OkHttp discards it unread when the response is
  * closed), so this costs one redirect hop's worth of bandwidth either way. */
+/** True only if every address [host] resolves to is a real public address — false for a loopback,
+ * link-local, site-local (private LAN, 10.x/172.16.x/192.168.x), or multicast target. MainActivity
+ * is exported=true for its Maps share-sheet intent-filter, so any other app on the device can hand
+ * this parser arbitrary shared text; without this check, a share containing a link to the phone's
+ * own gateway/router (or anything else on the local network) would have this code issue a real GET
+ * to it — a classic SSRF-into-the-local-network pattern. Deliberately not a domain allowlist (see
+ * [resolveRedirect]'s own doc for why) — this only blocks *where* the one redirect hop can land,
+ * not *which* public host it's allowed to be. */
+private fun isSafePublicHost(host: String): Boolean = try {
+    val addresses = java.net.InetAddress.getAllByName(host)
+    addresses.isNotEmpty() && addresses.all { addr ->
+        !addr.isLoopbackAddress && !addr.isLinkLocalAddress && !addr.isSiteLocalAddress &&
+            !addr.isAnyLocalAddress && !addr.isMulticastAddress
+    }
+} catch (_: Exception) {
+    false
+}
+
 private suspend fun resolveRedirect(url: String): String {
     if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) return url
     return withContext(Dispatchers.IO) {
         runCatching {
+            val host = android.net.Uri.parse(url).host ?: return@runCatching url
+            if (!isSafePublicHost(host)) return@runCatching url
             val request = Request.Builder()
                 .url(url)
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
                 .get()
                 .build()
-            shareLinkHttpClient.newCall(request).execute().use { response -> response.request.url.toString() }
+            shareLinkHttpClient.newCall(request).execute().use { response ->
+                val location = response.header("Location")
+                if (response.code in 300..399 && location != null) {
+                    // Resolves a relative Location header against the request URL it actually
+                    // came from (some servers send one) rather than assuming it's always
+                    // absolute — same isSafePublicHost re-check as the entry URL, since this one
+                    // hop is exactly the address a malicious-but-otherwise-public entry host could
+                    // redirect this request to.
+                    val resolved = response.request.url.resolve(location)
+                    if (resolved != null && isSafePublicHost(resolved.host)) resolved.toString() else url
+                } else {
+                    url
+                }
+            }
         }.getOrDefault(url)
     }
 }

@@ -108,6 +108,10 @@ suspend fun migrateLegacyCarVehicleIfNeeded(
     // tracking. Clearing them the moment they've served their one-time migration purpose closes
     // that permanently instead of trying to catch every possible future "unlink" call site.
     prefs.edit().remove(AUTO_PARK_CAR_MAC_PREF).remove(AUTO_PARK_CAR_NAME_PREF).apply()
+    // Receiver gates on AUTO_PARK_LINKED_MACS_PREF (or the legacy MAC we just cleared). Refresh
+    // the linked set here so a migrate from a cold BT-disconnect path doesn't leave later parks
+    // silently rejected until MainActivity opens.
+    pruneStaleAutoParkMacPrefs(prefs, listOf(mac))
 }
 
 /** Resolves which vehicle a hands-off save (Quick Pin, Quick Track, Bluetooth auto-park, etc.)
@@ -137,9 +141,7 @@ fun applyPinnedVehiclePrefs(editor: SharedPreferences.Editor, vehicle: Vehicle?)
 }
 
 suspend fun promoteDefaultVehicleIfNeeded(vehicleDao: VehicleDao) = withContext(Dispatchers.IO) {
-    if (vehicleDao.getDefault() != null) return@withContext
-    val next = vehicleDao.getMostRecentActive() ?: return@withContext
-    vehicleDao.setDefault(next.id)
+    vehicleDao.promoteDefaultIfNeeded()
 }
 
 suspend fun deleteVehicleKeepingHistory(vehicleDao: VehicleDao, locationDao: LocationDao, vehicleId: Int) =
@@ -151,10 +153,7 @@ suspend fun deleteVehicleKeepingHistory(vehicleDao: VehicleDao, locationDao: Loc
     }
 
 suspend fun archiveVehicle(vehicleDao: VehicleDao, vehicleId: Int) = withContext(Dispatchers.IO) {
-    val vehicle = vehicleDao.getById(vehicleId) ?: return@withContext
-    val wasDefault = vehicle.isDefault
-    vehicleDao.archive(vehicleId)
-    if (wasDefault) promoteDefaultVehicleIfNeeded(vehicleDao)
+    vehicleDao.archiveAndReconcileDefault(vehicleId)
 }
 
 fun autoParkOptionForVehicle(vehicle: Vehicle): QuickPinDef = QuickPinDef(
@@ -170,11 +169,7 @@ suspend fun insertNewVehicle(vehicleDao: VehicleDao, vehicle: Vehicle): Int = wi
     // Respects whatever the user actually chose on the Default toggle — forcing the first
     // vehicle to always be default (regardless of that toggle) meant unchecking it on your only
     // vehicle was silently ignored, so quick-saves kept auto-tagging it anyway.
-    val rowId = vehicleDao.insert(vehicle).toInt()
-    if (vehicle.isDefault) {
-        vehicleDao.setDefault(rowId)
-    }
-    rowId
+    vehicleDao.insertAndReconcileDefault(vehicle)
 }
 
 /** After vehicle create/edit/delete, drop orphaned per-MAC auto-park prefs so SpotVaultPrefs
@@ -189,20 +184,13 @@ suspend fun pruneAutoParkMacPrefsAfterVehicleChange(
 }
 
 suspend fun saveVehicle(vehicleDao: VehicleDao, vehicle: Vehicle): Int = withContext(Dispatchers.IO) {
-    if (vehicle.id == 0) {
-        insertNewVehicle(vehicleDao, vehicle)
-    } else {
-        // Same self-healing archiveVehicle()/deleteVehicleKeepingHistory() already do when a
-        // default vehicle goes away — unchecking "Set as default" here is just as much a default
-        // vehicle going away, but this update path had no equivalent, so it silently left every
-        // future hands-off save (resolveVehicleForQuickSave) with no vehicle to tag at all.
-        val wasDefault = vehicleDao.getById(vehicle.id)?.isDefault == true
-        vehicleDao.update(vehicle)
-        if (vehicle.isDefault) {
-            vehicleDao.setDefault(vehicle.id)
-        } else if (wasDefault) {
-            promoteDefaultVehicleIfNeeded(vehicleDao)
-        }
-        vehicle.id
-    }
+    // One MAC → one active vehicle (the clear-others step below): sharing a MAC across rows makes
+    // AutoPark attribution nondeterministic (findByBluetoothMac LIMIT 1). Same self-healing
+    // archiveVehicle()/deleteVehicleKeepingHistory() already do when a default vehicle goes away —
+    // unchecking "Set as default" on an update is just as much a default vehicle going away.
+    // vehicleDao.saveAndReconcile() runs the MAC clear, the insert-or-update, and the default
+    // reconciliation as one Room @Transaction — a crash/process death partway through used to be
+    // able to leave a MAC cleared from an old vehicle with nothing yet claiming it, or two
+    // vehicles both marked default, or briefly no default vehicle at all.
+    vehicleDao.saveAndReconcile(vehicle)
 }

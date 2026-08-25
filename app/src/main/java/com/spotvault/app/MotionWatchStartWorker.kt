@@ -1,9 +1,11 @@
 package com.spotvault.app
 
 import android.content.Context
+import android.os.Build
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 
@@ -45,6 +47,15 @@ class MotionWatchStartWorker(
 fun enqueueMotionWatchStart(context: Context, connectedMac: String) {
     val request = OneTimeWorkRequestBuilder<MotionWatchStartWorker>()
         .setInputData(Data.Builder().putString(CONNECTED_MAC_KEY, connectedMac).build())
+        .apply {
+            // Same reasoning as MotionBookmarkWorker/AutoParkWorker's own expedited requests:
+            // arming the motion watch right when the car connects is time-sensitive (a delayed
+            // arm can miss the walk-away window it exists to catch), and pre-S expedited work
+            // needs getForegroundInfo(), which this worker doesn't override — so S+ only.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            }
+        }
         .build()
     WorkManager.getInstance(context).enqueueUniqueWork(
         "motion_watch_start",

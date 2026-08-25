@@ -204,12 +204,34 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+        <!-- configChanges: this activity is transparent, shows no persistent UI of its own, and
+             every action (Pin/Track/Found/Share/Navigate) is a one-shot background fetch that
+             finish()es itself when done — a rotation/fold mid-fetch used to destroy and recreate
+             it, cancelling that work and then re-dispatching the SAME action from scratch on the
+             new instance, which could enqueue a duplicate Vault entry or double-start TimerService
+             for one tap. Nothing here needs to react to a config change, so simply not tearing
+             down across one is the correct fix, not a compat shortcut. -->
         <activity
             android:name=".QuickActionRelayActivity"
             android:exported="false"
             android:theme="@style/Theme.SpotVault.Transparent"
             android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:taskAffinity="com.spotvault.app.widgetrelay" />
+
+        <!-- Shown by installCrashHandler (CrashRecoveryActivity.kt) instead of the OS's default
+             "keeps stopping" dialog after an uncaught exception. android:process=":crash" runs it
+             in its own separate process — deliberately, so it doesn't depend on whatever state in
+             the just-crashed main process caused the crash in the first place, and so killing that
+             main process (which the crash handler always does) can never race the new window
+             actually appearing. excludeFromRecents so a "Recalibrate" entry never lingers in the
+             task switcher after the user has already restarted past it. -->
+        <activity
+            android:name=".CrashRecoveryActivity"
+            android:exported="false"
+            android:process=":crash"
+            android:theme="@style/Theme.SpotVault"
+            android:excludeFromRecents="true" />
 
         <!-- Widget configuration screen — the OS requires config Activities to be exported and
              to declare the APPWIDGET_CONFIGURE intent-filter so the launcher can invoke it both
@@ -347,6 +369,23 @@
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Receives Quick Pin/Quick Track/Navigate/Found taps from a paired Wear OS watch's
+             QuickActionTileService. See WearActionListenerService's own doc for why this acts
+             directly rather than routing through QuickActionRelayActivity the way the phone's own
+             Quick Settings Tiles above do — a MessageEvent has no foreground user gesture on the
+             phone side to exempt it from background-activity-launch restrictions. -->
+        <service
+            android:name=".WearActionListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/droppinvault/" />
             </intent-filter>
         </service>
     </application>
